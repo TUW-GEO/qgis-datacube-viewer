@@ -1,6 +1,6 @@
 # CI for geo-zarr: lint and test the library, and package the QGIS plugin.
 
-stages: [lint, test, build]
+stages: [lint, test, build, release]
 
 default:
   image: python:3.12-slim
@@ -60,3 +60,66 @@ build:plugin:
     name: "geozarr_viewer-$CI_COMMIT_REF_SLUG"
     paths: [plugin/build/*.zip]
     expire_in: 4 weeks
+
+# --------------------------------------------------------------------------- #
+# Tagged plugin releases
+#
+# This repository holds two independently versioned things, so tags are namespaced:
+#
+#   plugin-v0.2.2   the QGIS plugin   (version from plugin/geozarr_viewer/metadata.txt)
+#   v0.1.0          the geozarr library (version from src/geozarr/__init__.py)
+#
+# metadata.txt stays the single source of truth for the plugin version, and the tag
+# must match it. The alternative -- deriving the version from the tag and rewriting
+# metadata.txt during the build -- means the file in git never shows the released
+# version, and the archive QGIS installs differs from the tree it was built from.
+# A mismatch is therefore an error here, not something to paper over.
+# --------------------------------------------------------------------------- #
+.plugin-version:
+  before_script:
+    # build_plugin.py resolves its own paths from __file__, so importing it from
+    # plugin/scripts/ makes plugin/ the repo root it reads metadata.txt under.
+    - export PLUGIN_VERSION="$(PYTHONPATH=plugin/scripts python -c 'import build_plugin; print(build_plugin.read_version())')"
+    # No ": " in this message: it would end the plain YAML scalar and be parsed
+    # as a mapping key.
+    - echo "metadata.txt version=$PLUGIN_VERSION tag=${CI_COMMIT_TAG:-none}"
+
+release:plugin:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^plugin-v/
+  extends: .plugin-version
+  script:
+    - |
+      if [ "$CI_COMMIT_TAG" != "plugin-v$PLUGIN_VERSION" ]; then
+        echo "tag '$CI_COMMIT_TAG' does not match metadata.txt version '$PLUGIN_VERSION'."
+        echo "Expected tag: plugin-v$PLUGIN_VERSION"
+        echo "Bump version= in plugin/geozarr_viewer/metadata.txt, or retag."
+        exit 1
+      fi
+    - python plugin/scripts/build_plugin.py
+    # Uploaded under a fixed filename so the release asset URL is predictable; the
+    # version is already in the path.
+    - |
+      curl --fail --silent --show-error --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        --upload-file "plugin/build/geozarr_viewer-$PLUGIN_VERSION.zip" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/geozarr_viewer/$PLUGIN_VERSION/geozarr_viewer.zip"
+  artifacts:
+    paths: [plugin/build/*.zip]
+    expire_in: never
+
+release:create:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^plugin-v/
+  needs: ["release:plugin"]
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - echo "Creating GitLab release for $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    description: "GEO-geo-zarr QGIS plugin $CI_COMMIT_TAG — install via Plugins → Manage and Install Plugins → Install from ZIP."
+    assets:
+      links:
+        - name: "geozarr_viewer.zip (QGIS plugin)"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/geozarr_viewer/${CI_COMMIT_TAG#plugin-v}/geozarr_viewer.zip"
