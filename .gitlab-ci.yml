@@ -67,7 +67,7 @@ build:plugin:
     - python plugin/scripts/build_plugin.py --version "0.0.0+$CI_COMMIT_SHORT_SHA"
     - ls -lh plugin/build
   artifacts:
-    name: "geozarr_viewer-$CI_COMMIT_REF_SLUG"
+    name: "geo_geozarr_viewer-$CI_COMMIT_REF_SLUG"
     paths: [plugin/build/*.zip]
     expire_in: 4 weeks
 
@@ -75,7 +75,7 @@ build:plugin:
 # Tagged plugin releases
 #
 # The git tag is the single source of truth for the version: tag v0.0.1 ships as
-# 0.0.1. plugin/geozarr_viewer/metadata.txt holds the placeholder 0.0.0 and
+# 0.0.1. plugin/geo_geozarr_viewer/metadata.txt holds the placeholder 0.0.0 and
 # build_plugin.py injects the real value on the way into the .zip, so the number is
 # written down in exactly one place.
 #
@@ -103,7 +103,7 @@ release:plugin:
     # the registry so the release asset URL is predictable; the version is already
     # in the registry path.
     - |
-      python plugin/scripts/upload_package.py         --file "plugin/build/geozarr_viewer-$PLUGIN_VERSION.zip"         --package geozarr_viewer         --version "$PLUGIN_VERSION"         --as geozarr_viewer.zip
+      python plugin/scripts/upload_package.py         --file "plugin/build/geo_geozarr_viewer-$PLUGIN_VERSION.zip"         --package geo_geozarr_viewer         --version "$PLUGIN_VERSION"         --as geo_geozarr_viewer.zip
   artifacts:
     paths: [plugin/build/*.zip]
     expire_in: never
@@ -123,5 +123,5 @@ release:create:
     description: "GEO-geo-zarr QGIS plugin $CI_COMMIT_TAG. Install with Plugins > Manage and Install Plugins > Install from ZIP."
     assets:
       links:
-        - name: "geozarr_viewer.zip (QGIS plugin)"
-          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/geozarr_viewer/$PLUGIN_VERSION/geozarr_viewer.zip"
+        - name: "geo_geozarr_viewer.zip (QGIS plugin)"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/geo_geozarr_viewer/$PLUGIN_VERSION/geo_geozarr_viewer.zip"

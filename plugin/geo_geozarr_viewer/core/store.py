@@ -259,7 +259,7 @@ def zarr_store_target(uri: str) -> Any:
     """What to hand ``zarr.open_group`` for a plain (non-Icechunk) store.
 
     Local paths go through as strings; ``http(s)://`` gets our own dependency-free
-    store (see :mod:`geozarr_viewer.core.http_store`); the remaining cloud schemes are
+    store (see :mod:`geo_geozarr_viewer.core.http_store`); the remaining cloud schemes are
     left to Zarr, which means fsspec, so the missing piece is named up front instead
     of arriving as a bare ``ModuleNotFoundError`` from inside ``zarr``.
     """

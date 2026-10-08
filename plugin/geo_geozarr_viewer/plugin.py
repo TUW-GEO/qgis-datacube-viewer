@@ -11,7 +11,7 @@ Everything here is about QGIS lifecycle. The rules that matter:
   the first time someone tries to add a layer. The Plugin Manager cannot install
   PyPI packages, so this notice is the whole of the plugin's post-install setup and
   is treated as a feature rather than an error path. See
-  :mod:`geozarr_viewer.gui.dependencies`.
+  :mod:`geo_geozarr_viewer.gui.dependencies`.
 """
 
 from __future__ import annotations

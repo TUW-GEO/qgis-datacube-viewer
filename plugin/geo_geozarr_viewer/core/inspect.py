@@ -1,4 +1,4 @@
-"""Turn a Zarr hierarchy into :mod:`geozarr_viewer.core.model` dataclasses.
+"""Turn a Zarr hierarchy into :mod:`geo_geozarr_viewer.core.model` dataclasses.
 
 Three pyramid declarations are supported, because real stores use all of them:
 

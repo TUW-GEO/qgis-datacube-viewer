@@ -7,7 +7,7 @@ This directory is a verbatim copy of the public QGIS plugin
 commit  68eb5b1c7ff0d3095b6a696eb407710bb73052e7
 subject Restrict HTTP reads to http(s), and clear the upload security scan
 date    2026-08-26
-version 0.2.1  (geozarr_viewer/metadata.txt)
+version 0.2.1  (geo_geozarr_viewer/metadata.txt)
 ```
 
 It is MIT-licensed; `LICENSE` is the upstream file, kept as the license requires.
@@ -27,7 +27,7 @@ git diff plugin-upstream-0.2.1 -- plugin/
 | Renamed to **GEO-geo-zarr** (`PLUGIN_NAME`, `metadata.txt`, log tag, dialog titles) | Three GeoZarr plugins can share one QGIS profile; two of them answered to nearly the same name. |
 | Its own named toolbar instead of `addRasterToolBarIcon()` | An icon on the shared Raster toolbar is indistinguishable from the other plugins'. |
 | **Version comes from the git tag**, not `metadata.txt` | See below. `metadata.txt` now holds the placeholder `0.0.0`. |
-| `__version__` removed from `geozarr_viewer/__init__.py` | It said `0.1.0` while `metadata.txt` said `0.2.1`. One source of truth, and it is not a Python literal. |
+| `__version__` removed from `geo_geozarr_viewer/__init__.py` | It said `0.1.0` while `metadata.txt` said `0.2.1`. One source of truth, and it is not a Python literal. |
 | `.gitlab-ci.yml` at the repository root | Development happens on GitLab; upstream has no lint/test CI at all. |
 | `.github/` and `[tool.qgis-plugin-ci]` deleted | EODC's path to plugins.qgis.org. GitLab never reads `.github/`, and its tag-equals-`metadata.txt` check can no longer pass now that the version comes from the tag. |
 | Phase-0 spike scripts deleted (`spike_provider.py`, `spike_render.png`) and `make_sample_store.py` | The spike asked whether a pure-Python provider can render at all; the plugin is the answer. `make_sample_store.py` subsets a 13 GB store we do not have, and `scripts/make_dummy_geozarr.py` at the repository root covers the need. |
@@ -75,7 +75,7 @@ against a fresh download rather than to reconstruct a git relationship:
 
 ```bash
 gh repo clone eodcgmbh/qgis-geozarr /tmp/upstream -- --depth 1
-diff -ru --strip-trailing-cr /tmp/upstream/geozarr_viewer plugin/geozarr_viewer
+diff -ru --strip-trailing-cr /tmp/upstream/geo_geozarr_viewer plugin/geo_geozarr_viewer
 ```
 
 `--strip-trailing-cr` matters: the root `.gitattributes` normalises to LF, and a

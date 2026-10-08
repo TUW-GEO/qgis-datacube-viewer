@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pytest
 
-from geozarr_viewer.core import (
+from geo_geozarr_viewer.core import (
     DatasetReader,
     ReadRequest,
     RefSpec,
@@ -22,7 +22,7 @@ from geozarr_viewer.core import (
     describe_store,
     open_store,
 )
-from geozarr_viewer.core.crs import CrsBundle, resolve_crs
+from geo_geozarr_viewer.core.crs import CrsBundle, resolve_crs
 
 _DEFINITIONS = [
     "EPSG:4326",
@@ -36,7 +36,7 @@ _DEFINITIONS = [
 
 def test_proj_is_only_usable_on_the_main_thread() -> None:
     """The rule the rest of this module depends on."""
-    from geozarr_viewer.core.crs import proj_usable
+    from geo_geozarr_viewer.core.crs import proj_usable
 
     assert proj_usable(), "pyproj should be importable and this is the main thread"
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -52,7 +52,7 @@ def test_pyproj_is_never_called_off_the_main_thread(monkeypatch) -> None:
     but not against QGIS's. So the rule is that PROJ is main-thread-only, and this
     test enforces it by recording which thread every pyproj call comes from.
     """
-    import geozarr_viewer.core.crs as crs_module
+    import geo_geozarr_viewer.core.crs as crs_module
 
     real = crs_module._PyprojCRS
     callers: list[str] = []
@@ -113,7 +113,7 @@ def test_off_thread_resolution_still_finds_an_authority_code() -> None:
 
 
 def test_refine_upgrades_a_provisional_result() -> None:
-    from geozarr_viewer.core.crs import refine
+    from geo_geozarr_viewer.core.crs import refine
 
     bundle = CrsBundle(dataset_attrs={"proj:code": "EPSG:25832"})
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -185,7 +185,7 @@ def test_concurrent_reads_agree(store_uri: str) -> None:
 @pytest.mark.parametrize("workers", [4, 8])
 def test_concurrent_reads_of_different_windows(store_uri: str, workers: int) -> None:
     """Different windows in flight at once — the case the block cache has to serialise."""
-    from geozarr_viewer.core import BBox
+    from geo_geozarr_viewer.core import BBox
 
     handle = open_store(store_uri, RefSpec.branch("main"))
     dataset = describe_store(handle).dataset("conv")

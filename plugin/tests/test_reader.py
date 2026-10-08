@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from geozarr_viewer.core import (
+from geo_geozarr_viewer.core import (
     BBox,
     DatasetReader,
     ReadRequest,
@@ -13,8 +13,8 @@ from geozarr_viewer.core import (
     describe_store,
     open_store,
 )
-from geozarr_viewer.core.errors import ReadError
-from geozarr_viewer.core.reader import ReaderConfig
+from geo_geozarr_viewer.core.errors import ReadError
+from geo_geozarr_viewer.core.reader import ReaderConfig
 from tests.fixture_store import _pattern
 
 

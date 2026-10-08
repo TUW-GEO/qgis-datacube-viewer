@@ -11,7 +11,7 @@ plain URL — an HTML autoindex is a rendering, not an API — so :attr:`support
 is False and the store depends on the hierarchy being discoverable from
 ``zarr.json``/``.zmetadata`` alone, i.e. on **consolidated metadata**. Every key Zarr
 then asks for is one it learned from that document, so it is only ever a GET.
-:func:`geozarr_viewer.core.store.open_store` checks for consolidated metadata up front
+:func:`geo_geozarr_viewer.core.store.open_store` checks for consolidated metadata up front
 and says so plainly rather than letting the store look mysteriously empty.
 
 This module imports ``zarr`` at import time and must therefore only be imported from

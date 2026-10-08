@@ -38,11 +38,11 @@ QGIS 3.44 LTR is installed and its bundled Python 3.12 **already has** `zarr` 3.
 ```bash
 python plugin/scripts/deploy_dev.py            # symlink into the QGIS profile
 python plugin/scripts/deploy_dev.py --copy     # if symlinks are unavailable
-python plugin/scripts/build_plugin.py          # -> plugin/build/geozarr_viewer-<version>.zip
+python plugin/scripts/build_plugin.py          # -> plugin/build/geo_geozarr_viewer-<version>.zip
 ```
 
 With the symlink in place and the **Plugin Reloader** plugin (already installed),
-editing a file under `plugin/geozarr_viewer/` and pressing reload picks the change
+editing a file under `plugin/geo_geozarr_viewer/` and pressing reload picks the change
 up without restarting QGIS. Then: **Raster → GeoZarr Viewer → Add GeoZarr Layer…**
 
 Note that a second, unrelated GeoZarr plugin by Wietze Suijker (`qgis_geozarr`,

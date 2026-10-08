@@ -18,15 +18,15 @@ pytest.importorskip("qgis.core")
 from qgis.core import QgsProject, QgsRasterLayer
 from qgis.PyQt.QtWidgets import QToolBar, QWidget
 
-from geozarr_viewer import PLUGIN_NAME, classFactory
-from geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri
-from geozarr_viewer.plugin import (
+from geo_geozarr_viewer import PLUGIN_NAME, classFactory
+from geo_geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri
+from geo_geozarr_viewer.plugin import (
     TOOLBAR_OBJECT_NAME,
     GeoZarrViewerPlugin,
     check_dependencies,
     remote_dependencies,
 )
-from geozarr_viewer.provider import (
+from geo_geozarr_viewer.provider import (
     is_registered,
     registry_supports_unregister,
     unregister_provider,
@@ -177,7 +177,7 @@ def test_reload_cycle_leaves_a_working_provider(plugin, iface, store_uri) -> Non
 
 def test_registered_factory_resolves_the_class_lazily() -> None:
     """A captured class would make edits to raster_provider.py invisible on reload."""
-    import geozarr_viewer.provider as provider_pkg
+    import geo_geozarr_viewer.provider as provider_pkg
 
     source = provider_pkg._create_provider.__code__.co_names
     assert "import_module" in source, "the factory must look the class up at call time"
@@ -226,7 +226,7 @@ def test_time_travel_ignores_a_non_geozarr_layer(plugin, iface) -> None:
 def test_remote_packages_are_reported_without_importing_them(monkeypatch) -> None:
     """find_spec, not import: importing s3fs pulls aiobotocore in for no reason."""
     monkeypatch.setattr(
-        "geozarr_viewer.plugin.REMOTE_PACKAGES", ("json", "geozarr_no_such_package")
+        "geo_geozarr_viewer.plugin.REMOTE_PACKAGES", ("json", "geozarr_no_such_package")
     )
     assert remote_dependencies() == ["geozarr_no_such_package"]
     assert "geozarr_no_such_package" not in sys.modules
@@ -238,7 +238,7 @@ def test_missing_remote_packages_alone_do_not_nag(plugin, iface, monkeypatch) ->
     They are still listed by the instructions dialog, which is where a user who does
     hit an s3:// store will be sent.
     """
-    monkeypatch.setattr("geozarr_viewer.plugin.remote_dependencies", lambda: ["fsspec", "s3fs"])
+    monkeypatch.setattr("geo_geozarr_viewer.plugin.remote_dependencies", lambda: ["fsspec", "s3fs"])
     plugin.initGui()
     assert iface.messageBar().widgets == []
 
@@ -254,8 +254,8 @@ def test_dependency_notice_offers_a_way_to_fix_it(plugin, iface, monkeypatch) ->
     This is the first thing a user sees after installing from the Plugin Manager, so
     it is worth a test even though provoking it means faking the check.
     """
-    monkeypatch.setattr("geozarr_viewer.plugin.check_dependencies", lambda: ["zarr>=3"])
-    monkeypatch.setattr("geozarr_viewer.plugin.optional_dependencies", lambda: [])
+    monkeypatch.setattr("geo_geozarr_viewer.plugin.check_dependencies", lambda: ["zarr>=3"])
+    monkeypatch.setattr("geo_geozarr_viewer.plugin.optional_dependencies", lambda: [])
     plugin.initGui()
 
     assert len(iface.messageBar().widgets) == 1, "the user must be told"
@@ -273,7 +273,7 @@ def test_dependency_notice_offers_a_way_to_fix_it(plugin, iface, monkeypatch) ->
 
 def test_the_instructions_name_a_shell_and_a_command(qgis_app) -> None:
     """The dialog is the whole answer to "how do I install this", so it must be filled in."""
-    from geozarr_viewer.gui import DependencyDialog
+    from geo_geozarr_viewer.gui import DependencyDialog
 
     dialog = DependencyDialog(["zarr>=3 (found 2.18.3)"], ["icechunk (only needed for …)"])
     try:

@@ -15,8 +15,8 @@ pytest.importorskip("qgis.core")
 
 from qgis.PyQt.QtWidgets import QPlainTextEdit, QScrollArea
 
-from geozarr_viewer.core import environment as env
-from geozarr_viewer.gui import DependencyDialog
+from geo_geozarr_viewer.core import environment as env
+from geo_geozarr_viewer.gui import DependencyDialog
 
 FLAVOURS = [env.WINDOWS, env.MACOS, env.LINUX, env.CONDA, env.FLATPAK]
 
@@ -27,7 +27,7 @@ def dialog(qgis_app, request):
 
     def make(missing=("zarr>=3",), optional=(), remote=(), flavour=None, suppress=False):
         if flavour is not None:
-            import geozarr_viewer.gui.dependencies as depmod
+            import geo_geozarr_viewer.gui.dependencies as depmod
 
             real = env.install_command
             request.addfinalizer(lambda: setattr(depmod, "install_command", real))

@@ -10,7 +10,7 @@ import math
 
 import pytest
 
-from geozarr_viewer.core import (
+from geo_geozarr_viewer.core import (
     Affine,
     BBox,
     CrsBundle,

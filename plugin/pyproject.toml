@@ -35,7 +35,7 @@ ignore = [
 "tests/conftest.py" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["geozarr_viewer", "tests"]
+known-first-party = ["geo_geozarr_viewer", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,14 +1,14 @@
 """The "Add GeoZarr layer" dialog.
 
 Structure: every widget change funnels into :meth:`GeoZarrLoadDialog._refresh`,
-which rebuilds a :class:`~geozarr_viewer.layeruri.LayerUri` from the current widget
-state, runs it through :mod:`geozarr_viewer.selection`, and repaints the message
+which rebuilds a :class:`~geo_geozarr_viewer.layeruri.LayerUri` from the current widget
+state, runs it through :mod:`geo_geozarr_viewer.selection`, and repaints the message
 area and the Load button. There is no other path by which the dialog's opinion of
 "is this loadable" can change, which is what keeps a dialog with this many
 interdependent controls tractable.
 
 Store access — listing refs, inspecting a snapshot, rendering the preview — always
-goes through :class:`~geozarr_viewer.gui.worker.StoreWorker`. Nothing touches
+goes through :class:`~geo_geozarr_viewer.gui.worker.StoreWorker`. Nothing touches
 Icechunk on the GUI thread; a store behind S3 would otherwise freeze QGIS for
 seconds at a time.
 """

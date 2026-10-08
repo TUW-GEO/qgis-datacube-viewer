@@ -8,7 +8,7 @@ A symlink rather than a copy is the whole point: with the QGIS "Plugin Reloader"
 installed, editing a file here and pressing the reload shortcut picks the change up
 immediately. A copy would need re-running this script for every edit.
 
-Note that ``geozarr_viewer.core`` must still import ``zarr`` and ``icechunk`` from
+Note that ``geo_geozarr_viewer.core`` must still import ``zarr`` and ``icechunk`` from
 *QGIS's* interpreter, which is a different environment from this repo's pixi env.
 The script checks that and says so, because "the plugin does nothing" is otherwise a
 confusing way to discover a missing dependency.
@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-PACKAGE = "geozarr_viewer"
+PACKAGE = "geo_geozarr_viewer"
 SOURCE = REPO / PACKAGE
 
 

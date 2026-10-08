@@ -1,6 +1,6 @@
 """Exception hierarchy for the data-access layer.
 
-Everything raised deliberately by :mod:`geozarr_viewer.core` derives from
+Everything raised deliberately by :mod:`geo_geozarr_viewer.core` derives from
 :class:`GeoZarrError` so the GUI can catch one type and show the message verbatim.
 Messages are written to be shown to a user, not just logged.
 """

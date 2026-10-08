@@ -19,11 +19,11 @@ pytest.importorskip("qgis.core")
 from qgis.core import QgsApplication
 from qgis.PyQt.QtCore import Qt, QThreadPool
 
-from geozarr_viewer.core import RefSpec, describe_store, open_store
-from geozarr_viewer.core.reader import DatasetReader
-from geozarr_viewer.gui import GeoZarrLoadDialog, render_thumbnail, to_image
-from geozarr_viewer.gui.worker import StoreWorker
-from geozarr_viewer.layeruri import LayerUri
+from geo_geozarr_viewer.core import RefSpec, describe_store, open_store
+from geo_geozarr_viewer.core.reader import DatasetReader
+from geo_geozarr_viewer.gui import GeoZarrLoadDialog, render_thumbnail, to_image
+from geo_geozarr_viewer.gui.worker import StoreWorker
+from geo_geozarr_viewer.layeruri import LayerUri
 from tests.fixture_store import FixtureInfo
 
 pytestmark = pytest.mark.gui
@@ -118,7 +118,7 @@ def test_dialog_never_describes_a_store_off_the_main_thread(qgis_app, store_uri,
     QThreadPool worker while QGIS used PROJ on the main thread. Opening the store is
     the slow part and stays on the worker; describing it must not.
     """
-    import geozarr_viewer.gui.load_dialog as module
+    import geo_geozarr_viewer.gui.load_dialog as module
 
     threads: list[str] = []
     real = module.describe_store
@@ -338,7 +338,7 @@ def test_thumbnail_of_real_data_is_not_flat(qgis_app, store_uri) -> None:
 
 def test_thumbnail_channel_order_is_rgb(qgis_app, store_uri) -> None:
     """A BGR/RGB mix-up is invisible on grey data and obvious on real imagery."""
-    from geozarr_viewer.core import BBox, ReadRequest
+    from geo_geozarr_viewer.core import BBox, ReadRequest
 
     handle = open_store(store_uri, RefSpec.branch("main"))
     dataset = describe_store(handle).dataset("conv")
@@ -379,9 +379,9 @@ def test_thumbnail_marks_nodata_transparent(qgis_app, store_uri) -> None:
 
 
 def test_to_image_handles_a_constant_band(qgis_app) -> None:
-    from geozarr_viewer.core.geometry import Affine, Window
-    from geozarr_viewer.core.model import LevelInfo
-    from geozarr_viewer.core.reader import ReadResult
+    from geo_geozarr_viewer.core.geometry import Affine, Window
+    from geo_geozarr_viewer.core.model import LevelInfo
+    from geo_geozarr_viewer.core.reader import ReadResult
 
     level = LevelInfo(
         name="0",

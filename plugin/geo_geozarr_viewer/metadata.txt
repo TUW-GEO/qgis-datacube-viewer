@@ -1,7 +1,7 @@
 [general]
 ; Deliberately distinct from the two other GeoZarr plugins that can sit beside this
 ; one in the same profile: "GeoZarr Viewer" (eodcgmbh, which this is a fork of) and
-; "GeoZarr" (wietzesuijker). Keep in step with PLUGIN_NAME in geozarr_viewer/__init__.py
+; "GeoZarr" (wietzesuijker). Keep in step with PLUGIN_NAME in geo_geozarr_viewer/__init__.py
 ; -- scripts/build_plugin.py refuses to build if the two drift.
 name=GEO-geo-zarr
 ; 3.40 is the floor because of Python, not QGIS: zarr 3 needs Python >= 3.11 and

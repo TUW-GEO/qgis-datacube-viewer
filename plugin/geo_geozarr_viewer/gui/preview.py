@@ -82,7 +82,7 @@ def render_thumbnail(
 ) -> PreviewResult:
     """Read a whole-dataset overview and turn it into a thumbnail.
 
-    Runs on a worker thread (see :mod:`geozarr_viewer.gui.worker`) because for a
+    Runs on a worker thread (see :mod:`geo_geozarr_viewer.gui.worker`) because for a
     remote store this is a real network read, even at overview resolution.
     """
     result = reader.read_overview(

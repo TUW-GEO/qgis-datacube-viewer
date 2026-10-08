@@ -26,15 +26,15 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QSize
 from qgis.PyQt.QtGui import QColor
 
-from geozarr_viewer.core import (
+from geo_geozarr_viewer.core import (
     DatasetReader,
     ReadRequest,
     RefSpec,
     describe_store,
     open_store,
 )
-from geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri
-from geozarr_viewer.provider import (
+from geo_geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri
+from geo_geozarr_viewer.provider import (
     GeoZarrRasterProvider,
     clone_count,
     create_layer,

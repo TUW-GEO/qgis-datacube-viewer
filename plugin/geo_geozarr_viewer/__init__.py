@@ -1,6 +1,6 @@
 """GEO-geo-zarr — a QGIS plugin for GeoZarr/Icechunk datacubes.
 
-The package root stays import-light on purpose. ``geozarr_viewer.core`` must be
+The package root stays import-light on purpose. ``geo_geozarr_viewer.core`` must be
 importable in a plain Python interpreter (that is what makes the data-access layer
 unit-testable), so nothing here may import ``qgis.*`` at module scope — the plugin
 class is only pulled in when QGIS actually calls :func:`classFactory`.
@@ -11,8 +11,8 @@ from __future__ import annotations
 #: The plugin's display name, as it appears in the Plugin Manager, the Raster menu,
 #: the toolbar and every message-bar notice.
 #:
-#: It lives here rather than in :mod:`geozarr_viewer.plugin` because
-#: :mod:`geozarr_viewer.gui.dependencies` needs it too, and importing the plugin
+#: It lives here rather than in :mod:`geo_geozarr_viewer.plugin` because
+#: :mod:`geo_geozarr_viewer.gui.dependencies` needs it too, and importing the plugin
 #: module from the GUI layer would be a cycle. The package root is import-light, so
 #: this costs nothing to reach.
 #:

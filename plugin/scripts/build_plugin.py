@@ -1,6 +1,6 @@
 """Package the plugin into the ZIP the QGIS Plugin Manager expects.
 
-    pixi run build            -> build/geozarr_viewer-<version>.zip
+    pixi run build            -> build/geo_geozarr_viewer-<version>.zip
 
 QGIS requires the archive to contain exactly one top-level directory whose name is
 the Python package name, and that directory must hold ``metadata.txt`` and
@@ -27,7 +27,7 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-PACKAGE = "geozarr_viewer"
+PACKAGE = "geo_geozarr_viewer"
 SOURCE = REPO / PACKAGE
 BUILD = REPO / "build"
 

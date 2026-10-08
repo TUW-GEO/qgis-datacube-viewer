@@ -10,10 +10,10 @@ macOS, where the interpreter to install into is buried inside the QGIS installat
 The one command it prints covers everything the plugin can use — zarr, icechunk,
 fsspec and s3fs — minus whatever is already importable, so a fresh install is one
 paste rather than a return trip per package. Each line says what it unlocks
-(:data:`~geozarr_viewer.core.environment.PACKAGE_ROLES`), because "install four
+(:data:`~geo_geozarr_viewer.core.environment.PACKAGE_ROLES`), because "install four
 packages" with no reason attached is what gets half-followed.
 
-Everything platform-specific is decided in :mod:`geozarr_viewer.core.environment`.
+Everything platform-specific is decided in :mod:`geo_geozarr_viewer.core.environment`.
 This module is layout: three numbered steps, the command in a monospace box with a
 Copy button, and the detected interpreter shown so a mis-detection is visible rather
 than mysterious.

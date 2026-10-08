@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from geozarr_viewer.core import (
+from geo_geozarr_viewer.core import (
     DatasetReader,
     MissingDependencyError,
     ReadRequest,
@@ -36,8 +36,8 @@ from geozarr_viewer.core import (
     open_store,
     parse_uri,
 )
-from geozarr_viewer.core.http_store import HttpZarrStore
-from geozarr_viewer.core.store import build_storage, zarr_store_target
+from geo_geozarr_viewer.core.http_store import HttpZarrStore
+from geo_geozarr_viewer.core.store import build_storage, zarr_store_target
 from tests.fixture_store import build_plain_zarr_store
 
 
@@ -441,8 +441,8 @@ qgis_core = pytest.importorskip("qgis.core")
 
 
 def test_layer_loads_from_a_url(qgis_app, store_url: str) -> None:
-    from geozarr_viewer.layeruri import LayerUri
-    from geozarr_viewer.provider import create_layer
+    from geo_geozarr_viewer.layeruri import LayerUri
+    from geo_geozarr_viewer.provider import create_layer
 
     layer = create_layer(
         LayerUri(store_uri=store_url, dataset="conv", bands=("red",), indices={"time": 1})

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from geozarr_viewer.core import RefSpec, describe_store, open_store
-from geozarr_viewer.layeruri import LayerUri
-from geozarr_viewer.selection import Issue, can_load, errors, summarise, validate, warnings
+from geo_geozarr_viewer.core import RefSpec, describe_store, open_store
+from geo_geozarr_viewer.layeruri import LayerUri
+from geo_geozarr_viewer.selection import Issue, can_load, errors, summarise, validate, warnings
 
 
 @pytest.fixture(scope="module")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from geozarr_viewer.core import (
+from geo_geozarr_viewer.core import (
     DatasetReader,
     ReadRequest,
     RefSpec,
@@ -17,7 +17,7 @@ from geozarr_viewer.core import (
     open_store,
     parse_uri,
 )
-from geozarr_viewer.core.errors import RefNotFoundError
+from geo_geozarr_viewer.core.errors import RefNotFoundError
 from tests.fixture_store import FixtureInfo
 
 

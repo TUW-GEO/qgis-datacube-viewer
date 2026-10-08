@@ -18,7 +18,7 @@ ship Python 3.12. Check with `import sys; print(sys.version)` in
 ### 1. The plugin
 
 **Plugins → Manage and Install Plugins → Install from ZIP**, and pick
-`geozarr_viewer-<version>.zip` (`pixi run build` makes one). 
+`geo_geozarr_viewer-<version>.zip` (`pixi run build` makes one). 
 
 It is marked experimental, so tick **Settings → Show also experimental plugins** 
 if it does not show up in the list.
@@ -72,6 +72,6 @@ Notes that catch people out:
 pixi run inspect      # describe a store with no QGIS involved — the fastest loop
 pixi run test         # test suite against a synthetic Icechunk fixture
 pixi run lint         # ruff check + format check
-pixi run build        # build/geozarr_viewer-<version>.zip
+pixi run build        # build/geo_geozarr_viewer-<version>.zip
 pixi run deploy       # symlink into your QGIS profile for live reloading
 ```

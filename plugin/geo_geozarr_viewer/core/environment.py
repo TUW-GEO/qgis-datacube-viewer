@@ -38,7 +38,7 @@ REQUIRED_PACKAGES = ("zarr>=3",)
 #: Only needed for Icechunk repositories; plain Zarr v3 works without it.
 OPTIONAL_PACKAGES = ("icechunk",)
 #: Only needed for plain Zarr on cloud object storage. ``http(s)://`` is served by
-#: :mod:`geozarr_viewer.core.http_store` and Icechunk brings its own object client,
+#: :mod:`geo_geozarr_viewer.core.http_store` and Icechunk brings its own object client,
 #: so neither of those needs these.
 REMOTE_PACKAGES = ("fsspec", "s3fs")
 #: What a first-time install should ask for: everything, in one command.
@@ -56,7 +56,7 @@ PACKAGE_ROLES = {
 
 #: QSettings key for "stop telling me icechunk is missing". Lives here, in the
 #: module with no Qt import, so ``plugin.py`` and the dialog cannot drift apart.
-SUPPRESS_KEY = "geozarr_viewer/suppress_dependency_notice"
+SUPPRESS_KEY = "geo_geozarr_viewer/suppress_dependency_notice"
 
 # --------------------------------------------------------------------- flavours
 CONDA = "conda"

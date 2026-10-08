@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from geozarr_viewer.core.environment import (
+from geo_geozarr_viewer.core.environment import (
     CONDA,
     FLATPAK,
     LINUX,
