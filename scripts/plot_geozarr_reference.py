@@ -96,7 +96,12 @@ def dims_of(arr: zarr.Array) -> list[str] | None:
 
 
 def is_spatial(dims: list[str] | None) -> bool:
-    return bool(dims) and len(dims) >= 2 and dims[-2] in SPATIAL_DIMS[0] and dims[-1] in SPATIAL_DIMS[1]
+    return (
+        bool(dims)
+        and len(dims) >= 2
+        and dims[-2] in SPATIAL_DIMS[0]
+        and dims[-1] in SPATIAL_DIMS[1]
+    )
 
 
 def nodata_value(arr: zarr.Array) -> Any:
@@ -118,7 +123,9 @@ def read_masked(arr: zarr.Array, index: tuple) -> np.ma.MaskedArray:
 def decode_time(arr: zarr.Array) -> list[str]:
     values = np.asarray(arr[...])
     m = re.match(r"(\w+) since (\S+)", str(arr.attrs.get("units", "")))
-    unit = {"days": "D", "hours": "h", "minutes": "m", "seconds": "s"}.get(m.group(1)) if m else None
+    unit = (
+        {"days": "D", "hours": "h", "minutes": "m", "seconds": "s"}.get(m.group(1)) if m else None
+    )
     if not m or unit is None:
         return [str(v) for v in values]
     epoch = np.datetime64(m.group(2))
@@ -159,10 +166,21 @@ def check_root(root: zarr.Group, store: Path, report: Report) -> None:
     )
     report.check(consolidated, "root", "consolidated metadata present", fail="WARN")
     conventions = [c.get("name") for c in attrs.get("zarr_conventions", [])]
-    report.check(bool(conventions), "root", f"zarr_conventions declared: {conventions}", fail="WARN")
-    for key, name in (("multiscales", "multiscales"), ("proj:code", "proj"), ("spatial:transform", "spatial")):
+    report.check(
+        bool(conventions), "root", f"zarr_conventions declared: {conventions}", fail="WARN"
+    )
+    for key, name in (
+        ("multiscales", "multiscales"),
+        ("proj:code", "proj"),
+        ("spatial:transform", "spatial"),
+    ):
         if key in attrs or any(k.startswith(f"{name}:") for k in attrs):
-            report.check(name in conventions, "root", f"'{name}' attributes used and convention declared", fail="WARN")
+            report.check(
+                name in conventions,
+                "root",
+                f"'{name}' attributes used and convention declared",
+                fail="WARN",
+            )
 
 
 def resolve_crs(attrs: dict, where: str, report: Report) -> CRS | None:
@@ -188,7 +206,9 @@ def check_level(
 
     transform = attrs.get("spatial:transform")
     if not report.check(
-        isinstance(transform, list) and len(transform) == 6, where, f"spatial:transform = {transform}"
+        isinstance(transform, list) and len(transform) == 6,
+        where,
+        f"spatial:transform = {transform}",
     ):
         return crs, None
     a, b, c, d, e, f = transform
@@ -197,11 +217,14 @@ def check_level(
 
     shape = attrs.get("spatial:shape")
     spatial_arrays = [(n, arr) for n, arr in group.arrays() if is_spatial(dims_of(arr))]
-    report.check(bool(spatial_arrays), where, f"{len(spatial_arrays)} array(s) with (y, x) dimensions")
+    report.check(
+        bool(spatial_arrays), where, f"{len(spatial_arrays)} array(s) with (y, x) dimensions"
+    )
     for name, arr in spatial_arrays:
         if shape is not None:
             report.check(
-                list(arr.shape[-2:]) == list(shape), where,
+                list(arr.shape[-2:]) == list(shape),
+                where,
                 f"{name}: shape {arr.shape} matches spatial:shape {shape}",
             )
 
@@ -209,7 +232,8 @@ def check_level(
     bbox_expected = [c, f + e * ny, c + a * nx, f]
     if "spatial:bbox" in attrs:
         report.check(
-            np.allclose(attrs["spatial:bbox"], bbox_expected, rtol=0, atol=abs(a) * 1e-3), where,
+            np.allclose(attrs["spatial:bbox"], bbox_expected, rtol=0, atol=abs(a) * 1e-3),
+            where,
             f"spatial:bbox {attrs['spatial:bbox']} consistent with transform",
             fail="WARN" if path and "spatial:bbox" not in group.attrs else "FAIL",
         )
@@ -219,7 +243,9 @@ def check_level(
         if dim in group:
             coord = np.asarray(group[dim][...])
             expected = start + (np.arange(n) + 0.5) * step
-            ok = coord.shape == expected.shape and np.allclose(coord, expected, rtol=0, atol=abs(step) * 1e-3)
+            ok = coord.shape == expected.shape and np.allclose(
+                coord, expected, rtol=0, atol=abs(step) * 1e-3
+            )
             report.check(ok, where, f"'{dim}' coordinate == pixel centers of spatial:transform")
 
     if "spatial_ref" in group:
@@ -228,21 +254,29 @@ def check_level(
         if gt:
             g = [float(v) for v in str(gt).split()]
             report.check(
-                np.allclose(g, [c, a, b, f, d, e]), where, "spatial_ref.GeoTransform matches spatial:transform"
+                np.allclose(g, [c, a, b, f, d, e]),
+                where,
+                "spatial_ref.GeoTransform matches spatial:transform",
             )
         wkt = sr.get("crs_wkt") or sr.get("spatial_ref")
         if wkt and crs is not None:
-            report.check(CRS.from_wkt(wkt).equals(crs), where, "spatial_ref.crs_wkt matches proj:* CRS")
+            report.check(
+                CRS.from_wkt(wkt).equals(crs), where, "spatial_ref.crs_wkt matches proj:* CRS"
+            )
 
     if crs is not None:
         to_ll = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
         lon0, lat0 = to_ll.transform(bbox_expected[0], bbox_expected[1])
         lon1, lat1 = to_ll.transform(bbox_expected[2], bbox_expected[3])
         ok = max(abs(lon0), abs(lon1)) <= 180 and max(abs(lat0), abs(lat1)) <= 90
-        report.check(ok, where, f"bbox in lon/lat: [{lon0:.4f}, {lat0:.4f}, {lon1:.4f}, {lat1:.4f}]")
+        report.check(
+            ok, where, f"bbox in lon/lat: [{lon0:.4f}, {lat0:.4f}, {lon1:.4f}, {lat1:.4f}]"
+        )
         if not path or path == "0":
-            print(f"        spot-check location: https://www.openstreetmap.org/?mlat={(lat0 + lat1) / 2:.4f}"
-                  f"&mlon={(lon0 + lon1) / 2:.4f}#map=11/{(lat0 + lat1) / 2:.4f}/{(lon0 + lon1) / 2:.4f}")
+            print(
+                f"        spot-check location: https://www.openstreetmap.org/?mlat={(lat0 + lat1) / 2:.4f}"
+                f"&mlon={(lon0 + lon1) / 2:.4f}#map=11/{(lat0 + lat1) / 2:.4f}/{(lon0 + lon1) / 2:.4f}"
+            )
     return crs, transform
 
 
@@ -266,19 +300,29 @@ def check_variables(path: str, group: zarr.Group, report: Report) -> None:
         if flags is not None:
             present = set(np.unique(data.compressed()).tolist())
             unknown = present - set(flags)
-            report.check(not unknown, where, f"classes present {sorted(present)} all in flag_values")
+            report.check(
+                not unknown, where, f"classes present {sorted(present)} all in flag_values"
+            )
             meanings = str(arr.attrs.get("flag_meanings", "")).split()
-            report.check(len(meanings) == len(flags), where, "flag_meanings count == flag_values count")
+            report.check(
+                len(meanings) == len(flags), where, "flag_meanings count == flag_values count"
+            )
             colors = arr.attrs.get("flag_colors")
             if colors is not None:
-                report.check(len(colors) == len(flags), where, "flag_colors count == flag_values count")
+                report.check(
+                    len(colors) == len(flags), where, "flag_colors count == flag_values count"
+                )
 
 
-def check_gdal(store: Path, levels: list[tuple[str, zarr.Group, dict]], georef: dict, report: Report) -> None:
+def check_gdal(
+    store: Path, levels: list[tuple[str, zarr.Group, dict]], georef: dict, report: Report
+) -> None:
     try:
         import rasterio
     except ImportError:
-        report.add("WARN", "gdal", "rasterio not installed; run with `uv run --with rasterio --script ...`")
+        report.add(
+            "WARN", "gdal", "rasterio not installed; run with `uv run --with rasterio --script ...`"
+        )
         return
     report.add("PASS", "gdal", f"GDAL {rasterio.__gdal_version__}")
     for path, group, _ in levels:
@@ -298,15 +342,22 @@ def check_gdal(store: Path, levels: list[tuple[str, zarr.Group, dict]], georef: 
                 same = g_crs is not None and CRS.from_user_input(g_crs.to_wkt()).equals(crs)
                 report.check(same, where, f"CRS as seen by GDAL: {g_crs}")
             if transform is not None:
-                report.check(np.allclose(g_tr, transform), where, f"geotransform as seen by GDAL: {g_tr}")
+                report.check(
+                    np.allclose(g_tr, transform), where, f"geotransform as seen by GDAL: {g_tr}"
+                )
 
 
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
 def render_level(
-    path: str, group: zarr.Group, crs: CRS | None, transform: list[float] | None,
-    time_index: int, title: str, out: Path | None,
+    path: str,
+    group: zarr.Group,
+    crs: CRS | None,
+    transform: list[float] | None,
+    time_index: int,
+    title: str,
+    out: Path | None,
 ) -> Path | None:
     import matplotlib.pyplot as plt
     from matplotlib.colors import BoundaryNorm, ListedColormap
@@ -343,26 +394,44 @@ def render_level(
         flags = arr.attrs.get("flag_values")
         if flags is not None:
             meanings = str(arr.attrs.get("flag_meanings", "")).split() or [str(v) for v in flags]
-            colors = arr.attrs.get("flag_colors") or [plt.get_cmap("tab10")(i % 10) for i in range(len(flags))]
+            colors = arr.attrs.get("flag_colors") or [
+                plt.get_cmap("tab10")(i % 10) for i in range(len(flags))
+            ]
             cmap = ListedColormap(colors)
             cmap.set_bad(alpha=0)
             bounds = [v - 0.5 for v in flags] + [flags[-1] + 0.5]
-            ax.imshow(data, extent=extent, cmap=cmap, norm=BoundaryNorm(bounds, cmap.N), interpolation="nearest")
+            ax.imshow(
+                data,
+                extent=extent,
+                cmap=cmap,
+                norm=BoundaryNorm(bounds, cmap.N),
+                interpolation="nearest",
+            )
             ax.legend(
-                handles=[Patch(facecolor=col, edgecolor="k", label=f"{v} {m}")
-                         for v, m, col in zip(flags, meanings, colors, strict=False)],
-                loc="upper left", bbox_to_anchor=(1.01, 1), fontsize=8, frameon=False,
+                handles=[
+                    Patch(facecolor=col, edgecolor="k", label=f"{v} {m}")
+                    for v, m, col in zip(flags, meanings, colors, strict=False)
+                ],
+                loc="upper left",
+                bbox_to_anchor=(1.01, 1),
+                fontsize=8,
+                frameon=False,
             )
         else:
-            vmin, vmax = (np.percentile(data.compressed(), [2, 98]) if data.count() else (0, 1))
+            vmin, vmax = np.percentile(data.compressed(), [2, 98]) if data.count() else (0, 1)
             cmap = plt.get_cmap("terrain" if "elev" in name or "alt" in name else "viridis").copy()
             cmap.set_bad(alpha=0)
-            im = ax.imshow(data, extent=extent, cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
+            im = ax.imshow(
+                data, extent=extent, cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest"
+            )
             units = arr.attrs.get("units", "")
             fig.colorbar(im, ax=ax, shrink=0.8, label=f"{name} [{units}]" if units else name)
 
-        stats = (f"min {data.min():.4g}  max {data.max():.4g}  no-data {1 - data.count() / data.size:.1%}"
-                 if data.count() else "ALL NO-DATA")
+        stats = (
+            f"min {data.min():.4g}  max {data.max():.4g}  no-data {1 - data.count() / data.size:.1%}"
+            if data.count()
+            else "ALL NO-DATA"
+        )
         ax.set_title(f"{name}  {arr.dtype} {tuple(arr.shape)}\n{subtitle}\n{stats}", fontsize=9)
         unit = crs.axis_info[0].unit_name if crs is not None and crs.axis_info else "pixel"
         ax.set_xlabel(f"x [{unit}]", fontsize=8)
@@ -384,12 +453,20 @@ def render_level(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("store", type=Path, help="path to the .zarr store")
-    parser.add_argument("--time", type=int, default=0, help="index along non-spatial dims to render")
-    parser.add_argument("--out-dir", type=Path, help="where to write PNGs (default: <store>_reference/)")
+    parser.add_argument(
+        "--time", type=int, default=0, help="index along non-spatial dims to render"
+    )
+    parser.add_argument(
+        "--out-dir", type=Path, help="where to write PNGs (default: <store>_reference/)"
+    )
     parser.add_argument("--gdal", action="store_true", help="cross-check with GDAL via rasterio")
-    parser.add_argument("--show", action="store_true", help="open interactive windows instead of PNGs")
+    parser.add_argument(
+        "--show", action="store_true", help="open interactive windows instead of PNGs"
+    )
     parser.add_argument("--no-plot", action="store_true", help="only run the checks")
     args = parser.parse_args()
 
@@ -425,9 +502,16 @@ def main() -> int:
                 continue
             ratio = tr[0] / base[0]
             src = entry.get("derived_from")
-            report.check(np.isclose(tr[2], base[2]) and np.isclose(tr[5], base[5]), f"level '{path}'",
-                         "same origin as level 0 (bbox aligned)")
-            report.check(ratio >= 1, f"level '{path}'", f"{ratio:g}x coarser than level 0 (derived_from={src})")
+            report.check(
+                np.isclose(tr[2], base[2]) and np.isclose(tr[5], base[5]),
+                f"level '{path}'",
+                "same origin as level 0 (bbox aligned)",
+            )
+            report.check(
+                ratio >= 1,
+                f"level '{path}'",
+                f"{ratio:g}x coarser than level 0 (derived_from={src})",
+            )
 
     if args.gdal:
         print("-- gdal")
