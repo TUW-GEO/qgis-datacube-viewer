@@ -1,0 +1,20 @@
+[general]
+name=GeoZarr
+qgisMinimumVersion=3.40
+description=Load and inspect GeoZarr stores in QGIS
+about=Opens Zarr stores that follow the GeoZarr conventions (proj:, spatial:, multiscales) and reports their geospatial metadata. Early development.
+version=0.1.0
+author=Colin Moldenhauer
+email=colin.moldenhauer@geo.tuwien.ac.at
+
+tracker=https://github.com/TUW-GEO/qgis-datacube-viewer/-/issues
+repository=https://github.com/TUW-GEO/qgis-datacube-viewer
+
+# Optional metadata
+homepage=https://github.com/TUW-GEO/qgis-datacube-viewer
+category=Raster
+icon=icon.svg
+tags=zarr,geozarr,raster,cloud,netcdf
+experimental=True
+deprecated=False
+hasProcessingProvider=False

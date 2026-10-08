@@ -1,14 +1,14 @@
 # geo-zarr
 
 Tooling for inspecting and visualizing [GeoZarr](https://github.com/zarr-conventions)
-stores. A QGIS plugin built on top of the same code is in progress on the
-`qgis-plugin` branch.
+stores, plus a QGIS plugin built from the same code.
 
 ## Layout
 
 ```
 src/geozarr/              library + `geozarr` CLI
-scripts/                  standalone scripts (dummy data generator)
+scripts/                  standalone scripts (dummy data generator, plugin build)
+qgis_plugin/geozarr_qgis/ QGIS plugin package (packaged into a .zip by scripts/build_plugin.py)
 tests/                    pytest suite
 docs/                     documentation
 ```
@@ -55,3 +55,32 @@ uv run scripts/make_dummy_geozarr.py                           # -> dummy.zarr
 uv run scripts/make_dummy_geozarr.py --source copernicus -o dem.zarr
 uv run scripts/make_dummy_geozarr.py --zarr-format 2 --levels 1 -o flat_v2.zarr
 ```
+
+## QGIS plugin
+
+Build an installable archive (standard library only, no environment needed):
+
+```bash
+python scripts/build_plugin.py          # -> dist/geozarr_qgis-<version>.zip
+```
+
+Install it in QGIS via *Plugins → Manage and Install Plugins → Install from ZIP*.
+
+Notes:
+
+* `src/geozarr/__init__.py` holds the single source of truth for the version;
+  the build script injects it into the bundled `metadata.txt`.
+* The build vendors the `geozarr` package into `geozarr_qgis/_vendor/`, which
+  the plugin's `__init__.py` puts on `sys.path`. Pass `--no-vendor` to skip it.
+* Binary dependencies are *not* vendored. `numpy` and `pyproj` ship with QGIS;
+  `zarr` must be installed into the QGIS Python (e.g. from the OSGeo4W shell:
+  `python -m pip install zarr`).
+
+CI builds the .zip on every pipeline (artifact of the `build:plugin` job) and
+publishes it to the package registry and a release for tags matching `v*`.
+
+## Releasing
+
+1. Bump `__version__` in `src/geozarr/__init__.py`.
+2. `git tag v<version> && git push --tags` — the tag must match `__version__`,
+   or the release job fails.

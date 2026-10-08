@@ -1,6 +1,10 @@
-# CI for geo-zarr: lint and test the library.
+# CI for geo-zarr: lint + test the library, then package the QGIS plugin.
+#
+# The plugin .zip is attached to every pipeline as an artifact; tagged
+# pipelines (v*) additionally publish it to the GitLab package registry and
+# create a release.
 
-stages: [lint, test]
+stages: [lint, test, build, release]
 
 default:
   image: python:3.12-slim
@@ -12,6 +16,7 @@ default:
 variables:
   UV_CACHE_DIR: .cache/uv
   UV_LINK_MODE: copy
+  PLUGIN_NAME: geozarr_qgis
 
 .uv:
   before_script:
@@ -43,3 +48,54 @@ test:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+
+build:plugin:
+  stage: build
+  script:
+    # Standard library only - no dependency install needed.
+    - python scripts/build_plugin.py --output-dir dist
+    - ls -lh dist
+  artifacts:
+    name: "$PLUGIN_NAME-$CI_COMMIT_REF_SLUG"
+    paths: [dist/*.zip]
+    expire_in: 4 weeks
+
+# Guard against the plugin .zip breaking: install it the way QGIS does and
+# check the vendored library is importable from it.
+build:plugin-smoke:
+  stage: build
+  needs: ["build:plugin"]
+  script:
+    - python -c "import glob, zipfile; zipfile.ZipFile(glob.glob('dist/*.zip')[0]).extractall('plugins')"
+    - test -f "plugins/$PLUGIN_NAME/metadata.txt"
+    - PYTHONPATH="plugins/$PLUGIN_NAME/_vendor" python -c "import geozarr; print(geozarr.__version__)"
+
+release:package:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  needs: ["build:plugin"]
+  image: curlimages/curl:latest
+  script:
+    # The tag must match the library version, which drives the .zip contents.
+    - |
+      grep -q "^__version__ = \"${CI_COMMIT_TAG#v}\"" src/geozarr/__init__.py || { echo "tag $CI_COMMIT_TAG does not match __version__ in src/geozarr/__init__.py"; exit 1; }
+    # Published under a stable name so the release asset link is predictable.
+    - |
+      curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$(ls dist/*.zip)" "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PLUGIN_NAME/$CI_COMMIT_TAG/$PLUGIN_NAME.zip"
+
+release:create:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  needs: ["release:package"]
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - echo "Releasing $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    description: "GeoZarr library and QGIS plugin $CI_COMMIT_TAG"
+    assets:
+      links:
+        - name: "$PLUGIN_NAME.zip (QGIS plugin)"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PLUGIN_NAME/$CI_COMMIT_TAG/$PLUGIN_NAME.zip"
