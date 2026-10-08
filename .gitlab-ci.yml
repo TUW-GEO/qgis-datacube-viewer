@@ -96,10 +96,13 @@ release:plugin:
     - export PLUGIN_VERSION="${CI_COMMIT_TAG#v}"
     - echo "PLUGIN_VERSION=$PLUGIN_VERSION" >> release.env
     - python plugin/scripts/build_plugin.py --clean --version "$PLUGIN_VERSION"
-    # Fixed filename so the release asset URL is predictable; the version is
-    # already in the registry path.
+    # Uploaded with the standard library, not curl: python:3.12-slim has no curl,
+    # no wget and no git. The alternatives were an apt-get on every release or a
+    # second job in a second image to make one HTTP request. --as fixes the name in
+    # the registry so the release asset URL is predictable; the version is already
+    # in the registry path.
     - |
-      curl --fail --silent --show-error --header "JOB-TOKEN: $CI_JOB_TOKEN"         --upload-file "plugin/build/geozarr_viewer-$PLUGIN_VERSION.zip"         "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/geozarr_viewer/$PLUGIN_VERSION/geozarr_viewer.zip"
+      python plugin/scripts/upload_package.py         --file "plugin/build/geozarr_viewer-$PLUGIN_VERSION.zip"         --package geozarr_viewer         --version "$PLUGIN_VERSION"         --as geozarr_viewer.zip
   artifacts:
     paths: [plugin/build/*.zip]
     expire_in: never
