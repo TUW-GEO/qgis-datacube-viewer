@@ -20,7 +20,7 @@ from typing import Any
 from qgis.core import QgsSettings
 from qgis.gui import QgsProjectionSelectionWidget
 from qgis.PyQt.QtCore import Qt, QTimer, pyqtSignal
-from qgis.PyQt.QtGui import QPixmap
+from qgis.PyQt.QtGui import QGuiApplication, QPixmap
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,6 +28,7 @@ from qgis.PyQt.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -36,6 +37,7 @@ from qgis.PyQt.QtWidgets import (
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
@@ -115,16 +117,14 @@ class _AxisPicker(QWidget):
 class GeoZarrLoadDialog(QDialog):
     """Pick a store, a snapshot, a dataset and a band selection; emit a layer URI."""
 
-    #: Emitted with a fully-resolved URI when the user clicks Add. The dialog stays
-    #: open so several layers can be added from one store in a row.
-    #: Emits a tuple of LayerUri — one per layer to create. Loading a
-    #: multi-variable store normally yields one URI per variable.
+    #: Emitted when the user clicks Add, with one LayerUri per layer to create —
+    #: a multi-variable store normally yields one URI per variable. The dialog
+    #: stays open so several loads can be done from one store in a row.
     layersRequested = pyqtSignal(tuple)
 
     def __init__(self, parent: QWidget | None = None, initial: LayerUri | None = None):
         super().__init__(parent)
         self.setWindowTitle("GEO-Add GeoZarr layer")
-        self.setMinimumWidth(760)
 
         self._refs: RepositoryRefs | None = None
         #: "icechunk" or "zarr", decided by sniffing when Connect is pressed.
@@ -151,13 +151,22 @@ class GeoZarrLoadDialog(QDialog):
         self._preview_timer.timeout.connect(self._start_preview)
 
         self._build_ui()
+        self._fit_to_screen()
         self._load_recent()
         if initial is not None:
             self._apply_initial(initial)
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
+        # The groups are put inside a scroll area, with the buttons outside it, so
+        # that "Add layer" can never be pushed off the bottom of the screen. The
+        # dialog's content has a tall minimum (a 220px preview, two list widgets and
+        # four group boxes), and on a short or scaled display that minimum used to
+        # exceed the screen height — leaving the accept button unreachable with no
+        # way to resize far enough to bring it back.
+        content = QWidget()
+        outer = QVBoxLayout(content)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self._build_source_group())
         outer.addWidget(self._build_dataset_group())
 
@@ -168,13 +177,42 @@ class GeoZarrLoadDialog(QDialog):
 
         outer.addWidget(self._build_feedback_group(), 1)
 
+        scroll = QScrollArea()
+        scroll.setWidget(content)
+        scroll.setWidgetResizable(True)  # content follows the dialog's width
+        scroll.setFrameShape(QFrame.NoFrame)
+        # Low enough that the dialog can be dragged down to almost nothing and the
+        # buttons still show; the scroll bar takes over from there.
+        scroll.setMinimumHeight(180)
+
         self._buttons = QDialogButtonBox()
         self._add_button = self._buttons.addButton("Add layer", QDialogButtonBox.AcceptRole)
         self._buttons.addButton(QDialogButtonBox.Close)
         self._buttons.accepted.connect(self._on_add)
         self._buttons.rejected.connect(self.reject)
         self._add_button.setEnabled(False)
-        outer.addWidget(self._buttons)
+
+        shell = QVBoxLayout(self)
+        shell.addWidget(scroll, 1)
+        shell.addWidget(self._buttons)
+
+    def _fit_to_screen(self) -> None:
+        """Open at a comfortable size, but never larger than the screen allows.
+
+        ``setMinimumWidth`` is applied here rather than in ``__init__`` for the same
+        reason as the height: a hard 760px floor is itself unfittable on a small or
+        heavily scaled display, and a dialog that cannot be made to fit cannot be
+        used at all.
+        """
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:  # pragma: no cover - no display
+            return
+        available = screen.availableGeometry()
+        # Leave a margin so the title bar and taskbar stay reachable.
+        width = max(min(880, available.width() - 80), 320)
+        height = max(min(820, available.height() - 120), 240)
+        self.setMinimumWidth(min(760, width))
+        self.resize(width, height)
 
     def _build_source_group(self) -> QGroupBox:
         group = QGroupBox("Store")
@@ -337,7 +375,11 @@ class GeoZarrLoadDialog(QDialog):
         layout = QHBoxLayout(group)
 
         self._preview_label = QLabel("—")
-        self._preview_label.setFixedSize(220, 220)
+        # Minimum rather than fixed: a fixed 220px square is 220px of height the
+        # layout can never give back, which is most of a short screen's budget.
+        self._preview_label.setMinimumSize(140, 140)
+        self._preview_label.setMaximumSize(220, 220)
+        self._preview_label.setScaledContents(False)
         self._preview_label.setAlignment(Qt.AlignCenter)
         self._preview_label.setStyleSheet(
             "border: 1px solid palette(mid); background: palette(base);"
