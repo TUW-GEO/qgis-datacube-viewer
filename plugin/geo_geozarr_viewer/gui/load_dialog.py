@@ -55,7 +55,7 @@ from ..core import (
     open_store,
 )
 from ..core.reader import RESAMPLING_METHODS, DatasetReader
-from ..layeruri import LEVEL_STRATEGIES, LayerUri
+from ..layeruri import LEVEL_STRATEGIES, LayerUri, per_variable
 from ..selection import can_load, summarise, validate
 from .preview import PreviewResult, render_thumbnail
 from .worker import StoreWorker
@@ -117,7 +117,9 @@ class GeoZarrLoadDialog(QDialog):
 
     #: Emitted with a fully-resolved URI when the user clicks Add. The dialog stays
     #: open so several layers can be added from one store in a row.
-    layerRequested = pyqtSignal(object)
+    #: Emits a tuple of LayerUri — one per layer to create. Loading a
+    #: multi-variable store normally yields one URI per variable.
+    layersRequested = pyqtSignal(tuple)
 
     def __init__(self, parent: QWidget | None = None, initial: LayerUri | None = None):
         super().__init__(parent)
@@ -260,10 +262,41 @@ class GeoZarrLoadDialog(QDialog):
         self._band_list.itemChanged.connect(lambda _: self._refresh())
         self._band_list.model().rowsMoved.connect(lambda *_: self._refresh())
         layout.addWidget(self._band_list)
-        hint = QLabel("Drag to reorder — the order sets the R/G/B channels.")
-        hint.setStyleSheet("color: palette(mid);")
-        layout.addWidget(hint)
+
+        self._split_check = QCheckBox("One layer per variable")
+        self._split_check.setChecked(True)
+        self._split_check.setToolTip(
+            "\n".join(
+                (
+                    "On: each ticked variable becomes its own single-band layer, with",
+                    "its own stretch and colour ramp, grouped under the dataset name.",
+                    "",
+                    "Off: the ticked variables become the R/G/B channels of one layer.",
+                    "Only meaningful when they really are colour bands of one image.",
+                )
+            )
+        )
+        self._split_check.toggled.connect(self._on_split_toggled)
+        layout.addWidget(self._split_check)
+
+        self._band_hint = QLabel()
+        self._band_hint.setWordWrap(True)
+        self._band_hint.setStyleSheet("color: palette(mid);")
+        layout.addWidget(self._band_hint)
+        self._update_band_hint()
         return group
+
+    def _on_split_toggled(self, _checked: bool) -> None:
+        self._update_band_hint()
+        self._refresh()
+
+    def _update_band_hint(self) -> None:
+        """The drag-to-reorder hint only means something for a composite."""
+        self._band_hint.setText(
+            "Tick the variables to load. Each becomes a separate layer."
+            if self._split_check.isChecked()
+            else "Drag to reorder — the order sets the R/G/B channels."
+        )
 
     def _build_render_group(self) -> QGroupBox:
         group = QGroupBox("Slice and rendering")
@@ -616,7 +649,7 @@ class GeoZarrLoadDialog(QDialog):
             return
 
         uri = self.build_uri()
-        issues = validate(self._store, uri)
+        issues = validate(self._store, uri, combine=not self._split_check.isChecked())
         ok = can_load(issues)
         self._add_button.setEnabled(ok)
         self._show_messages(summarise(issues), error=not ok)
@@ -649,6 +682,10 @@ class GeoZarrLoadDialog(QDialog):
         if not bands:
             self._set_preview(None)
             return
+        if self._split_check.isChecked():
+            # Previewing a composite of variables that are each about to become
+            # their own layer would advertise a picture the load never produces.
+            bands = bands[:1]
         uri = self.build_uri()
         indices = dict(uri.indices)
         if self._handle is None:
@@ -708,6 +745,7 @@ class GeoZarrLoadDialog(QDialog):
         if self._store is None:
             return
         uri = self.build_uri()
-        if not can_load(validate(self._store, uri)):
+        combine = not self._split_check.isChecked()
+        if not can_load(validate(self._store, uri, combine=combine)):
             return
-        self.layerRequested.emit(uri)
+        self.layersRequested.emit((uri,) if combine else per_variable(uri))

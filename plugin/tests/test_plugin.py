@@ -15,12 +15,12 @@ import pytest
 
 pytest.importorskip("qgis.core")
 
-from qgis.core import QgsProject, QgsRasterLayer
+from qgis.core import QgsLayerTreeGroup, QgsProject, QgsRasterLayer
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 from qgis.PyQt.QtWidgets import QToolBar, QWidget
 
 from geo_geozarr_viewer import PLUGIN_NAME, classFactory
-from geo_geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri
+from geo_geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri, per_variable
 from geo_geozarr_viewer.plugin import (
     TOOLBAR_OBJECT_NAME,
     GeoZarrViewerPlugin,
@@ -261,6 +261,94 @@ def test_add_layer_puts_a_valid_layer_on_the_map(plugin, iface, store_uri) -> No
     assert layers[0].isValid()
     assert layers[0].providerType() == PROVIDER_KEY
     project.removeAllMapLayers()
+
+
+def test_add_layers_makes_one_layer_per_variable(plugin, iface, store_uri) -> None:
+    """The point of the change: four variables are four layers, not four channels."""
+    plugin.initGui()
+    project = QgsProject.instance()
+    project.removeAllMapLayers()
+    project.layerTreeRoot().removeAllChildren()
+
+    bands = ("blue", "green", "nir", "red")
+    uri = LayerUri(store_uri=store_uri, dataset="conv", bands=bands, indices={"time": 1})
+    plugin.add_layers(per_variable(uri))
+
+    layers = list(project.mapLayers().values())
+    assert len(layers) == 4
+    assert all(lyr.isValid() and lyr.bandCount() == 1 for lyr in layers)
+    assert sorted(lyr.name() for lyr in layers) == sorted(bands)
+    project.removeAllMapLayers()
+    project.layerTreeRoot().removeAllChildren()
+
+
+def test_several_layers_are_grouped_under_the_dataset(plugin, iface, store_uri) -> None:
+    """Twenty variables at the project root would bury everything else."""
+    plugin.initGui()
+    project = QgsProject.instance()
+    project.removeAllMapLayers()
+    root = project.layerTreeRoot()
+    root.removeAllChildren()
+
+    uri = LayerUri(store_uri=store_uri, dataset="conv", bands=("red", "green"))
+    plugin.add_layers(per_variable(uri))
+
+    groups = [child for child in root.children() if isinstance(child, QgsLayerTreeGroup)]
+    assert len(groups) == 1
+    assert groups[0].name().endswith("/conv")
+    # Added with addMapLayer(layer, False), so each layer is in the group and not
+    # also at the root. Without the False they would appear twice.
+    assert len(groups[0].findLayers()) == 2
+    assert [c for c in root.children() if not isinstance(c, QgsLayerTreeGroup)] == []
+    project.removeAllMapLayers()
+    root.removeAllChildren()
+
+
+def test_a_single_variable_is_not_grouped(plugin, iface, store_uri) -> None:
+    """One layer in a group of one is a click to open for no reason."""
+    plugin.initGui()
+    project = QgsProject.instance()
+    project.removeAllMapLayers()
+    root = project.layerTreeRoot()
+    root.removeAllChildren()
+
+    plugin.add_layers(per_variable(LayerUri(store_uri=store_uri, dataset="conv", bands=("red",))))
+    assert [c for c in root.children() if isinstance(c, QgsLayerTreeGroup)] == []
+    layers = list(project.mapLayers().values())
+    assert len(layers) == 1
+    # Ungrouped, the name has to carry the context the group would have given.
+    assert layers[0].name().endswith("conv · red")
+    project.removeAllMapLayers()
+    root.removeAllChildren()
+
+
+def test_one_bad_variable_does_not_sink_the_others(plugin, iface, store_uri) -> None:
+    """Partial success beats loading nothing, but it must be reported."""
+    plugin.initGui()
+    project = QgsProject.instance()
+    project.removeAllMapLayers()
+    project.layerTreeRoot().removeAllChildren()
+
+    uri = LayerUri(store_uri=store_uri, dataset="conv", bands=("red", "nonesuch"))
+    plugin.add_layers(per_variable(uri))
+
+    layers = list(project.mapLayers().values())
+    assert len(layers) == 1
+    assert layers[0].name() == "red"
+    assert any(
+        "nonesuch" in message and "failed" in message for _, message, _ in iface._bar.messages
+    )
+    project.removeAllMapLayers()
+    project.layerTreeRoot().removeAllChildren()
+
+
+def test_add_layers_with_nothing_to_do_is_a_no_op(plugin, iface) -> None:
+    plugin.initGui()
+    project = QgsProject.instance()
+    project.removeAllMapLayers()
+    plugin.add_layers(())
+    assert project.mapLayers() == {}
+    assert iface._bar.messages == []
 
 
 def test_add_layer_reports_a_bad_store_instead_of_adding_it(plugin, iface, tmp_path) -> None:

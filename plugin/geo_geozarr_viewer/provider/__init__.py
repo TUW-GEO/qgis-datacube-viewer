@@ -26,6 +26,7 @@ from ..layeruri import (
     LayerUri,
     UriError,
     decode_uri,
+    per_variable,
 )
 from .context import LayerContext, LayerView, choose_bands, default_indices, pick_dataset
 from .raster_provider import GeoZarrRasterProvider, clone_count, qgis_data_type
@@ -45,6 +46,7 @@ __all__ = [
     "decode_uri",
     "default_indices",
     "is_registered",
+    "per_variable",
     "pick_dataset",
     "qgis_data_type",
     "register_provider",
@@ -133,6 +135,11 @@ def create_layer(uri: str | LayerUri, name: str | None = None) -> QgsRasterLayer
         parsed = uri if isinstance(uri, LayerUri) else decode_uri(source)
         stem = parsed.store_uri.rstrip("/").rsplit("/", 1)[-1]
         name = f"{stem}/{parsed.dataset}" if parsed.dataset else stem
+        # A single-variable layer says which variable. Most layers are single
+        # variable now that a multi-variable selection becomes one layer each, and
+        # four layers all called "store/conv" would be unusable.
+        if len(parsed.bands) == 1:
+            name = f"{name} · {parsed.bands[0]}"
 
     options = QgsRasterLayer.LayerOptions()
     with contextlib.suppress(AttributeError):  # option name varies by QGIS version

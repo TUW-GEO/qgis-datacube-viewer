@@ -54,6 +54,16 @@ class NoDatasetsError(MetadataError):
     """No group in the store looked like a georeferenced raster dataset."""
 
 
+class NoSuchVariableError(MetadataError):
+    """Every variable the layer asked for is missing from the dataset.
+
+    Its own class because the remedy is specific and nothing else implies it: the
+    store opened and has datasets, the request just names variables that are not in
+    this one — typically a project saved against a store whose variables have since
+    been renamed, or a hand-edited layer URI.
+    """
+
+
 class CrsResolutionError(MetadataError):
     """No CRS could be determined and no override was supplied."""
 

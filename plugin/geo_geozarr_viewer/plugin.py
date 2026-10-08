@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import os
+from collections.abc import Sequence
 
 from qgis.core import Qgis, QgsMessageLog, QgsProject, QgsRasterLayer, QgsSettings
 from qgis.PyQt.QtCore import Qt
@@ -313,7 +314,7 @@ class GeoZarrViewerPlugin:
 
         if self._load_dialog is None:
             self._load_dialog = GeoZarrLoadDialog(self.iface.mainWindow())
-            self._load_dialog.layerRequested.connect(self.add_layer)
+            self._load_dialog.layersRequested.connect(self.add_layers)
             self._load_dialog.finished.connect(self._on_dialog_closed)
         self._load_dialog.show()
         self._load_dialog.raise_()
@@ -323,25 +324,95 @@ class GeoZarrViewerPlugin:
         self._load_dialog = None
 
     def add_layer(self, uri: LayerUri) -> None:
-        """Build a layer from a resolved URI and put it on the map."""
+        """Put one layer on the map. Kept for callers that have a single URI."""
+        self.add_layers((uri,))
+
+    def add_layers(self, uris: Sequence[LayerUri]) -> None:
+        """Put one layer on the map per URI, grouped when there is more than one.
+
+        The dialog hands over one URI per variable (see ``layeruri.per_variable``),
+        so loading a four-variable store lands four single-band layers rather than
+        one four-channel composite. They go into a layer tree group named after the
+        dataset, because a store with twenty variables would otherwise bury whatever
+        else is in the project.
+
+        A URI that fails to open does not stop the others: on a store where one
+        variable is broken, loading the rest and saying which one failed is more
+        useful than loading nothing.
+        """
         from .provider import create_layer
 
-        layer = create_layer(uri)
-        if not layer.isValid():
-            detail = layer.customProperty(ERROR_PROPERTY, "") or "unknown error"
-            self.iface.messageBar().pushMessage(
-                PLUGIN_NAME, f"Could not load layer: {detail}", level=Qgis.Critical, duration=0
-            )
-            self._log(f"Layer creation failed for {uri.summary}: {detail}", Qgis.Critical)
+        requests = tuple(uris)
+        if not requests:
             return
 
-        QgsProject.instance().addMapLayer(layer)
-        self._log(f"Loaded {uri.summary}", Qgis.Info)
+        grouped = len(requests) > 1
+        made: list[QgsRasterLayer] = []
+        failures: list[str] = []
+        for uri in requests:
+            # Inside a group the dataset is already in the group's name, so the
+            # layer is just the variable. Ungrouped it needs the full context, which
+            # is what create_layer's own default gives.
+            name = uri.bands[0] if (grouped and uri.bands) else None
+            layer = create_layer(uri, name)
+            if not layer.isValid():
+                detail = layer.customProperty(ERROR_PROPERTY, "") or "unknown error"
+                failures.append(f"{uri.bands[0] if uri.bands else uri.summary}: {detail}")
+                self._log(f"Layer creation failed for {uri.summary}: {detail}", Qgis.Critical)
+                continue
+            made.append(layer)
+
+        if made:
+            self._place(made, requests[0], grouped=grouped and len(made) > 1)
+        self._report(made, failures, requests[0])
+
+    def _place(self, layers: list[QgsRasterLayer], uri: LayerUri, grouped: bool) -> None:
+        """Add the layers to the project, in a group if there is more than one."""
+        project = QgsProject.instance()
+        if not grouped:
+            for layer in layers:
+                project.addMapLayer(layer)
+            return
+
+        # addMapLayer(layer, False) keeps QGIS from putting the layer at the tree
+        # root as well; the group takes it from there. Without the False each layer
+        # would appear twice.
+        root = project.layerTreeRoot()
+        group = root.insertGroup(0, self._group_name(uri))
+        for layer in layers:
+            project.addMapLayer(layer, False)
+            group.addLayer(layer)
+
+    @staticmethod
+    def _group_name(uri: LayerUri) -> str:
+        stem = uri.store_uri.rstrip("/").rsplit("/", 1)[-1]
+        return f"{stem}/{uri.dataset}" if uri.dataset else stem
+
+    def _report(self, made: list[QgsRasterLayer], failures: list[str], uri: LayerUri) -> None:
+        if not made:
+            self.iface.messageBar().pushMessage(
+                PLUGIN_NAME,
+                "Could not load layer: " + ("; ".join(failures) or "unknown error"),
+                level=Qgis.Critical,
+                duration=0,
+            )
+            return
+
+        what = made[0].name() if len(made) == 1 else f"{len(made)} layers"
+        at = f" at snapshot {uri.snapshot_id or '?'}"
+        self._log(f"Loaded {what} from {uri.summary}", Qgis.Info)
+        if failures:
+            # Partial success is a warning that stays up: the user has layers on the
+            # map and also needs to know something is missing from them.
+            self.iface.messageBar().pushMessage(
+                PLUGIN_NAME,
+                f"Loaded {what}{at}, but {len(failures)} failed: " + "; ".join(failures),
+                level=Qgis.Warning,
+                duration=0,
+            )
+            return
         self.iface.messageBar().pushMessage(
-            PLUGIN_NAME,
-            f"Loaded {layer.name()} at snapshot {uri.snapshot_id or '?'}",
-            level=Qgis.Success,
-            duration=6,
+            PLUGIN_NAME, f"Loaded {what}{at}", level=Qgis.Success, duration=6
         )
 
     def show_snapshot_dialog(self) -> None:

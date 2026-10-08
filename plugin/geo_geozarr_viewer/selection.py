@@ -109,7 +109,9 @@ def _validate_crs(dataset: DatasetInfo, uri: LayerUri) -> list[Issue]:
     return out
 
 
-def _validate_bands(dataset: DatasetInfo, bands: Sequence[str]) -> list[Issue]:
+def _validate_bands(
+    dataset: DatasetInfo, bands: Sequence[str], combine: bool = True
+) -> list[Issue]:
     out: list[Issue] = []
     if not bands:
         out.append(Issue("error", "bands", "Select at least one band."))
@@ -140,16 +142,29 @@ def _validate_bands(dataset: DatasetInfo, bands: Sequence[str]) -> list[Issue]:
             )
         )
 
-    dtypes = {dataset.base.variables[b].dtype for b in bands if b in dataset.base.variables}
-    if len(dtypes) > 1:
-        out.append(
-            Issue(
-                "warning",
-                "bands",
-                f"Bands have mixed data types ({', '.join(sorted(dtypes))}); "
-                "QGIS will stretch each one independently.",
+    # Only a composite can have a dtype problem. Once each variable is its own
+    # layer they are stretched separately by definition, and warning about it would
+    # be noise on the common load.
+    if combine:
+        dtypes = {dataset.base.variables[b].dtype for b in bands if b in dataset.base.variables}
+        if len(dtypes) > 1:
+            out.append(
+                Issue(
+                    "warning",
+                    "bands",
+                    f"Bands have mixed data types ({', '.join(sorted(dtypes))}); "
+                    "QGIS will stretch each one independently.",
+                )
             )
-        )
+        if len(bands) > 3:
+            out.append(
+                Issue(
+                    "warning",
+                    "bands",
+                    f"{len(bands)} bands in one layer; QGIS paints only the first three as R/G/B.",
+                    hint="Untick 'One layer per variable' only for a true colour composite.",
+                )
+            )
     return out
 
 
@@ -248,8 +263,13 @@ def _validate_levels(dataset: DatasetInfo, uri: LayerUri) -> list[Issue]:
     return out
 
 
-def validate(store: StoreInfo, uri: LayerUri) -> list[Issue]:
-    """Check a load request. An empty list means "safe to load with no caveats"."""
+def validate(store: StoreInfo, uri: LayerUri, combine: bool = True) -> list[Issue]:
+    """Check a load request. An empty list means "safe to load with no caveats".
+
+    ``combine`` says whether the selected variables are destined for one multi-band
+    layer or for one layer each (see :func:`geo_geozarr_viewer.layeruri.per_variable`).
+    It only affects warnings that are specific to compositing.
+    """
     issues: list[Issue] = []
 
     if not uri.store_uri.strip():
@@ -289,7 +309,7 @@ def validate(store: StoreInfo, uri: LayerUri) -> list[Issue]:
         )
 
     issues += _validate_crs(dataset, uri)
-    issues += _validate_bands(dataset, uri.bands)
+    issues += _validate_bands(dataset, uri.bands, combine)
     issues += _validate_indices(dataset, uri)
     issues += _validate_levels(dataset, uri)
 

@@ -133,6 +133,27 @@ def test_default_band_choice_is_rgb_in_channel_order(store_uri: str) -> None:
     assert [auto.bandName(i + 1) for i in range(auto.bandCount())] == ["red", "green", "blue"]
 
 
+def test_a_known_band_survives_an_unknown_one(store_uri: str) -> None:
+    """A partly-stale request keeps what still exists rather than failing outright."""
+    layer = create_layer(LayerUri(store_uri=store_uri, dataset="conv", bands=("red", "gone")))
+    assert layer.isValid()
+    assert [layer.bandName(i + 1) for i in range(layer.bandCount())] == ["red"]
+
+
+def test_an_entirely_unknown_band_request_fails_loudly(store_uri: str) -> None:
+    """It used to hand back every variable under the missing variable's name.
+
+    A project saved against a store whose variables were later renamed would open
+    as a silent multi-band composite of everything, which looks like data. An
+    invalid layer carrying the reason is the only honest answer.
+    """
+    layer = create_layer(LayerUri(store_uri=store_uri, dataset="conv", bands=("gone", "also")))
+    assert not layer.isValid()
+    detail = layer.customProperty(ERROR_PROPERTY, "")
+    assert "gone" in detail and "also" in detail
+    assert "red" in detail, "the error should list what is actually available"
+
+
 def test_datatype_mapping() -> None:
     assert qgis_data_type("uint8")[0] == Qgis.DataType.Byte
     assert qgis_data_type("int16")[0] == Qgis.DataType.Int16

@@ -25,6 +25,7 @@ from ..core import (
     DatasetReader,
     GeoZarrError,
     NoDatasetsError,
+    NoSuchVariableError,
     RefSpec,
     StoreHandle,
     StoreInfo,
@@ -86,6 +87,15 @@ def choose_bands(dataset: DatasetInfo, requested: tuple[str, ...] = ()) -> tuple
         kept = tuple(name for name in requested if name in available)
         if kept:
             return kept
+        # Asking for specific variables and getting none of them is an error, not a
+        # cue to fall through to the defaults below. Falling through would hand back
+        # a layer built from every variable in the store under the name of the one
+        # that is missing -- which is how a renamed variable used to turn a saved
+        # project into a silent multi-band composite instead of a clear complaint.
+        raise NoSuchVariableError(
+            f"None of the requested variables exist in {dataset.path!r}: {', '.join(requested)}.",
+            hint=f"Available: {', '.join(available) or '(none)'}",
+        )
     lowered = {name.lower(): name for name in available}
     rgb = []
     for role in ("red", "green", "blue"):

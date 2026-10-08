@@ -23,7 +23,6 @@ from geo_geozarr_viewer.core import RefSpec, describe_store, open_store
 from geo_geozarr_viewer.core.reader import DatasetReader
 from geo_geozarr_viewer.gui import GeoZarrLoadDialog, render_thumbnail, to_image
 from geo_geozarr_viewer.gui.worker import StoreWorker
-from geo_geozarr_viewer.layeruri import LayerUri
 from tests.fixture_store import FixtureInfo
 
 pytestmark = pytest.mark.gui
@@ -293,17 +292,71 @@ def test_build_uri_reflects_the_widgets(connected, store_uri, fixture_info) -> N
     assert uri.snapshot_id == fixture_info.latest_snapshot
 
 
-def test_add_emits_a_loadable_uri(connected) -> None:
-    emitted: list[LayerUri] = []
-    connected.layerRequested.connect(emitted.append)
+def test_add_emits_one_uri_per_variable(connected) -> None:
+    """The default: three ticked variables become three single-band layers."""
+    emitted: list[tuple] = []
+    connected.layersRequested.connect(emitted.append)
+    assert connected._split_check.isChecked(), "splitting is the default"
     connected._on_add()
     assert len(emitted) == 1
-    assert emitted[0].dataset == "conv"
+    uris = emitted[0]
+    # The conv fixture defaults to the red/green/blue trio.
+    assert [u.bands for u in uris] == [("red",), ("green",), ("blue",)]
+    assert {u.dataset for u in uris} == {"conv"}
+
+
+def test_add_emits_one_composite_when_splitting_is_off(connected) -> None:
+    emitted: list[tuple] = []
+    connected.layersRequested.connect(emitted.append)
+    connected._split_check.setChecked(False)
+    QgsApplication.processEvents()
+    connected._on_add()
+    assert len(emitted) == 1
+    assert emitted[0] == (connected.build_uri(),)
+    assert emitted[0][0].bands == ("red", "green", "blue")
+
+
+def test_ticking_one_variable_emits_one_uri_either_way(connected) -> None:
+    """A single-variable load must not depend on the checkbox."""
+    for row in range(connected._band_list.count()):
+        item = connected._band_list.item(row)
+        item.setCheckState(Qt.Checked if item.data(Qt.UserRole) == "red" else Qt.Unchecked)
+    QgsApplication.processEvents()
+    for split in (True, False):
+        emitted: list[tuple] = []
+        connected.layersRequested.connect(emitted.append)
+        connected._split_check.setChecked(split)
+        QgsApplication.processEvents()
+        connected._on_add()
+        connected.layersRequested.disconnect(emitted.append)
+        assert [u.bands for u in emitted[0]] == [("red",)], f"split={split}"
+
+
+def test_the_band_hint_follows_the_checkbox(connected) -> None:
+    """The drag-to-reorder advice is a lie unless the bands become one layer."""
+    connected._split_check.setChecked(True)
+    assert "separate layer" in connected._band_hint.text()
+    connected._split_check.setChecked(False)
+    assert "R/G/B" in connected._band_hint.text()
+
+
+def test_mixed_dtypes_only_warn_for_a_composite(connected) -> None:
+    """Splitting makes the mixed-dtype warning meaningless, so it must not show."""
+    for row in range(connected._band_list.count()):
+        connected._band_list.item(row).setCheckState(Qt.Checked)
+    connected._split_check.setChecked(False)
+    QgsApplication.processEvents()
+    composite_text = connected._messages.toPlainText()
+    connected._split_check.setChecked(True)
+    QgsApplication.processEvents()
+    split_text = connected._messages.toPlainText()
+    assert "only the first three" in composite_text
+    assert "only the first three" not in split_text
 
 
 def test_add_does_nothing_while_invalid(connected) -> None:
-    emitted: list[LayerUri] = []
-    connected.layerRequested.connect(emitted.append)
+    emitted: list[tuple] = []
+    connected.layersRequested.connect(emitted.append)
     for row in range(connected._band_list.count()):
         connected._band_list.item(row).setCheckState(Qt.Unchecked)
     QgsApplication.processEvents()

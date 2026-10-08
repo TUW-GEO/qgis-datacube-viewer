@@ -135,6 +135,25 @@ class LayerUri:
         return f"{where} [{bands}] @ {self.effective_ref.label}"
 
 
+def per_variable(uri: LayerUri) -> tuple[LayerUri, ...]:
+    """Split a multi-variable selection into one single-band URI per variable.
+
+    A multi-band ``geo_geozarr`` layer is an R/G/B composite: QGIS stretches each
+    band independently and paints them as colour channels. That is right for
+    red/green/blue reflectance and wrong for everything else — a store holding
+    temperature, precipitation and humidity drawn as a composite is a colourful lie,
+    and there is no stretch, no colour ramp and no legend that can rescue it. One
+    single-band layer per variable gives each its own stretch, ramp and visibility.
+
+    Band order is preserved, so layers come out in the order the user arranged them.
+    A URI naming one variable or none comes back unchanged, so callers do not have to
+    special-case the common load.
+    """
+    if len(uri.bands) <= 1:
+        return (uri,)
+    return tuple(replace(uri, bands=(name,)) for name in uri.bands)
+
+
 def _parse_ref(text: str) -> RefSpec:
     kind, sep, value = text.partition(":")
     if sep and kind in ("branch", "tag", "snapshot"):
