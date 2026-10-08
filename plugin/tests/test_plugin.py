@@ -119,9 +119,9 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
     assert is_registered()
     assert len(iface.raster_menu) == 3
     assert [action.text() for _, action in iface.raster_menu] == [
-        "Add GeoZarr Layer…",
-        "Time Travel…",
-        "Install Python Dependencies…",
+        "GEO-Add GeoZarr Layer…",
+        "GEO-Time Travel…",
+        "GEO-Install Python Dependencies…",
     ]
     # The plugin owns a named toolbar rather than borrowing the shared Raster one,
     # so it stays distinguishable from the other GeoZarr plugins. Installing
@@ -130,8 +130,8 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
     assert iface.toolbars[0].windowTitle() == PLUGIN_NAME
     assert iface.toolbars[0].objectName() == TOOLBAR_OBJECT_NAME
     assert [a.text() for a in iface.toolbars[0].actions()] == [
-        "Add GeoZarr Layer…",
-        "Time Travel…",
+        "GEO-Add GeoZarr Layer…",
+        "GEO-Time Travel…",
     ]
 
 

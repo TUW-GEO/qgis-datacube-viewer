@@ -60,7 +60,7 @@ from ..selection import can_load, summarise, validate
 from .preview import PreviewResult, render_thumbnail
 from .worker import StoreWorker
 
-_SETTINGS_RECENT = "plugins/geozarr/recent_stores"
+_SETTINGS_RECENT = "plugins/geo_geozarr_viewer/recent_stores"
 _MAX_RECENT = 12
 #: Above this many elements a combo box of labels is unusable, so fall back to a
 #: spin box. 366 covers a daily time axis for one year, which is the common case.
@@ -121,7 +121,7 @@ class GeoZarrLoadDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None, initial: LayerUri | None = None):
         super().__init__(parent)
-        self.setWindowTitle("Add GeoZarr layer")
+        self.setWindowTitle("GEO-Add GeoZarr layer")
         self.setMinimumWidth(760)
 
         self._refs: RepositoryRefs | None = None

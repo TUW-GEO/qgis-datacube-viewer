@@ -35,7 +35,7 @@ The Plugin Manager unzips plugins; it never runs pip. So this step is manual, an
 | `fsspec` + `s3fs` | Plain Zarr on `s3://`, `gs://` and `az://`. `http(s)://` needs neither — the plugin reads it directly. For `gs://` use `gcsfs` and for `az://` use `adlfs` in place of `s3fs`. |
 
 The plugin detects your environment and shows the command with your packages already
-filled in: **Raster → GEO-geo-zarr → Install Python Dependencies…**. For reference:
+filled in: **Raster → GEO-geo-zarr → GEO-Install Python Dependencies…**. For reference:
 
 | | Where to run it | Command |
 | --- | --- | --- |
@@ -62,9 +62,9 @@ Notes that catch people out:
 
 ## Using it
 
-**Raster → GEO-geo-zarr → Add GeoZarr Layer…**
+**Raster → GEO-geo-zarr → GEO-Add GeoZarr Layer…**
 
-**Raster → GEO-geo-zarr → Time Travel…** 
+**Raster → GEO-geo-zarr → GEO-Time Travel…** 
 
 ## Developing
 

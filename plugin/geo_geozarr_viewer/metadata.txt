@@ -31,7 +31,7 @@ about=Adds a raster data provider for GeoZarr datacubes. Reads directly from Ice
     .
     ONE MANUAL STEP AFTER INSTALL: this plugin needs the "zarr" (>=3) Python package,
     and QGIS's Plugin Manager does not install Python packages. After installing,
-    open Raster > GEO-geo-zarr > Install Python Dependencies... - it detects your
+    open Raster > GEO-geo-zarr > GEO-Install Python Dependencies... - it detects your
     operating system and QGIS build and shows the exact command to run, where to run
     it, and the interpreter it targets. "icechunk" is optional and only needed for
     Icechunk repositories; plain Zarr v3 stores work without it. Both require Python

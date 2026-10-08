@@ -25,7 +25,7 @@ from qgis.PyQt.QtWidgets import QAction, QPushButton
 
 from . import PLUGIN_NAME
 from .core import REMOTE_PACKAGES, SUPPRESS_KEY
-from .layeruri import PROVIDER_KEY, LayerUri
+from .layeruri import ERROR_PROPERTY, PROVIDER_KEY, LayerUri
 
 #: Tab name in the QGIS log panel. Same as the display name so that a message is
 #: traceable to this plugin rather than to one of the similarly named others.
@@ -111,17 +111,17 @@ class GeoZarrViewerPlugin:
 
         self._registered = register_provider()
         if not self._registered:
-            self._log("Failed to register the 'geozarr' data provider.", Qgis.Critical)
+            self._log(f"Failed to register the '{PROVIDER_KEY}' data provider.", Qgis.Critical)
 
-        add = QAction(_icon("geozarr.svg"), "Add GeoZarr Layer…", self.iface.mainWindow())
+        add = QAction(_icon("geozarr.svg"), "GEO-Add GeoZarr Layer…", self.iface.mainWindow())
         add.setToolTip("Load a GeoZarr datacube from an Icechunk repository or Zarr store")
         add.triggered.connect(self.show_load_dialog)
 
-        travel = QAction(_icon("history.svg"), "Time Travel…", self.iface.mainWindow())
+        travel = QAction(_icon("history.svg"), "GEO-Time Travel…", self.iface.mainWindow())
         travel.setToolTip("Switch the selected GeoZarr layer to a different Icechunk snapshot")
         travel.triggered.connect(self.show_snapshot_dialog)
 
-        setup = QAction("Install Python Dependencies…", self.iface.mainWindow())
+        setup = QAction("GEO-Install Python Dependencies…", self.iface.mainWindow())
         setup.setToolTip(
             "Show the command that installs zarr, icechunk, fsspec and s3fs for this platform"
         )
@@ -178,7 +178,7 @@ class GeoZarrViewerPlugin:
         self.iface.messageBar().pushWidget(widget, Qgis.Critical if missing else Qgis.Warning)
         self._log(
             f"Missing packages: {summary}. Raster → {PLUGIN_NAME} → "
-            "Install Python Dependencies… has the commands.",
+            "GEO-Install Python Dependencies… has the commands.",
             Qgis.Warning,
         )
 
@@ -221,7 +221,7 @@ class GeoZarrViewerPlugin:
             from .provider import unregister_provider
 
             # QGIS 3.x has no way to unregister a data provider, so this usually
-            # returns False and the 'geozarr' key stays in the registry for the rest
+            # returns False and the 'geo_geozarr' key stays in the registry for the rest
             # of the session. Existing layers therefore keep working after the plugin
             # is disabled, and re-enabling it is a no-op. Reloading still picks up
             # code changes because the registered factory resolves the provider class
@@ -256,7 +256,7 @@ class GeoZarrViewerPlugin:
 
         layer = create_layer(uri)
         if not layer.isValid():
-            detail = layer.customProperty("geozarr/error", "") or "unknown error"
+            detail = layer.customProperty(ERROR_PROPERTY, "") or "unknown error"
             self.iface.messageBar().pushMessage(
                 PLUGIN_NAME, f"Could not load layer: {detail}", level=Qgis.Critical, duration=0
             )

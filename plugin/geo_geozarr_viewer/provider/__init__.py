@@ -19,6 +19,7 @@ from qgis.core import (
 )
 
 from ..layeruri import (
+    ERROR_PROPERTY,
     LEVEL_STRATEGIES,
     PROVIDER_DESCRIPTION,
     PROVIDER_KEY,
@@ -85,7 +86,7 @@ def registry_supports_unregister() -> bool:
 
 
 def register_provider() -> bool:
-    """Register the ``geozarr`` provider. Idempotent.
+    """Register the ``geo_geozarr`` provider. Idempotent.
 
     Uses the function-pointer form of ``QgsProviderMetadata`` rather than
     subclassing: that is the form the Phase 0 spike verified end-to-end, and
@@ -144,7 +145,7 @@ def create_layer(uri: str | LayerUri, name: str | None = None) -> QgsRasterLayer
         provider = layer.dataProvider()
         detail = provider.lastError() if provider is not None else ""
         if detail:
-            layer.setCustomProperty("geozarr/error", detail)
+            layer.setCustomProperty(ERROR_PROPERTY, detail)
     return layer
 
 

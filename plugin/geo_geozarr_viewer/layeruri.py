@@ -26,9 +26,15 @@ from .core import RefSpec
 from .core.reader import RESAMPLING_METHODS, LevelStrategy, Resampling
 
 #: Provider key. Must match the string given to ``QgsProviderMetadata`` and the
-#: third argument of ``QgsRasterLayer(uri, name, key)``.
-PROVIDER_KEY = "geozarr"
-PROVIDER_DESCRIPTION = "GeoZarr / Icechunk raster"
+#: third argument of ``QgsRasterLayer(uri, name, key)``. Upstream registers
+#: "geozarr", and the registry holds one provider per key for the whole session, so
+#: sharing it would hand every layer of both plugins to whichever loaded first.
+PROVIDER_KEY = "geo_geozarr"
+PROVIDER_DESCRIPTION = "GEO-geo-zarr: GeoZarr / Icechunk raster"
+
+#: Layer custom property holding the reason a layer failed to load. Namespaced by
+#: the provider key for the same reason.
+ERROR_PROPERTY = f"{PROVIDER_KEY}/error"
 
 LEVEL_STRATEGIES: tuple[LevelStrategy, ...] = ("auto", "manual", "base", "coarsest")
 
@@ -45,7 +51,7 @@ def _encode(value: str) -> str:
 
 @dataclass(frozen=True)
 class LayerUri:
-    """Parsed form of a ``geozarr`` layer source."""
+    """Parsed form of a ``geo_geozarr`` layer source."""
 
     store_uri: str
     dataset: str = ""
@@ -148,10 +154,10 @@ def _parse_bool(text: str) -> bool:
 
 
 def decode_uri(uri: str) -> LayerUri:
-    """Parse a ``geozarr`` layer source.
+    """Parse a ``geo_geozarr`` layer source.
 
     A bare path with no ``=`` is accepted as shorthand for ``url=<path>``, which
-    makes ``QgsRasterLayer("/data/store", "x", "geozarr")`` work from the console.
+    makes ``QgsRasterLayer("/data/store", "x", "geo_geozarr")`` work from the console.
     """
     text = (uri or "").strip()
     if not text:

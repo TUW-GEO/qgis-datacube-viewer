@@ -33,7 +33,7 @@ from geo_geozarr_viewer.core import (
     describe_store,
     open_store,
 )
-from geo_geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri
+from geo_geozarr_viewer.layeruri import ERROR_PROPERTY, PROVIDER_KEY, LayerUri
 from geo_geozarr_viewer.provider import (
     GeoZarrRasterProvider,
     clone_count,
@@ -416,7 +416,7 @@ def test_data_source_uri_records_what_was_resolved(store_uri) -> None:
 def test_missing_store_yields_an_invalid_layer_not_an_exception(tmp_path) -> None:
     bad = create_layer(LayerUri(store_uri=str(tmp_path / "nowhere")))
     assert not bad.isValid()
-    assert "No such directory" in bad.customProperty("geozarr/error", "")
+    assert "No such directory" in bad.customProperty(ERROR_PROPERTY, "")
 
 
 def test_provider_constructed_with_junk_is_invalid_but_alive() -> None:
@@ -432,7 +432,7 @@ def test_provider_constructed_with_junk_is_invalid_but_alive() -> None:
 def test_dataset_that_cannot_be_georeferenced_is_reported(store_uri) -> None:
     bad = create_layer(LayerUri(store_uri=store_uri, dataset="does-not-exist"))
     assert not bad.isValid()
-    assert "does-not-exist" in bad.customProperty("geozarr/error", "")
+    assert "does-not-exist" in bad.customProperty(ERROR_PROPERTY, "")
 
 
 # -------------------------------------------------------------------- identify
