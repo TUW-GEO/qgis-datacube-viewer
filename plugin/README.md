@@ -1,4 +1,8 @@
-# GeoZarr Viewer — a QGIS plugin for GeoZarr datacubes
+# GEO-geo-zarr — a QGIS plugin for GeoZarr datacubes
+
+> A renamed fork of [EODC's GeoZarr Viewer](https://github.com/eodcgmbh/qgis-geozarr)
+> (MIT). Renamed so it stays distinguishable from upstream and from Wietze
+> Suijker's similarly named plugin when several are installed at once.
 
 Loads GeoZarr-compliant Zarr stores into QGIS as raster layers with multiscale
 pyramids. It works with either [Icechunk](https://icechunk.io) repositories or
@@ -31,7 +35,7 @@ The Plugin Manager unzips plugins; it never runs pip. So this step is manual, an
 | `fsspec` + `s3fs` | Plain Zarr on `s3://`, `gs://` and `az://`. `http(s)://` needs neither — the plugin reads it directly. For `gs://` use `gcsfs` and for `az://` use `adlfs` in place of `s3fs`. |
 
 The plugin detects your environment and shows the command with your packages already
-filled in: **Raster → GeoZarr Viewer → Install Python Dependencies…**. For reference:
+filled in: **Raster → GEO-geo-zarr → Install Python Dependencies…**. For reference:
 
 | | Where to run it | Command |
 | --- | --- | --- |
@@ -58,9 +62,9 @@ Notes that catch people out:
 
 ## Using it
 
-**Raster → GeoZarr Viewer → Add GeoZarr Layer…**
+**Raster → GEO-geo-zarr → Add GeoZarr Layer…**
 
-**Raster → GeoZarr Viewer → Time Travel…** 
+**Raster → GEO-geo-zarr → Time Travel…** 
 
 ## Developing
 

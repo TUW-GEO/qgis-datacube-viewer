@@ -40,6 +40,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from .. import PLUGIN_NAME
 from ..core import ALL_PACKAGES, PACKAGE_ROLES, SUPPRESS_KEY, VERIFY_SNIPPET, install_command
 
 __all__ = ["SUPPRESS_KEY", "DependencyDialog"]
@@ -114,7 +115,7 @@ class DependencyDialog(QDialog):
         show_suppress: bool = False,
     ):
         super().__init__(parent)
-        self.setWindowTitle("GeoZarr Viewer — Python packages")
+        self.setWindowTitle(f"{PLUGIN_NAME} — Python packages")
         self.setMinimumWidth(680)
 
         self._missing = list(missing)
@@ -203,7 +204,7 @@ class DependencyDialog(QDialog):
         if show_suppress:
             self._suppress = QCheckBox("Don't show this automatically again")
             self._suppress.setToolTip(
-                "The instructions stay available under Raster → GeoZarr Viewer."
+                f"The instructions stay available under Raster → {PLUGIN_NAME}."
             )
             outer.addWidget(self._suppress)
 
@@ -249,7 +250,7 @@ class DependencyDialog(QDialog):
             )
         else:
             lead = (
-                "Everything GeoZarr Viewer can use is already installed. The command "
+                f"Everything {PLUGIN_NAME} can use is already installed. The command "
                 "below is here for reference."
             )
         return lead + self._package_list()

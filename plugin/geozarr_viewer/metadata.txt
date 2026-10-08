@@ -1,5 +1,9 @@
 [general]
-name=GeoZarr Viewer
+; Deliberately distinct from the two other GeoZarr plugins that can sit beside this
+; one in the same profile: "GeoZarr Viewer" (eodcgmbh, which this is a fork of) and
+; "GeoZarr" (wietzesuijker). Keep in step with PLUGIN_NAME in geozarr_viewer/__init__.py
+; -- scripts/build_plugin.py refuses to build if the two drift.
+name=GEO-geo-zarr
 ; 3.40 is the floor because of Python, not QGIS: zarr 3 needs Python >= 3.11 and
 ; icechunk >= 2 needs >= 3.12, and QGIS 3.40 LTR is the first release whose standard
 ; Windows/macOS builds ship Python 3.12.
@@ -23,13 +27,14 @@ about=Adds a raster data provider for GeoZarr datacubes. Reads directly from Ice
     .
     ONE MANUAL STEP AFTER INSTALL: this plugin needs the "zarr" (>=3) Python package,
     and QGIS's Plugin Manager does not install Python packages. After installing,
-    open Raster > GeoZarr Viewer > Install Python Dependencies... - it detects your
+    open Raster > GEO-geo-zarr > Install Python Dependencies... - it detects your
     operating system and QGIS build and shows the exact command to run, where to run
     it, and the interpreter it targets. "icechunk" is optional and only needed for
     Icechunk repositories; plain Zarr v3 stores work without it. Both require Python
     3.12 or newer, which means QGIS 3.40 or newer.
     .
-    Developed by EODC (https://eodc.eu). MIT licensed.
+    Originally developed by EODC (https://eodc.eu) as "GeoZarr Viewer". MIT licensed.
+    This is a renamed fork carrying local changes; it is not the EODC release.
 
 tags=raster,zarr,geozarr,icechunk,datacube,multiscale,pyramid,cog,earth observation
 

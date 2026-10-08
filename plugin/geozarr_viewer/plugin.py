@@ -23,11 +23,18 @@ from qgis.core import Qgis, QgsMessageLog, QgsProject, QgsRasterLayer, QgsSettin
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QPushButton
 
+from . import PLUGIN_NAME
 from .core import REMOTE_PACKAGES, SUPPRESS_KEY
 from .layeruri import PROVIDER_KEY, LayerUri
 
-PLUGIN_NAME = "GeoZarr Viewer"
-LOG_TAG = "GeoZarr"
+#: Tab name in the QGIS log panel. Same as the display name so that a message is
+#: traceable to this plugin rather than to one of the similarly named others.
+LOG_TAG = PLUGIN_NAME
+
+#: Stable, unique key QGIS stores the toolbar's visibility and position under. It is
+#: never shown to the user, and changing it would silently reset their layout, so it
+#: does not track PLUGIN_NAME.
+TOOLBAR_OBJECT_NAME = "GeoGeoZarrToolbar"
 _ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
 
@@ -94,6 +101,7 @@ class GeoZarrViewerPlugin:
     def __init__(self, iface):
         self.iface = iface
         self._actions: list[QAction] = []
+        self._toolbar = None
         self._load_dialog = None
         self._registered = False
 
@@ -122,8 +130,17 @@ class GeoZarrViewerPlugin:
         for action in (add, travel, setup):
             self.iface.addPluginToRasterMenu(PLUGIN_NAME, action)
             self._actions.append(action)
-        self.iface.addRasterToolBarIcon(add)
-        self._toolbar_action = add
+
+        # A toolbar of our own rather than iface.addRasterToolBarIcon(). The shared
+        # Raster toolbar is where upstream put its single button, and with three
+        # GeoZarr plugins installable side by side those icons are indistinguishable
+        # once they sit next to each other. A named toolbar is labelled in View →
+        # Toolbars, can be moved and hidden independently, and remembers that choice.
+        # The dependency-install action stays menu-only: it is used once, if ever.
+        self._toolbar = self.iface.addToolBar(PLUGIN_NAME)
+        self._toolbar.setObjectName(TOOLBAR_OBJECT_NAME)
+        for action in (add, travel):
+            self._toolbar.addAction(action)
 
         self._announce_dependencies()
 
@@ -187,9 +204,14 @@ class GeoZarrViewerPlugin:
     def unload(self) -> None:
         for action in self._actions:
             self.iface.removePluginRasterMenu(PLUGIN_NAME, action)
-        if getattr(self, "_toolbar_action", None) is not None:
-            self.iface.removeRasterToolBarIcon(self._toolbar_action)
         self._actions.clear()
+
+        if self._toolbar is not None:
+            # deleteLater() rather than `del`: the toolbar is owned by the main
+            # window, so dropping our reference alone would leave an empty bar behind
+            # after the plugin is disabled, and a second one would appear on reload.
+            self._toolbar.deleteLater()
+            self._toolbar = None
 
         if self._load_dialog is not None:
             self._load_dialog.close()
@@ -236,7 +258,7 @@ class GeoZarrViewerPlugin:
         if not layer.isValid():
             detail = layer.customProperty("geozarr/error", "") or "unknown error"
             self.iface.messageBar().pushMessage(
-                "GeoZarr Viewer", f"Could not load layer: {detail}", level=Qgis.Critical, duration=0
+                PLUGIN_NAME, f"Could not load layer: {detail}", level=Qgis.Critical, duration=0
             )
             self._log(f"Layer creation failed for {uri.summary}: {detail}", Qgis.Critical)
             return
@@ -244,7 +266,7 @@ class GeoZarrViewerPlugin:
         QgsProject.instance().addMapLayer(layer)
         self._log(f"Loaded {uri.summary}", Qgis.Info)
         self.iface.messageBar().pushMessage(
-            "GeoZarr Viewer",
+            PLUGIN_NAME,
             f"Loaded {layer.name()} at snapshot {uri.snapshot_id or '?'}",
             level=Qgis.Success,
             duration=6,
@@ -254,7 +276,7 @@ class GeoZarrViewerPlugin:
         layer = self.iface.activeLayer()
         if not self._is_geozarr_layer(layer):
             self.iface.messageBar().pushMessage(
-                "GeoZarr Viewer",
+                PLUGIN_NAME,
                 "Select a GeoZarr raster layer first.",
                 level=Qgis.Info,
                 duration=6,

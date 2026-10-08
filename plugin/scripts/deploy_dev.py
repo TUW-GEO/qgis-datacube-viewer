@@ -124,7 +124,7 @@ def deploy(profile: str, copy: bool, force: bool) -> int:
     print()
     check_qgis_dependencies()
     print()
-    print("Now start QGIS and enable 'GeoZarr Viewer' in Plugins > Manage and Install.")
+    print("Now start QGIS and enable 'GEO-geo-zarr' in Plugins > Manage and Install.")
     print("Install 'Plugin Reloader' too — then edits here take effect without a restart.")
     return 0
 

@@ -16,11 +16,16 @@ import pytest
 pytest.importorskip("qgis.core")
 
 from qgis.core import QgsProject, QgsRasterLayer
-from qgis.PyQt.QtWidgets import QWidget
+from qgis.PyQt.QtWidgets import QToolBar, QWidget
 
-from geozarr_viewer import classFactory
+from geozarr_viewer import PLUGIN_NAME, classFactory
 from geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri
-from geozarr_viewer.plugin import GeoZarrViewerPlugin, check_dependencies, remote_dependencies
+from geozarr_viewer.plugin import (
+    TOOLBAR_OBJECT_NAME,
+    GeoZarrViewerPlugin,
+    check_dependencies,
+    remote_dependencies,
+)
 from geozarr_viewer.provider import (
     is_registered,
     registry_supports_unregister,
@@ -58,7 +63,7 @@ class FakeIface:
         self._window = window
         self._bar = FakeMessageBar()
         self.raster_menu: list[tuple[str, object]] = []
-        self.toolbar: list[object] = []
+        self.toolbars: list[QToolBar] = []
         self.active = None
 
     def mainWindow(self):
@@ -74,12 +79,13 @@ class FakeIface:
         if (name, action) in self.raster_menu:
             self.raster_menu.remove((name, action))
 
-    def addRasterToolBarIcon(self, action):
-        self.toolbar.append(action)
-
-    def removeRasterToolBarIcon(self, action):
-        if action in self.toolbar:
-            self.toolbar.remove(action)
+    def addToolBar(self, name):
+        # A real QToolBar rather than a stub: the plugin calls setObjectName,
+        # addAction and deleteLater on whatever this returns, so returning the real
+        # widget means those calls are exercised instead of silently accepted.
+        bar = QToolBar(name, self._window)
+        self.toolbars.append(bar)
+        return bar
 
     def activeLayer(self):
         return self.active
@@ -117,15 +123,25 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
         "Time Travel…",
         "Install Python Dependencies…",
     ]
-    # Only the loader gets a toolbar button; the other two are menu-only.
-    assert len(iface.toolbar) == 1
+    # The plugin owns a named toolbar rather than borrowing the shared Raster one,
+    # so it stays distinguishable from the other GeoZarr plugins. Installing
+    # dependencies is a once-ever action and stays menu-only.
+    assert len(iface.toolbars) == 1
+    assert iface.toolbars[0].windowTitle() == PLUGIN_NAME
+    assert iface.toolbars[0].objectName() == TOOLBAR_OBJECT_NAME
+    assert [a.text() for a in iface.toolbars[0].actions()] == [
+        "Add GeoZarr Layer…",
+        "Time Travel…",
+    ]
 
 
 def test_unload_removes_the_ui(plugin, iface) -> None:
     plugin.initGui()
     plugin.unload()
     assert iface.raster_menu == []
-    assert iface.toolbar == []
+    # deleteLater() only destroys the widget once an event loop runs, so assert the
+    # plugin let go of it; a leaked bar would otherwise reappear doubled on reload.
+    assert plugin._toolbar is None
 
 
 def test_unregister_reports_honestly(plugin, iface) -> None:

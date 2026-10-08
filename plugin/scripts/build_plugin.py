@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import configparser
 import fnmatch
+import re
 import shutil
 import sys
 import zipfile
@@ -94,7 +95,35 @@ def check_metadata() -> list[str]:
     for name in ROOT_FILES:
         if not (REPO / name).exists():
             problems.append(f"{name} is missing from the repo root")
+    problems.extend(_check_name_matches_code(general.get("name", "").strip()))
     return problems
+
+
+def _check_name_matches_code(metadata_name: str) -> list[str]:
+    """``metadata.txt`` name vs. ``PLUGIN_NAME``, which labels the menu and toolbar.
+
+    The two are written in different files and nothing at runtime forces them to
+    agree, so a rename done in one place shows up as a plugin whose Plugin Manager
+    entry and menu entry have different names -- confusing precisely when several
+    similarly named GeoZarr plugins are installed. Read with a regex rather than an
+    import, to keep this script standard-library only and runnable on a bare CI image.
+    """
+    source = SOURCE / "__init__.py"
+    if not source.exists():
+        return [f"{source.name} is missing"]
+    match = re.search(
+        r'^PLUGIN_NAME\s*=\s*["\']([^"\']+)["\']',
+        source.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if match is None:
+        return [f"no PLUGIN_NAME found in {PACKAGE}/__init__.py"]
+    if match.group(1) != metadata_name:
+        return [
+            f"name mismatch: metadata.txt says {metadata_name!r} but "
+            f"{PACKAGE}/__init__.py PLUGIN_NAME is {match.group(1)!r}"
+        ]
+    return []
 
 
 def collect() -> list[Path]:

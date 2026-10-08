@@ -1,4 +1,4 @@
-"""GeoZarr Viewer — a QGIS plugin for GeoZarr/Icechunk datacubes.
+"""GEO-geo-zarr — a QGIS plugin for GeoZarr/Icechunk datacubes.
 
 The package root stays import-light on purpose. ``geozarr_viewer.core`` must be
 importable in a plain Python interpreter (that is what makes the data-access layer
@@ -8,8 +8,23 @@ class is only pulled in when QGIS actually calls :func:`classFactory`.
 
 from __future__ import annotations
 
+#: The plugin's display name, as it appears in the Plugin Manager, the Raster menu,
+#: the toolbar and every message-bar notice.
+#:
+#: It lives here rather than in :mod:`geozarr_viewer.plugin` because
+#: :mod:`geozarr_viewer.gui.dependencies` needs it too, and importing the plugin
+#: module from the GUI layer would be a cycle. The package root is import-light, so
+#: this costs nothing to reach.
+#:
+#: Deliberately distinct from the two other GeoZarr plugins that can be installed
+#: alongside this one -- upstream's "GeoZarr Viewer" (eodcgmbh) and "GeoZarr"
+#: (wietzesuijker) -- so that the Plugin Manager, the menus and the log tags say
+#: unambiguously which one is talking. Keep it in step with ``name=`` in
+#: ``metadata.txt``; ``scripts/build_plugin.py`` refuses to build if they drift.
+PLUGIN_NAME = "GEO-geo-zarr"
+
 __version__ = "0.1.0"
-__all__ = ["__version__", "classFactory"]
+__all__ = ["PLUGIN_NAME", "__version__", "classFactory"]
 
 
 def classFactory(iface):
