@@ -8,7 +8,7 @@ stores, independently of QGIS.
 ```
 plugin/                   the QGIS plugin — see plugin/README.md and plugin/UPSTREAM.md
 src/geozarr/              library + `geozarr` CLI
-scripts/                  standalone PEP 723 scripts (reference renderer, HTTP server)
+scripts/                  standalone PEP 723 scripts (dummy data, reference renderer, HTTP server)
 tests/                    pytest suite
 docs/                     documentation
 ```
