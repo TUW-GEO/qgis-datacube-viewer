@@ -1,0 +1,3 @@
+.cache/
+*.zarr/
+.venv/
