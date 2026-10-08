@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import html
 import threading
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -599,6 +600,40 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
     def snapshotId(self) -> str | None:
         view = self._view()
         return view.snapshot_id if view else None
+
+    # -- axis scrubbing ---------------------------------------------------
+    def indices(self) -> dict[str, int]:
+        """The current index on every non-spatial axis. Empty for a 2-D dataset."""
+        view = self._view()
+        return dict(view.indices) if view else {}
+
+    def setIndices(self, indices: Mapping[str, int]) -> bool:
+        """Move the layer to a different slice of its non-spatial axes, in place.
+
+        A *partial* mapping is merged onto the current one, so a caller that owns a
+        single slider need not know about the other axes.
+        ``LayerContext.set_indices`` runs the whole mapping through
+        ``default_indices``, which fills in anything absent with 0 — so passing one
+        axis on its own would silently rewind the rest.
+
+        Returns True when the resolved indices actually changed, so the caller can
+        skip a repaint that would show identical pixels. Out-of-range values are
+        clamped rather than rejected (see ``default_indices``), so "changed" means
+        "changed after clamping", not "the caller passed something new".
+        """
+        if self._context is None:
+            return False
+        before = self.indices()
+        try:
+            self._context.set_indices({**before, **{k: int(v) for k, v in indices.items()}})
+        except GeoZarrError as exc:
+            self._fail("Could not change slice", exc.detailed)
+            return False
+        after = self.indices()
+        if after == before:
+            return False
+        self._error = self._error_title = ""
+        return True
 
     # -- metadata panel ---------------------------------------------------
     def htmlMetadata(self) -> str:

@@ -16,16 +16,18 @@ Everything here is about QGIS lifecycle. The rules that matter:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 
 from qgis.core import Qgis, QgsMessageLog, QgsProject, QgsRasterLayer, QgsSettings
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QPushButton
 
 from . import PLUGIN_NAME
 from .core import REMOTE_PACKAGES, SUPPRESS_KEY
-from .layeruri import ERROR_PROPERTY, PROVIDER_KEY, LayerUri
+from .layeruri import ERROR_PROPERTY, INDEX_PROPERTY, PROVIDER_KEY, LayerUri
 
 #: Tab name in the QGIS log panel. Same as the display name so that a message is
 #: traceable to this plugin rather than to one of the similarly named others.
@@ -104,6 +106,9 @@ class GeoZarrViewerPlugin:
         self._toolbar = None
         self._load_dialog = None
         self._registered = False
+        #: Dock with the axis sliders. Held so ``unload`` can drop its signal
+        #: connection before the Python object goes away — see gui.axis_panel.
+        self._cube_dock = None
 
     # ------------------------------------------------------------ lifecycle
     def initGui(self) -> None:
@@ -142,7 +147,65 @@ class GeoZarrViewerPlugin:
         for action in (add, travel):
             self._toolbar.addAction(action)
 
+        self._add_cube_dock()
+
+        # Restoring a scrubbed slice when a project is read. The indices live in a
+        # layer custom property rather than the data source string (see
+        # INDEX_PROPERTY), so something has to put them back; layerWasAdded fires
+        # after readLayerXml, so the property is already there by then, and it is a
+        # no-op for a layer that was never scrubbed.
+        QgsProject.instance().layerWasAdded.connect(self._on_layer_added)
+
         self._announce_dependencies()
+
+    def _add_cube_dock(self) -> None:
+        """Add the axis-slider dock, hidden until the user asks for it.
+
+        Imported here rather than at module scope so that enabling the plugin does
+        not pull in the whole ``gui`` package — and its ``qgis.gui`` dependency —
+        during QGIS startup, which is the same reason the dialogs are imported
+        inside their slots.
+
+        The dock starts hidden: a panel that forces itself open on every launch is
+        a panel the user closes once and resents twice. QGIS restores its own
+        visibility from DOCK_OBJECT_NAME after this, so someone who left it open
+        keeps it open.
+        """
+        from .gui import GeoZarrCubeDock
+
+        self._cube_dock = GeoZarrCubeDock(self.iface, self.iface.mainWindow())
+        self.iface.addDockWidget(Qt.RightDockWidgetArea, self._cube_dock)
+        self._cube_dock.hide()
+
+        # The dock's own toggle, so it appears in View → Panels and in the toolbar
+        # with the same checked state rather than as a second, divergent control.
+        toggle = self._cube_dock.toggleViewAction()
+        toggle.setIcon(_icon("geozarr.svg"))
+        toggle.setText("GEO-GeoZarr Cube Panel")
+        toggle.setToolTip("Show the axis sliders for the selected GeoZarr layer")
+        self.iface.addPluginToRasterMenu(PLUGIN_NAME, toggle)
+        self._actions.append(toggle)
+        if self._toolbar is not None:
+            self._toolbar.addAction(toggle)
+
+    def _on_layer_added(self, layer) -> None:
+        """Re-apply a slice recorded in a project file, if there is one."""
+        from .layeruri import UriError, decode_indices
+
+        if not self._is_geozarr_layer(layer):
+            return
+        recorded = layer.customProperty(INDEX_PROPERTY, "")
+        if not recorded:
+            return
+        try:
+            indices = decode_indices(str(recorded))
+        except UriError as exc:
+            self._log(
+                f"Ignoring unreadable {INDEX_PROPERTY} on {layer.name()}: {exc}", Qgis.Warning
+            )
+            return
+        if layer.dataProvider().setIndices(indices):
+            layer.triggerRepaint()
 
     # ------------------------------------------------------------ onboarding
     def _announce_dependencies(self) -> None:
@@ -212,6 +275,15 @@ class GeoZarrViewerPlugin:
             # after the plugin is disabled, and a second one would appear on reload.
             self._toolbar.deleteLater()
             self._toolbar = None
+
+        if self._cube_dock is not None:
+            self._cube_dock.teardown()
+            self.iface.removeDockWidget(self._cube_dock)
+            self._cube_dock.deleteLater()
+            self._cube_dock = None
+
+        with contextlib.suppress(TypeError):  # never connected, or already dropped
+            QgsProject.instance().layerWasAdded.disconnect(self._on_layer_added)
 
         if self._load_dialog is not None:
             self._load_dialog.close()

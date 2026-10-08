@@ -16,6 +16,7 @@ import pytest
 pytest.importorskip("qgis.core")
 
 from qgis.core import QgsProject, QgsRasterLayer
+from qgis.PyQt.QtCore import QObject, pyqtSignal
 from qgis.PyQt.QtWidgets import QToolBar, QWidget
 
 from geo_geozarr_viewer import PLUGIN_NAME, classFactory
@@ -56,14 +57,25 @@ class FakeMessageBar:
         self.widgets.clear()
 
 
-class FakeIface:
-    """Records the calls the plugin makes, so unload can be checked against initGui."""
+class FakeIface(QObject):
+    """Records the calls the plugin makes, so unload can be checked against initGui.
+
+    A ``QObject`` with a real ``currentLayerChanged`` signal rather than a stub
+    attribute: the cube dock connects to it in ``initGui`` and disconnects in
+    ``unload``, and a leaked connection to a dead Python object raises from inside a
+    C++ signal emission, where it is near-undebuggable. Only a real signal lets the
+    test emit and assert that.
+    """
+
+    currentLayerChanged = pyqtSignal(object)
 
     def __init__(self, window: QWidget):
+        super().__init__()
         self._window = window
         self._bar = FakeMessageBar()
         self.raster_menu: list[tuple[str, object]] = []
         self.toolbars: list[QToolBar] = []
+        self.docks: list[object] = []
         self.active = None
 
     def mainWindow(self):
@@ -89,6 +101,16 @@ class FakeIface:
 
     def activeLayer(self):
         return self.active
+
+    def addDockWidget(self, area, dock):
+        # Parented to the window so the dock has the same ownership it would in
+        # QGIS; otherwise it is a top-level widget and leaks between tests.
+        dock.setParent(self._window)
+        self.docks.append(dock)
+
+    def removeDockWidget(self, dock):
+        if dock in self.docks:
+            self.docks.remove(dock)
 
 
 @pytest.fixture
@@ -117,11 +139,14 @@ def test_dependencies_are_present_in_this_environment() -> None:
 def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
     plugin.initGui()
     assert is_registered()
-    assert len(iface.raster_menu) == 3
+    assert len(iface.raster_menu) == 4
     assert [action.text() for _, action in iface.raster_menu] == [
         "GEO-Add GeoZarr Layer…",
         "GEO-Time Travel…",
         "GEO-Install Python Dependencies…",
+        # The dock's own toggleViewAction, reused rather than a second action with
+        # its own checked state to keep in sync.
+        "GEO-GeoZarr Cube Panel",
     ]
     # The plugin owns a named toolbar rather than borrowing the shared Raster one,
     # so it stays distinguishable from the other GeoZarr plugins. Installing
@@ -132,6 +157,7 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
     assert [a.text() for a in iface.toolbars[0].actions()] == [
         "GEO-Add GeoZarr Layer…",
         "GEO-Time Travel…",
+        "GEO-GeoZarr Cube Panel",
     ]
 
 
@@ -142,6 +168,44 @@ def test_unload_removes_the_ui(plugin, iface) -> None:
     # deleteLater() only destroys the widget once an event loop runs, so assert the
     # plugin let go of it; a leaked bar would otherwise reappear doubled on reload.
     assert plugin._toolbar is None
+    assert iface.docks == []
+    assert plugin._cube_dock is None
+
+
+def test_init_gui_adds_the_cube_dock_hidden(plugin, iface) -> None:
+    """The panel must not force itself open on every QGIS launch."""
+    plugin.initGui()
+    assert len(iface.docks) == 1
+    assert plugin._cube_dock is not None
+    assert plugin._cube_dock.isHidden()
+
+
+def test_the_cube_dock_follows_the_selected_layer(plugin, iface, store_uri: str) -> None:
+    plugin.initGui()
+    scrubber = plugin._cube_dock.scrubber()
+    assert scrubber.layer() is None
+
+    from geo_geozarr_viewer.provider import create_layer
+
+    layer = create_layer(LayerUri(store_uri=store_uri, dataset="conv", bands=("red",)), "cube")
+    assert layer.isValid()
+    iface.currentLayerChanged.emit(layer)
+    assert scrubber.layer() is layer
+    assert [r.axis.name for r in scrubber._rows] == ["time"]
+
+    iface.currentLayerChanged.emit(None)
+    assert scrubber.layer() is None
+
+
+def test_unload_stops_the_dock_hearing_about_layers(plugin, iface, store_uri: str) -> None:
+    """A connection outliving the Python object raises from inside a C++ emit."""
+    plugin.initGui()
+    dock = plugin._cube_dock
+    plugin.unload()
+    # Must not reach the torn-down dock. If teardown() missed the disconnect this
+    # either raises or quietly drives a widget that no longer belongs to anything.
+    iface.currentLayerChanged.emit(None)
+    assert dock.scrubber().layer() is None
 
 
 def test_unregister_reports_honestly(plugin, iface) -> None:

@@ -1,0 +1,411 @@
+"""The axis scrubber: does moving a slider actually move the layer?
+
+Everything here runs against the real fixture store through a real provider, because
+the thing being tested is the handoff between a Qt signal and a Zarr read, and a
+mocked provider would test neither side of it.
+
+The ``time`` axis of the fixture is written at index 1 only (index 0 is left at the
+fill value), which makes "did the pixels change?" answerable without a golden image:
+one slice is empty and the other is not.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+pytest.importorskip("qgis.core")
+
+from qgis.core import QgsApplication, QgsProject, QgsRectangle
+from qgis.PyQt.QtWidgets import QSlider
+
+from geo_geozarr_viewer.gui.axis_panel import (
+    DEBOUNCE_MS,
+    DOCK_OBJECT_NAME,
+    PANEL_TITLE,
+    AxisScrubber,
+    axis_chunk_length,
+    is_geozarr_layer,
+)
+from geo_geozarr_viewer.layeruri import (
+    INDEX_PROPERTY,
+    LayerUri,
+    decode_indices,
+    decode_uri,
+    encode_indices,
+)
+from geo_geozarr_viewer.provider import create_layer
+from tests.fixture_store import FixtureInfo
+
+pytestmark = pytest.mark.gui
+
+
+def pump(predicate, timeout: float = 10.0) -> bool:
+    """Run the event loop until ``predicate()`` holds or the deadline passes."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        QgsApplication.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+@pytest.fixture
+def layer(qgis_app, fixture_info: FixtureInfo):
+    """A GeoZarr layer on the fixture's conventional dataset, which has a time axis."""
+    uri = LayerUri(store_uri=fixture_info.path, dataset="conv", bands=("red",))
+    made = create_layer(uri, "cube")
+    assert made.isValid(), made.customProperty("geo_geozarr/error", "")
+    yield made
+    del made
+
+
+@pytest.fixture
+def widget(layer):
+    """A scrubber pointed at the fixture layer, with no dock around it."""
+    made = AxisScrubber()
+    made.set_layer(layer)
+    yield made
+    made.close()
+    made.deleteLater()
+    QgsApplication.processEvents()
+
+
+# --------------------------------------------------------------------- plumbing
+def test_layer_is_recognised(layer) -> None:
+    assert is_geozarr_layer(layer)
+
+
+def test_a_plain_layer_is_not_recognised(qgis_app) -> None:
+    from qgis.core import QgsRasterLayer
+
+    assert not is_geozarr_layer(QgsRasterLayer("", "empty", "gdal"))
+    assert not is_geozarr_layer(None)
+
+
+def test_an_unpointed_scrubber_says_so(qgis_app) -> None:
+    """The dock exists before any layer is selected, so this is the opening state."""
+    scrubber = AxisScrubber()
+    try:
+        assert scrubber.layer() is None
+        assert scrubber._rows == []
+        assert "Select a GeoZarr layer" in scrubber._status.text()
+    finally:
+        scrubber.deleteLater()
+
+
+def test_pointing_at_a_foreign_layer_is_declined_not_crashed(qgis_app) -> None:
+    from qgis.core import QgsRasterLayer
+
+    scrubber = AxisScrubber()
+    try:
+        scrubber.set_layer(QgsRasterLayer("", "empty", "gdal"))
+        assert scrubber.layer() is None
+        assert scrubber._rows == []
+    finally:
+        scrubber.deleteLater()
+
+
+def test_retargeting_replaces_the_rows(qgis_app, layer, fixture_info: FixtureInfo) -> None:
+    """Switching layers must not leave the previous layer's sliders behind."""
+    flat = create_layer(LayerUri(store_uri=fixture_info.path, dataset="ngff"), "flat")
+    scrubber = AxisScrubber()
+    try:
+        scrubber.set_layer(layer)
+        assert [r.axis.name for r in scrubber._rows] == ["time"]
+        scrubber.set_layer(flat)
+        assert scrubber._rows == []  # ngff is 2-D
+        scrubber.set_layer(layer)
+        assert [r.axis.name for r in scrubber._rows] == ["time"]
+    finally:
+        scrubber.deleteLater()
+
+
+def test_retargeting_away_does_not_apply_to_the_new_layer(qgis_app, layer, fixture_info) -> None:
+    """A drag in flight belongs to the layer it started on, not the next one."""
+    other = create_layer(
+        LayerUri(store_uri=fixture_info.path, dataset="conv", bands=("red",)), "other"
+    )
+    scrubber = AxisScrubber()
+    try:
+        scrubber.set_layer(layer)
+        scrubber._rows[0].slider.setValue(1)  # pending, debounced
+        scrubber.flush()  # what the dock does before switching
+        assert layer.dataProvider().indices() == {"time": 1}
+        scrubber.set_layer(other)
+        assert other.dataProvider().indices() == {"time": 0}, "untouched by the other drag"
+    finally:
+        scrubber.deleteLater()
+
+
+def test_the_dock_is_named_for_layout_persistence() -> None:
+    """QGIS keys the dock's geometry off the object name; renaming it resets layouts."""
+    assert DOCK_OBJECT_NAME == "GeoGeoZarrCubeDock"
+    assert PANEL_TITLE.startswith("GEO-")
+
+
+# ------------------------------------------------------------------- one row per axis
+def test_one_slider_per_axis(widget, layer) -> None:
+    axes = layer.dataProvider().context.dataset.axes
+    assert [row.axis.name for row in widget._rows] == [axis.name for axis in axes]
+    for row in widget._rows:
+        assert row.slider.maximum() == row.axis.size - 1
+
+
+def test_sliders_start_where_the_provider_is(widget, layer) -> None:
+    assert layer.dataProvider().indices() == {"time": 0}
+    assert [row.index() for row in widget._rows] == [0]
+    assert widget._rows[0].position.text() == "1 / 2"
+
+
+def test_a_dataset_without_axes_gets_an_explanation(qgis_app, fixture_info: FixtureInfo) -> None:
+    """The NGFF fixture group is 2-D, so there is nothing to scrub."""
+    flat = create_layer(LayerUri(store_uri=fixture_info.path, dataset="ngff"), "flat")
+    assert flat.isValid(), flat.customProperty("geo_geozarr/error", "")
+    page = AxisScrubber()
+    page.set_layer(flat)
+    try:
+        assert page._rows == []
+        assert "no non-spatial dimensions" in page._status.text()
+    finally:
+        page.deleteLater()
+
+
+# ----------------------------------------------------------------------- moving
+def test_stepping_moves_the_provider(widget, layer) -> None:
+    widget._rows[0].next.click()
+    assert layer.dataProvider().indices() == {"time": 1}
+
+
+def test_stepping_is_immediate_and_leaves_no_pending_read(widget) -> None:
+    widget._rows[0].next.click()
+    assert not widget._debounce.isActive()
+
+
+def test_steps_stop_at_the_ends(widget, layer) -> None:
+    row = widget._rows[0]
+    assert not row.previous.isEnabled()  # already at 0
+    row.next.click()
+    assert row.index() == 1
+    assert not row.next.isEnabled()
+    row.set_index(99)  # clamped by the slider's own range
+    assert row.index() == 1
+
+
+def test_labels_follow_the_handle_before_the_read_lands(widget, layer) -> None:
+    """The drag has to read as continuous even though the pixels lag the debounce."""
+    widget._rows[0].slider.setValue(1)
+    assert widget._rows[0].position.text() == "2 / 2"
+    # Still on the old slice: the read is waiting out the quiet period.
+    assert layer.dataProvider().indices() == {"time": 0}
+    assert widget._debounce.isActive()
+
+
+def test_the_debounced_read_eventually_lands(widget, layer) -> None:
+    widget._rows[0].slider.setValue(1)
+    assert pump(lambda: layer.dataProvider().indices() == {"time": 1}, DEBOUNCE_MS / 1000 + 5)
+
+
+def test_a_sweep_applies_once_at_the_end(widget, layer) -> None:
+    """Dragging across the axis must not read every slice on the way past."""
+    reads: list[dict[str, int]] = []
+    original = layer.dataProvider().setIndices
+
+    def record(indices):
+        reads.append(dict(indices))
+        return original(indices)
+
+    layer.dataProvider().setIndices = record
+    try:
+        for value in (0, 1, 0, 1):  # a handle wobbling across the axis
+            widget._rows[0].slider.setValue(value)
+        assert reads == []  # nothing yet
+        assert pump(lambda: reads, DEBOUNCE_MS / 1000 + 5)
+        assert reads == [{"time": 1}]
+    finally:
+        layer.dataProvider().setIndices = original
+
+
+def test_releasing_the_handle_applies_at_once(widget, layer) -> None:
+    widget._rows[0].slider.setValue(1)
+    widget._rows[0].slider.sliderReleased.emit()
+    assert layer.dataProvider().indices() == {"time": 1}
+    assert not widget._debounce.isActive()
+
+
+def test_flush_commits_a_pending_drag(widget, layer) -> None:
+    """Closing or retargeting mid-debounce must not discard the chosen slice."""
+    widget._rows[0].slider.setValue(1)
+    widget.flush()
+    assert layer.dataProvider().indices() == {"time": 1}
+
+
+def test_syncing_picks_up_a_change_made_elsewhere(widget, layer) -> None:
+    layer.dataProvider().setIndices({"time": 1})
+    widget.sync_to_layer()
+    assert widget._rows[0].index() == 1
+    assert widget._rows[0].position.text() == "2 / 2"
+
+
+def test_moving_to_the_same_slice_is_not_a_change(widget, layer) -> None:
+    assert not layer.dataProvider().setIndices({"time": 0})
+
+
+# ------------------------------------------------------------------ the pixels
+def _read(layer) -> np.ndarray:
+    provider = layer.dataProvider()
+    extent: QgsRectangle = provider.extent()
+    block = provider.block(1, extent, 16, 16)
+    return np.array([block.value(r, c) for r in range(16) for c in range(16)], dtype="float64")
+
+
+def test_the_slider_changes_what_the_layer_renders(widget, layer) -> None:
+    """The point of the whole exercise: different slice, different pixels.
+
+    The fixture writes ``time=1`` only, so slice 0 is uniform fill and slice 1 is a
+    pattern. Comparing against a golden image would be fragile; comparing "flat" to
+    "not flat" is the actual claim.
+    """
+    before = _read(layer)
+    widget._rows[0].next.click()
+    after = _read(layer)
+    assert np.unique(before).size == 1, "time=0 is unwritten, so it should be uniform"
+    assert np.unique(after).size > 1, "time=1 holds a pattern"
+    assert not np.array_equal(before, after)
+
+
+# ---------------------------------------------------------------- persistence
+def test_the_slice_is_recorded_on_the_layer(widget, layer) -> None:
+    widget._rows[0].next.click()
+    assert layer.customProperty(INDEX_PROPERTY, "") == "time=1"
+
+
+def test_nothing_is_recorded_until_something_moves(widget, layer) -> None:
+    assert layer.customProperty(INDEX_PROPERTY, "") == ""
+
+
+def test_the_recorded_slice_round_trips(widget, layer) -> None:
+    widget._rows[0].next.click()
+    recorded = decode_indices(layer.customProperty(INDEX_PROPERTY, ""))
+    assert recorded == {"time": 1}
+
+
+def test_indices_encode_in_the_same_syntax_as_the_uri() -> None:
+    """The custom property and the URI's ``index=`` component must not diverge."""
+    indices = {"time": 3, "band": 1}
+    assert encode_indices(indices) == "band=1,time=3"
+    assert decode_indices(encode_indices(indices)) == indices
+    # The URI percent-encodes its component values, so compare after decoding.
+    assert decode_uri(LayerUri(store_uri="x", indices=indices).encode()).indices == indices
+
+
+def test_a_project_restores_the_scrubbed_slice(qgis_app, fixture_info: FixtureInfo) -> None:
+    """The whole persistence path, through the hook the plugin installs.
+
+    Not a QgsProject save/reload: that would need a writable project file and the
+    plugin's ``initGui``. What is tested is the contract between the two halves —
+    whatever the panel writes, the restore hook can read back onto a fresh layer.
+    """
+    scrubbed = create_layer(
+        LayerUri(store_uri=fixture_info.path, dataset="conv", bands=("red",)), "cube"
+    )
+    page = AxisScrubber()
+    page.set_layer(scrubbed)
+    try:
+        page._rows[0].next.click()
+        recorded = scrubbed.customProperty(INDEX_PROPERTY, "")
+    finally:
+        page.deleteLater()
+
+    reopened = create_layer(
+        LayerUri(store_uri=fixture_info.path, dataset="conv", bands=("red",)), "cube"
+    )
+    assert reopened.dataProvider().indices() == {"time": 0}  # the saved URI's value
+    reopened.setCustomProperty(INDEX_PROPERTY, recorded)
+
+    # What GeoZarrViewerPlugin._on_layer_added does.
+    assert reopened.dataProvider().setIndices(decode_indices(recorded))
+    assert reopened.dataProvider().indices() == {"time": 1}
+
+
+# ------------------------------------------------------------------- chunk cost
+def test_chunk_length_is_reported_per_axis(layer) -> None:
+    dataset = layer.dataProvider().context.dataset
+    axis = dataset.axes[0]
+    assert axis_chunk_length(dataset, axis) >= 1
+
+
+def test_a_costly_axis_is_called_out(widget, monkeypatch) -> None:
+    """A user cannot fix chunking, but being told beats thinking the plugin is slow."""
+    widget._rows[0].chunk_length = 8
+    widget._describe()
+    assert "time (8 deep)" in widget._status.text()
+
+
+# ------------------------------------------------------------------- robustness
+def test_a_failing_provider_leaves_the_sliders_where_the_layer_is(widget, layer) -> None:
+    """A read failure must show an error, not a slider that lies about the slice."""
+    provider = layer.dataProvider()
+    monkeypatched = {"called": False}
+
+    def fail(_indices):
+        monkeypatched["called"] = True
+        provider._fail("Could not change slice", "store went away")
+        return False
+
+    provider.setIndices = fail
+    try:
+        widget._rows[0].slider.setValue(1)
+        widget._apply_now()
+    finally:
+        del provider.setIndices
+    assert monkeypatched["called"]
+    assert "store went away" in widget._status.text()
+    assert widget._rows[0].index() == 0, "slider snapped back to the real slice"
+
+
+def test_the_panel_survives_a_layer_removed_underneath_it(qgis_app, fixture_info: FixtureInfo):
+    """Opening the styling panel and then deleting the layer must not crash."""
+    doomed = create_layer(
+        LayerUri(store_uri=fixture_info.path, dataset="conv", bands=("red",)), "doomed"
+    )
+    QgsProject.instance().addMapLayer(doomed)
+    page = AxisScrubber()
+    page.set_layer(doomed)
+    QgsProject.instance().removeMapLayer(doomed.id())
+    QgsApplication.processEvents()
+    page.deleteLater()
+    QgsApplication.processEvents()
+
+
+def test_sliders_are_disabled_on_a_single_slice_axis(qgis_app, fixture_info: FixtureInfo) -> None:
+    """A one-element axis still gets a row, so the value is visible, but no handle."""
+    dataset = create_layer(
+        LayerUri(store_uri=fixture_info.path, dataset="conv", bands=("red",)), "cube"
+    )
+    page = AxisScrubber()
+    page.set_layer(dataset)
+    try:
+        for row in page._rows:
+            assert row.slider.isEnabled() == (row.axis.size > 1)
+    finally:
+        page.deleteLater()
+
+
+def test_the_heading_names_the_dataset_and_ref(widget) -> None:
+    text = widget._heading.text()
+    assert "conv" in text
+    assert "branch:main" in text
+
+
+def test_tick_marks_only_on_a_short_axis(widget) -> None:
+    row = widget._rows[0]
+    assert row.axis.size <= 40
+    assert row.slider.tickPosition() == QSlider.TicksBelow
+
+
+def test_axis_tooltip_mentions_the_size(widget) -> None:
+    assert "2 slice(s) along time" in widget._rows[0].slider.toolTip()

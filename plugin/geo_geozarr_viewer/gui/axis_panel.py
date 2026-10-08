@@ -1,0 +1,446 @@
+"""One slider per non-spatial axis, in a dock panel of its own.
+
+A datacube layer is a 2-D window onto an N-D array, and the indices that pick the
+window (``time=7``, ``band=2``) are the thing a user most wants to move. Putting
+them behind a modal dialog makes that a transaction; putting them on sliders makes
+it exploration, which is the whole point of having the cube.
+
+Why a dock of its own rather than a page in the Layer Styling panel: picking a slice
+is not styling. The styling panel is where you go to change how values are drawn, it
+is modal in feel (open it, adjust, move on), and burying a scrubber behind its icon
+strip makes the cube's most-used control the hardest one to reach. A dock can be
+left open beside the map for a whole session, remembers its position and size, and
+can be tabbed next to Layers — which is what scrubbing through time wants to be.
+``QgsLayerTreeEmbeddedWidgetProvider`` remains the right home for a *single* summary
+slider on the layer row itself; it is not the right home for four.
+
+The dock follows the selected layer, so it reads as a property of "the current
+layer" without the user having to re-point it.
+
+Three things make the scrubbing feel like a slider rather than a reload:
+
+* **The block cache is index-aware.** ``DatasetReader`` keys decoded windows on the
+  axis indices (see ``core.reader._read_source``), so moving back to a slice that
+  was already on screen is a cache hit. That is why :meth:`AxisScrubber._apply`
+  calls only ``triggerRepaint()`` and never ``reloadData()`` — a reload would drop
+  exactly the cache that makes scrubbing cheap, and nothing about an index change
+  invalidates the store handle.
+* **Reads are debounced.** Dragging a slider emits a value per pixel of travel.
+  Labels follow every one of those, but the repaint waits for :data:`DEBOUNCE_MS`
+  of quiet, so a drag across 50 steps reads one slice and not fifty. Releasing the
+  handle or clicking a step button applies at once.
+* **Chunking is surfaced, not hidden.** An axis chunked in groups of N makes every
+  step that crosses a group boundary decode N slices. The user cannot fix that, but
+  being told is the difference between "this plugin is slow" and "this store is
+  chunked for time series, not for browsing".
+"""
+
+from __future__ import annotations
+
+import contextlib
+from collections.abc import Mapping
+
+from qgis.core import QgsMapLayer, QgsRasterLayer
+from qgis.gui import QgsDockWidget
+from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QLabel,
+    QSizePolicy,
+    QSlider,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..core import AxisInfo, DatasetInfo
+from ..layeruri import INDEX_PROPERTY, PROVIDER_KEY, encode_indices
+
+#: Quiet period before a drag turns into a read. Long enough that a sweep across an
+#: axis is one read, short enough to feel like a direct response to the handle.
+DEBOUNCE_MS = 180
+
+#: Dock title. Shown in View → Panels, so it carries the plugin's prefix.
+PANEL_TITLE = "GEO-GeoZarr cube"
+
+#: Stable, unique key QGIS stores the dock's visibility, position and size under.
+#: Never shown to the user; changing it would silently reset their layout, so it
+#: does not track PANEL_TITLE. Same reasoning as ``plugin.TOOLBAR_OBJECT_NAME``.
+DOCK_OBJECT_NAME = "GeoGeoZarrCubeDock"
+
+
+def is_geozarr_layer(layer: QgsMapLayer | None) -> bool:
+    """Whether this is one of our raster layers, with a provider we can talk to.
+
+    The ``setIndices`` check is not paranoia about the provider's identity — it is
+    about the Plugin Reloader. Reloading re-imports the plugin's modules, so the
+    dock is built from new code, but a layer that was already on the map keeps the
+    provider *instance* it was built with (only ``_create_provider`` resolves the
+    class lazily, and that runs per new layer). Driving such a layer would reach for
+    a method its provider predates. Declining instead means a stale layer quietly
+    shows the "no cube selected" message until it is re-added, rather than raising
+    ``AttributeError`` out of a C++ call during a repaint.
+    """
+    if not (
+        isinstance(layer, QgsRasterLayer)
+        and layer.isValid()
+        and layer.providerType() == PROVIDER_KEY
+    ):
+        return False
+    provider = layer.dataProvider()
+    return provider is not None and hasattr(provider, "setIndices")
+
+
+def axis_chunk_length(dataset: DatasetInfo, axis: AxisInfo) -> int:
+    """How many slices along ``axis`` share a chunk, over the bands at base level.
+
+    The maximum across bands rather than the minimum: the cost of a step is set by
+    the most coarsely chunked band being rendered, not the cheapest. 1 means every
+    slice is independently addressable, which is the ideal for browsing.
+    """
+    lengths = []
+    for variable in dataset.base.variables.values():
+        position = variable.axis_index(axis.name)
+        if position is not None and position < len(variable.chunks):
+            lengths.append(int(variable.chunks[position]))
+    return max(lengths) if lengths else 1
+
+
+class AxisSliderRow:
+    """The widgets for one axis, laid out across two rows of a grid.
+
+    Not a ``QWidget`` subclass on purpose: the labels of every axis should share
+    column widths so the sliders line up vertically, and that only happens if they
+    all live in the same ``QGridLayout`` rather than in a nested layout each.
+    """
+
+    def __init__(self, axis: AxisInfo, chunk_length: int, grid: QGridLayout, row: int):
+        self.axis = axis
+        self.chunk_length = chunk_length
+
+        name = QLabel(f"<b>{axis.name}</b>")
+        name.setToolTip(self._axis_tooltip())
+
+        self.previous = QToolButton()
+        self.previous.setArrowType(Qt.LeftArrow)
+        self.previous.setAutoRepeat(True)
+        self.previous.setToolTip(f"Previous {axis.name} slice")
+
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(0, max(axis.size - 1, 0))
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(max(axis.size // 10, 1))
+        self.slider.setEnabled(axis.size > 1)
+        self.slider.setToolTip(self._axis_tooltip())
+        # Ticks only while they stay readable; a 4000-step time axis drawn with
+        # ticks is a grey smear that hides the handle.
+        if 2 <= axis.size <= 40:
+            self.slider.setTickPosition(QSlider.TicksBelow)
+            self.slider.setTickInterval(1)
+
+        self.next = QToolButton()
+        self.next.setArrowType(Qt.RightArrow)
+        self.next.setAutoRepeat(True)
+        self.next.setToolTip(f"Next {axis.name} slice")
+
+        self.value = QLabel()
+        self.value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+
+        self.position = QLabel()
+        self.position.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.position.setEnabled(False)  # greyed: secondary to the label
+
+        grid.addWidget(name, row, 0)
+        grid.addWidget(self.value, row, 1)
+        grid.addWidget(self.position, row, 2)
+        grid.addWidget(self.previous, row + 1, 0)
+        grid.addWidget(self.slider, row + 1, 1)
+        grid.addWidget(self.next, row + 1, 2)
+
+    def _axis_tooltip(self) -> str:
+        bits = [f"{self.axis.size} slice(s) along {self.axis.name}"]
+        if self.axis.units:
+            bits.append(f"units: {self.axis.units}")
+        if self.axis.calendar:
+            bits.append(f"calendar: {self.axis.calendar}")
+        if self.chunk_length > 1:
+            bits.append(
+                f"chunked {self.chunk_length} slices deep, so a step that crosses a "
+                f"chunk boundary decodes {self.chunk_length} slices"
+            )
+        return "\n".join(bits)
+
+    def index(self) -> int:
+        return int(self.slider.value())
+
+    def set_index(self, index: int) -> None:
+        self.slider.setValue(max(0, min(int(index), self.axis.size - 1)))
+
+    def refresh_labels(self) -> None:
+        index = self.index()
+        self.value.setText(self.axis.label_at(index))
+        self.value.setToolTip(self.axis.label_at(index))
+        self.position.setText(f"{index + 1} / {self.axis.size}")
+        self.previous.setEnabled(index > 0)
+        self.next.setEnabled(index < self.axis.size - 1)
+
+
+class AxisScrubber(QWidget):
+    """Sliders for whichever layer it is pointed at. Retargeted with :meth:`set_layer`.
+
+    Separate from the dock so the thing with the behaviour in it can be built and
+    driven without a ``QgsDockWidget`` or a running QGIS main window — which is what
+    the tests do, and what any other host for these sliders (a Layer Properties tab,
+    an embedded widget on the layer row) would reuse.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._layer: QgsRasterLayer | None = None
+        self._provider = None
+        self._rows: list[AxisSliderRow] = []
+        #: Set while code (not the user) is moving a slider, so the change does not
+        #: come straight back as a read.
+        self._loading = False
+
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(DEBOUNCE_MS)
+        self._debounce.timeout.connect(self._apply)
+
+        self._outer = QVBoxLayout(self)
+        self._heading = QLabel()
+        self._heading.setWordWrap(True)
+        self._outer.addWidget(self._heading)
+        #: Rebuilt per layer; everything axis-specific lives inside it, so that
+        #: retargeting is one widget swap rather than a hunt for stale children.
+        self._body: QWidget | None = None
+        self._status = QLabel()
+        self._status.setWordWrap(True)
+        self._outer.addWidget(self._status)
+        self._outer.addStretch(1)
+
+        self.set_layer(None)
+
+    # ---------------------------------------------------------------- targeting
+    def layer(self) -> QgsRasterLayer | None:
+        """The layer being driven, or None when the selection is not a cube."""
+        return self._layer
+
+    def set_layer(self, layer: QgsMapLayer | None) -> None:
+        """Point the sliders at ``layer``, or at nothing.
+
+        Always rebuilds rather than short-circuiting when the layer is unchanged: a
+        snapshot switch can change the axes underneath us, and rebuilding a handful
+        of widgets is nothing next to the store read we are *not* doing.
+        """
+        self._debounce.stop()
+        self._rows = []
+        if self._body is not None:
+            # setParent(None) before deleteLater so the layout stops accounting for
+            # it immediately; otherwise the new body lands below a gap that only
+            # closes on the next pass of the event loop.
+            self._body.setParent(None)
+            self._body.deleteLater()
+            self._body = None
+
+        self._layer = layer if is_geozarr_layer(layer) else None
+        self._provider = self._layer.dataProvider() if self._layer is not None else None
+
+        if self._layer is None:
+            self._heading.setText("<i>No GeoZarr layer selected.</i>")
+            self._status.setText("Select a GeoZarr layer in the Layers panel to scrub its axes.")
+            return
+
+        self._body = QWidget(self)
+        grid = QGridLayout(self._body)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setColumnStretch(1, 1)
+        self._outer.insertWidget(1, self._body)
+
+        dataset = self._dataset()
+        for position, axis in enumerate(dataset.axes):
+            if position:
+                line = QFrame()
+                line.setFrameShape(QFrame.HLine)
+                line.setFrameShadow(QFrame.Sunken)
+                grid.addWidget(line, position * 3 - 1, 0, 1, 3)
+            row = AxisSliderRow(axis, axis_chunk_length(dataset, axis), grid, position * 3)
+            row.slider.valueChanged.connect(self._on_slider_moved)
+            # Releasing the handle, or a click on a step button, is an unambiguous
+            # "I mean this one" — no reason to make the user wait out the debounce.
+            row.slider.sliderReleased.connect(self._apply_now)
+            row.previous.clicked.connect(lambda _=False, r=row: self._step(r, -1))
+            row.next.clicked.connect(lambda _=False, r=row: self._step(r, +1))
+            self._rows.append(row)
+
+        self._load_from_layer()
+        if not self._rows:
+            self._status.setText(
+                "This dataset has no non-spatial dimensions — there is only one slice to show."
+            )
+
+    def _dataset(self) -> DatasetInfo:
+        return self._provider.context.dataset
+
+    # ------------------------------------------------------------------ loading
+    def _load_from_layer(self) -> None:
+        """Seed the sliders from the provider's live state."""
+        if self._provider is None:
+            return
+        current = self._provider.indices()
+        self._loading = True
+        try:
+            for row in self._rows:
+                row.set_index(current.get(row.axis.name, 0))
+                row.refresh_labels()
+        finally:
+            self._loading = False
+        self._describe()
+
+    def sync_to_layer(self) -> None:
+        """Re-read state something else changed (time travel, Layer Properties)."""
+        self._load_from_layer()
+
+    def _describe(self) -> None:
+        context = getattr(self._provider, "context", None)
+        if context is None:
+            return
+        view = context.view()
+        self._heading.setText(
+            f"<b>{self._layer.name()}</b><br>{view.dataset.path or '/'} · {view.ref.label}"
+            + (f" @ {view.snapshot_id[:8]}" if view.snapshot_id else "")
+        )
+        costly = [r for r in self._rows if r.chunk_length > 1]
+        if costly:
+            names = ", ".join(f"{r.axis.name} ({r.chunk_length} deep)" for r in costly)
+            self._status.setText(
+                f"Chunked along {names} — stepping within a chunk is cheap, "
+                "crossing one re-reads the whole chunk."
+            )
+        elif self._rows:
+            self._status.setText("")
+
+    # ------------------------------------------------------------------- moving
+    def _on_slider_moved(self, _value: int) -> None:
+        if self._loading:
+            return
+        # Labels track the handle so the drag reads as continuous even though the
+        # pixels are still catching up.
+        for row in self._rows:
+            row.refresh_labels()
+        self._debounce.start()
+
+    def _step(self, row: AxisSliderRow, delta: int) -> None:
+        row.set_index(row.index() + delta)
+        self._apply_now()
+
+    def _apply_now(self) -> None:
+        self._debounce.stop()
+        self._apply()
+
+    def _apply(self) -> None:
+        """Push the slider positions onto the layer and repaint.
+
+        No ``reloadData()``: see the module docstring. The store handle and the
+        decoded-window cache both stay valid across an index change, and throwing
+        them away is what would make scrubbing slow.
+        """
+        if self._loading or not self._rows or self._provider is None:
+            return
+        indices = {row.axis.name: row.index() for row in self._rows}
+        changed = self._provider.setIndices(indices)
+        error = self._provider.lastError()
+        if error:
+            # setIndices already left the layer on its previous slice, so snap the
+            # handles back to the truth before reporting — a slider parked on a
+            # slice that is not on screen is worse than no slider.
+            #
+            # Order matters: _load_from_layer ends in _describe, which owns the
+            # status line and would overwrite the message if it ran afterwards.
+            self._load_from_layer()
+            self._status.setText(f"Could not change slice: {error}")
+            return
+        if not changed:
+            return
+        self._remember(self._provider.indices())
+
+        # TODO(contrast): the layer whites out when scrubbing an axis whose slices
+        # have different value ranges — reported against a temperature cube, where
+        # later dates render blank. QGIS computes the renderer's contrast
+        # enhancement (the band's min/max) *once*, from statistics gathered when the
+        # layer was created, i.e. from whichever slice was showing then. Changing
+        # the slice does not invalidate that, so a slice outside the original range
+        # clips to white. Nothing above is wrong: the provider is handing back the
+        # right pixels and the renderer is stretching them with stale limits.
+        #
+        # The fix is to restretch here, roughly:
+        #     layer.setContrastEnhancement(
+        #         QgsContrastEnhancement.StretchToMinimumMaximum,
+        #         QgsRasterMinMaxOrigin.MinMax, extent, sampleSize)
+        # but it must be opt-in, not automatic, because restretching every step
+        # makes a time series flicker in brightness and makes slices visually
+        # incomparable — exactly what someone comparing dates does not want. So:
+        # a tri-state on this panel ("stretch: fixed / per slice / whole cube"),
+        # defaulting to fixed limits computed over the whole axis rather than over
+        # one arbitrary slice. Computing cube-wide statistics needs a bounded scan
+        # (sample slices, not all of them), which is why this is a TODO and not a
+        # one-liner.
+        self._layer.triggerRepaint()
+        self._describe()
+
+    def _remember(self, indices: Mapping[str, int]) -> None:
+        """Record the slice on the layer so it survives a project save.
+
+        See :data:`geo_geozarr_viewer.layeruri.INDEX_PROPERTY` for why this cannot
+        just ride along in the layer's data source string.
+        """
+        self._layer.setCustomProperty(INDEX_PROPERTY, encode_indices(indices))
+
+    def flush(self) -> None:
+        """Commit a pending drag. For a caller that is about to retarget or close."""
+        if self._debounce.isActive():
+            self._apply_now()
+
+
+class GeoZarrCubeDock(QgsDockWidget):
+    """The dock: an :class:`AxisScrubber` that follows the selected layer.
+
+    ``QgsDockWidget`` rather than a plain ``QDockWidget`` so QGIS treats it as one
+    of its own panels — listed in View → Panels, and with its geometry restored
+    across sessions from :data:`DOCK_OBJECT_NAME`.
+    """
+
+    def __init__(self, iface, parent: QWidget | None = None):
+        super().__init__(PANEL_TITLE, parent)
+        self.setObjectName(DOCK_OBJECT_NAME)
+        self._iface = iface
+
+        self._scrubber = AxisScrubber(self)
+        self.setWidget(self._scrubber)
+
+        iface.currentLayerChanged.connect(self._on_current_layer_changed)
+        self._on_current_layer_changed(iface.activeLayer())
+
+    def scrubber(self) -> AxisScrubber:
+        return self._scrubber
+
+    def _on_current_layer_changed(self, layer: QgsMapLayer | None) -> None:
+        # Commit anything still in flight for the layer being left behind, or a drag
+        # that was never released would be silently dropped by the switch.
+        self._scrubber.flush()
+        self._scrubber.set_layer(layer)
+
+    def teardown(self) -> None:
+        """Drop the signal connection. Called from the plugin's ``unload``.
+
+        Without this, a reloaded plugin leaves QGIS holding a connection to a dead
+        Python object, and the next layer selection raises from inside a C++ signal
+        emission — where there is no traceback to find it by.
+        """
+        self._scrubber.flush()
+        # never connected, or already torn down
+        with contextlib.suppress(TypeError, RuntimeError):
+            self._iface.currentLayerChanged.disconnect(self._on_current_layer_changed)

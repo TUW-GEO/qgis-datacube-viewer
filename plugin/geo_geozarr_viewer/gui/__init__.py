@@ -4,6 +4,12 @@ from :mod:`geo_geozarr_viewer.core`.
 
 from __future__ import annotations
 
+from .axis_panel import (
+    AxisScrubber,
+    GeoZarrCubeDock,
+    axis_chunk_length,
+    is_geozarr_layer,
+)
 from .dependencies import DependencyDialog
 from .load_dialog import GeoZarrLoadDialog
 from .preview import PreviewResult, render_thumbnail, to_image
@@ -11,11 +17,15 @@ from .snapshot_dialog import SnapshotDialog
 from .worker import StoreWorker
 
 __all__ = [
+    "AxisScrubber",
     "DependencyDialog",
+    "GeoZarrCubeDock",
     "GeoZarrLoadDialog",
     "PreviewResult",
     "SnapshotDialog",
     "StoreWorker",
+    "axis_chunk_length",
+    "is_geozarr_layer",
     "render_thumbnail",
     "to_image",
 ]

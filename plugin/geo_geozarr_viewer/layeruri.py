@@ -36,6 +36,18 @@ PROVIDER_DESCRIPTION = "GEO-geo-zarr: GeoZarr / Icechunk raster"
 #: the provider key for the same reason.
 ERROR_PROPERTY = f"{PROVIDER_KEY}/error"
 
+#: Layer custom property holding the live axis indices, in the same ``dim=int``
+#: syntax as the ``index=`` URI component.
+#:
+#: This exists because moving a slider cannot update the string QGIS saves.
+#: :meth:`GeoZarrRasterProvider.dataSourceUri` reports live state, but
+#: ``QgsMapLayer`` writes ``<datasource>`` from its own cached copy, which only
+#: ``setDataSource()`` refreshes — and that rebuilds the provider from scratch,
+#: dropping the open store handle and the block cache. Custom properties *are*
+#: persisted, so the scrubber writes here and the plugin re-applies it when the
+#: project is read. See ``GeoZarrViewerPlugin._on_layer_added``.
+INDEX_PROPERTY = f"{PROVIDER_KEY}/indices"
+
 LEVEL_STRATEGIES: tuple[LevelStrategy, ...] = ("auto", "manual", "base", "coarsest")
 
 
@@ -147,6 +159,21 @@ def _parse_indices(text: str) -> dict[str, int]:
                 f"Index for {name.strip()!r} must be an integer, got {value!r}."
             ) from exc
     return out
+
+
+def encode_indices(indices: Mapping[str, int]) -> str:
+    """Serialise axis indices for :data:`INDEX_PROPERTY`.
+
+    Deliberately the same ``dim=int,dim=int`` syntax as the URI's ``index=``
+    component, sorted, so the two are interchangeable and a user reading a ``.qgs``
+    file sees one format rather than two.
+    """
+    return ",".join(f"{name}={int(value)}" for name, value in sorted(indices.items()))
+
+
+def decode_indices(text: str) -> dict[str, int]:
+    """Parse :func:`encode_indices`. Raises :class:`UriError` on malformed input."""
+    return _parse_indices(text or "")
 
 
 def _parse_bool(text: str) -> bool:
