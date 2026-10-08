@@ -1,0 +1,57 @@
+# Tool configuration only. There is deliberately no [project] table: this repo is a
+# QGIS plugin, not an installable distribution, and adding one would make pixi try to
+# build and install it as a package into its own environment.
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"  # QGIS 3.34 on some distros still ships Python 3.9
+exclude = ["build", ".pixi", "*.pyc"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    # Qt overrides are camelCase by contract, and `l`/`I` are not used as names here.
+    "N802",
+    # Long lines inside docstrings and WKT literals carry meaning; the formatter
+    # handles code width and E501 would only force ugly wrapping of prose.
+    "E501",
+    # `except Exception` is deliberate anywhere a Python exception would cross into
+    # a C++ virtual call, which is a crash rather than a traceback.
+    "BLE001",
+    # En dashes, × and → are intentional in user-facing strings and prose. Replacing
+    # them with ASCII would make the UI worse to read to satisfy a homoglyph check
+    # aimed at source identifiers.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into private attributes on purpose: the dialog's widgets are its
+# interface for testing, and exposing them publicly would be worse.
+"tests/*" = ["SLF001", "B011"]
+# Import-after-setenv is required: QT_QPA_PLATFORM must be set before qgis loads.
+"scripts/*" = ["E402"]
+"tests/conftest.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["geozarr_viewer", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# --import-mode=importlib so `tests.fixture_store` imports as a package module
+# without needing an __init__.py or a sys.path hack in every test file.
+addopts = "-ra --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning:zarr.*",
+    "ignore:.*UnstableSpecificationWarning.*",
+]
+timeout = 300
+
+# qgis-plugin-ci is the releaser driven by .github/workflows/release.yml. It only
+# needs to be told which directory is the plugin; the version, changelog and
+# archive name come from the git tag and metadata.txt.
+[tool.qgis-plugin-ci]
+plugin_path = "geozarr_viewer"
+github_organization_slug = "eodcgmbh"
+project_slug = "qgis-geozarr"

@@ -1,0 +1,24 @@
+# Build output and rendered diagnostics
+build/
+*.zip
+
+# pixi
+.pixi/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Throwaway QGIS profile that pytest-qgis creates in the working directory
+.qgis-settings/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

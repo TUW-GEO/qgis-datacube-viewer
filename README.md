@@ -3,34 +3,56 @@
 Tooling for inspecting and visualizing [GeoZarr](https://github.com/zarr-conventions)
 stores, independently of QGIS.
 
-## Relationship to the QGIS plugin
-
-The QGIS plugin lives in its own repository,
-[`cmoldenh/qgis-geozarr`](https://github.com/TUW-GEO/qgis-datacube-viewer) — a
-clone of the public upstream
-[`eodcgmbh/qgis-geozarr`](https://github.com/eodcgmbh/qgis-geozarr), which is the
-canonical project and publishes to plugins.qgis.org.
-
-This repository is the *other* half of that work: a QGIS-free second opinion. When
-the plugin shows nothing, or something odd, `scripts/plot_geozarr_reference.py`
-reads the same store with plain `zarr` — no GDAL, no xarray, no QGIS — and says
-whether the data or the plugin is at fault. Nothing here is a dependency of the
-plugin, and the plugin is not a dependency of anything here.
-
-> The `qgis-plugin` branch is **superseded** and kept only for history. It was a
-> skeleton for a plugin that upstream had already built, in far more depth, and its
-> central idea — vendoring `geozarr` into the plugin zip — is the opposite of the
-> approach upstream settled on (zarr and icechunk have compiled dependencies, so
-> upstream guides the user through installing them instead).
-
 ## Layout
 
 ```
+plugin/                   the QGIS plugin — see plugin/README.md and plugin/UPSTREAM.md
 src/geozarr/              library + `geozarr` CLI
 scripts/                  standalone PEP 723 scripts (reference renderer, HTTP server)
 tests/                    pytest suite
 docs/                     documentation
 ```
+
+`plugin/` is a verbatim copy of [`eodcgmbh/qgis-geozarr`](https://github.com/eodcgmbh/qgis-geozarr)
+(MIT) at commit `68eb5b1`, which we now own and edit in place — no submodule,
+subtree or remote. [plugin/UPSTREAM.md](plugin/UPSTREAM.md) records the provenance
+and why the plugin keeps its own `pyproject.toml` and `tests/`.
+
+Everything outside `plugin/` is the QGIS-free half: when the plugin shows nothing,
+or something odd, `scripts/plot_geozarr_reference.py` reads the same store with
+plain `zarr` — no GDAL, no xarray, no QGIS — and says whether the data or the
+plugin is at fault. Neither half imports the other.
+
+> The `qgis-plugin` branch is **superseded** and kept only for history. It was a
+> skeleton for a plugin that upstream had already built in far more depth, and its
+> central idea — vendoring `geozarr` into the plugin zip — is the opposite of the
+> approach upstream settled on (zarr and icechunk have compiled dependencies, so
+> the plugin guides the user through installing them instead).
+
+## Quick start: the plugin in QGIS
+
+QGIS 3.44 LTR is installed and its bundled Python 3.12 **already has** `zarr` 3.4,
+`icechunk` 2.3, `fsspec` and `s3fs`, so there is no pip step. `build_plugin.py` and
+`deploy_dev.py` are standard-library only — neither needs pixi or the project venv:
+
+```bash
+python plugin/scripts/deploy_dev.py            # symlink into the QGIS profile
+python plugin/scripts/deploy_dev.py --copy     # if symlinks are unavailable
+python plugin/scripts/build_plugin.py          # -> plugin/build/geozarr_viewer-<version>.zip
+```
+
+With the symlink in place and the **Plugin Reloader** plugin (already installed),
+editing a file under `plugin/geozarr_viewer/` and pressing reload picks the change
+up without restarting QGIS. Then: **Raster → GeoZarr Viewer → Add GeoZarr Layer…**
+
+Note that a second, unrelated GeoZarr plugin by Wietze Suijker (`qgis_geozarr`,
+GPL-2.0) is also installed in the default profile and shows up under a similar
+name. Disable it in the Plugin Manager if the two get confusing, and keep its code
+at arm's length — its license is not MIT.
+
+Running the plugin's own test suite needs QGIS plus `pytest-qgis` via pixi, and
+`plugin/pixi.toml` declares `platforms = ["linux-64"]` only, so that part runs in
+WSL rather than natively on Windows.
 
 ## Development setup
 

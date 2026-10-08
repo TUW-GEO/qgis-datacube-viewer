@@ -1,0 +1,56 @@
+name: Release
+
+# Publishing is triggered by *publishing a GitHub Release*, not by pushing a tag.
+# Creating the release is a deliberate act, and its notes are what users read next
+# to the zip asset. The tag must equal metadata.txt's version exactly, because
+# qgis-plugin-ci writes the tag verbatim into the version field it uploads.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # qgis-plugin-ci attaches the built zip to the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # qgis-plugin-ci reads tags and history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Fail here rather than at the plugins.qgis.org upload: this is the same
+      # metadata + archive-layout check `pixi run build` runs locally, and it needs
+      # nothing but the standard library.
+      - name: Validate metadata and archive layout
+        run: python scripts/build_plugin.py
+
+      - name: Check the tag matches metadata.txt
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(PYTHONPATH=scripts python -c 'import build_plugin; print(build_plugin.read_version())')"
+          if [ "$TAG" != "$version" ]; then
+            echo "::error::tag '$TAG' must equal metadata.txt version '$version' exactly."
+            echo "::error::Do not prefix tags with 'v' — the tag becomes the version on plugins.qgis.org."
+            exit 1
+          fi
+
+      - name: Install qgis-plugin-ci
+        run: pip install qgis-plugin-ci
+
+      # --qgis-token is a plugin-scoped token from plugins.qgis.org, so a leaked
+      # secret cannot touch an OSGeo account or any other plugin. It only works
+      # once the plugin already exists there, which is why the first version is
+      # uploaded by hand.
+      - name: Publish to plugins.qgis.org
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: >-
+          qgis-plugin-ci release "$TAG"
+          --github-token "${{ secrets.GITHUB_TOKEN }}"
+          --qgis-token "${{ secrets.QGIS_PLUGIN_TOKEN }}"

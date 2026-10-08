@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <title>Icechunk snapshot history</title>
+  <g fill="none" stroke="#2b6cb0" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Clock face, open at the top left where the rewind arrow enters. -->
+    <path d="M4.4 12a7.6 7.6 0 1 0 2.3-5.4"/>
+    <polyline points="3.2,4.2 3.2,8.4 7.4,8.4"/>
+    <polyline points="12,7.6 12,12 15.2,13.8"/>
+  </g>
+</svg>

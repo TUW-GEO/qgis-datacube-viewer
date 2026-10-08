@@ -1,0 +1,32 @@
+[workspace]
+name = "qgis-geozarr"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+# Development / CI environment. QGIS comes from conda-forge so the same
+# interpreter that runs the plugin also has zarr + icechunk available, which
+# lets us run the provider headlessly under pytest-qgis.
+[dependencies]
+python = "3.12.*"
+qgis = ">=3.40"
+zarr = ">=3.0"
+xarray = ">=2024.10"
+numpy = ">=2.0"
+pyproj = ">=3.6"
+pytest = ">=8"
+pytest-cov = "*"
+pytest-timeout = "*"
+ruff = "*"
+
+[pypi-dependencies]
+icechunk = ">=1.0"
+pytest-qgis = ">=2.1"
+
+[tasks]
+test = "pytest -q"
+lint = "ruff check . && ruff format --check ."
+fmt = "ruff format . && ruff check --fix ."
+build = "python scripts/build_plugin.py"
+# Convenience: install the plugin into the user's QGIS profile as a symlink
+deploy = "python scripts/deploy_dev.py"
+inspect = "python scripts/inspect_store.py"

@@ -1,0 +1,78 @@
+[general]
+name=GeoZarr Viewer
+; 3.40 is the floor because of Python, not QGIS: zarr 3 needs Python >= 3.11 and
+; icechunk >= 2 needs >= 3.12, and QGIS 3.40 LTR is the first release whose standard
+; Windows/macOS builds ship Python 3.12.
+qgisMinimumVersion=3.40
+qgisMaximumVersion=3.99
+description=Load and visualise GeoZarr-compliant Zarr stores, including Icechunk repositories and their multiscale pyramids.
+version=0.2.1
+author=EODC GmbH
+email=timothy.simons@eodc.eu
+
+; Required by plugins.qgis.org; an upload without repository and tracker is rejected.
+repository=https://github.com/eodcgmbh/qgis-geozarr
+tracker=https://github.com/eodcgmbh/qgis-geozarr/issues
+homepage=https://github.com/eodcgmbh/qgis-geozarr
+
+about=Adds a raster data provider for GeoZarr datacubes. Reads directly from Icechunk
+    repositories (local, S3, GCS, Azure, R2 or HTTP) as well as plain Zarr v3 stores,
+    resolves the CRS from zarr-conventions "proj:code" or CF grid mappings, and switches
+    between pyramid levels as you zoom. Icechunk branches, tags and snapshots can be
+    selected at load time and changed afterwards without re-adding the layer.
+    .
+    ONE MANUAL STEP AFTER INSTALL: this plugin needs the "zarr" (>=3) Python package,
+    and QGIS's Plugin Manager does not install Python packages. After installing,
+    open Raster > GeoZarr Viewer > Install Python Dependencies... - it detects your
+    operating system and QGIS build and shows the exact command to run, where to run
+    it, and the interpreter it targets. "icechunk" is optional and only needed for
+    Icechunk repositories; plain Zarr v3 stores work without it. Both require Python
+    3.12 or newer, which means QGIS 3.40 or newer.
+    .
+    Developed by EODC (https://eodc.eu). MIT licensed.
+
+tags=raster,zarr,geozarr,icechunk,datacube,multiscale,pyramid,cog,earth observation
+
+category=Raster
+icon=icons/geozarr.svg
+experimental=True
+deprecated=False
+server=False
+
+; Set this to True only after actually running the plugin against a Qt6 QGIS build;
+; declaring it untested would strand users on the builds that are becoming the default.
+; supportsQt6=True
+
+hasProcessingProvider=no
+changelog=0.2.1
+    - Only http:// and https:// URLs are opened when reading a store over HTTP.
+      urllib will also open file:, ftp: and data:, and a store URL comes straight
+      from the Add GeoZarr Layer dialog, so a pasted file:/// URL could previously
+      turn a remote read into a local file read. Redirects are re-checked per hop,
+      because urllib's own redirect handler permits ftp:.
+    - The resampler's index-grid invariant raises instead of asserting: asserts are
+      stripped under python -O, which some QGIS packagings set, and the failure then
+      surfaced as an opaque numpy TypeError.
+    - CRS-description and ref-listing failures are logged at debug level rather than
+      silently swallowed, so a store that resolves its CRS wrongly leaves a trail.
+    - InstallCommand.shell is now InstallCommand.terminal. No behaviour change: the
+      field holds a terminal's name for display, and this module never spawns a
+      process, but security scanners read any shell= keyword as subprocess use.
+  0.2.0
+    - Post-install setup is now explained in the plugin: a message-bar notice with a
+      "Show me how" button, and Raster > GeoZarr Viewer > Install Python
+      Dependencies..., both opening instructions built for the detected platform
+      (OSGeo4W Shell on Windows, the bundled python3 inside QGIS.app on macOS,
+      conda-forge under conda/pixi, --break-system-packages where PEP 668 applies).
+      The command names the interpreter it targets, so a wrong guess is visible.
+    - metadata: EODC is the author, with the repository and tracker links that
+      plugins.qgis.org requires for upload.
+  0.1.1
+    - Fix a hard crash (access violation in proj_create) when opening the Add
+      GeoZarr Layer dialog: PROJ is now only ever entered from the main thread.
+    - icechunk is optional; plain Zarr v3 stores load without it.
+    - qgisMinimumVersion raised to 3.40, which is the first release shipping the
+      Python 3.12 that zarr 3 and icechunk require.
+  0.1.0
+    - First release: geozarr raster provider, multiscale pyramid selection,
+      Icechunk branch/tag/snapshot loading and in-place time travel.

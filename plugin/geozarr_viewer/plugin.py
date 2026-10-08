@@ -1,0 +1,280 @@
+"""Plugin entry point: registration, menu wiring and teardown.
+
+Everything here is about QGIS lifecycle. The rules that matter:
+
+* The provider is registered in :meth:`initGui`. :meth:`unload` asks for it to be
+  removed, but QGIS exposes no unregister API, so in practice the key stays in the
+  registry for the session. What makes the Plugin Reloader still work is that the
+  registered factory looks the provider class up lazily rather than capturing it.
+* Missing ``zarr``/``icechunk`` is reported once, in the message bar, with a button
+  that opens platform-specific install instructions — not as a traceback in the log
+  the first time someone tries to add a layer. The Plugin Manager cannot install
+  PyPI packages, so this notice is the whole of the plugin's post-install setup and
+  is treated as a feature rather than an error path. See
+  :mod:`geozarr_viewer.gui.dependencies`.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+
+from qgis.core import Qgis, QgsMessageLog, QgsProject, QgsRasterLayer, QgsSettings
+from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtWidgets import QAction, QPushButton
+
+from .core import REMOTE_PACKAGES, SUPPRESS_KEY
+from .layeruri import PROVIDER_KEY, LayerUri
+
+PLUGIN_NAME = "GeoZarr Viewer"
+LOG_TAG = "GeoZarr"
+_ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+
+
+def _icon(name: str) -> QIcon:
+    path = os.path.join(_ICON_DIR, name)
+    return QIcon(path) if os.path.exists(path) else QIcon()
+
+
+def check_dependencies() -> list[str]:
+    """Required packages missing from this interpreter. Empty means "good to go".
+
+    Only ``zarr`` is required. ``icechunk`` is optional — without it the plugin still
+    reads plain Zarr v3 stores, and the data layer raises a clear
+    ``MissingDependencyError`` if someone points it at an Icechunk repository. Making
+    it a hard requirement would block the only fallback available on a machine where
+    the icechunk wheel cannot be installed.
+    """
+    missing = []
+    try:
+        import zarr
+
+        if int(zarr.__version__.split(".")[0]) < 3:
+            missing.append(f"zarr>=3 (found {zarr.__version__})")
+    except ImportError:
+        missing.append("zarr>=3")
+    return missing
+
+
+def optional_dependencies() -> list[str]:
+    """Missing packages that narrow what can be opened but do not disable the plugin."""
+    try:
+        import icechunk  # noqa: F401
+    except ImportError:
+        return ["icechunk"]
+    return []
+
+
+def remote_dependencies() -> list[str]:
+    """Missing packages needed only for plain Zarr on ``s3://``, ``gs://`` and ``az://``.
+
+    These never raise the startup notice on their own: someone who only opens local
+    stores should not be told about s3fs at every launch. They are listed — and
+    installed — by the instructions dialog, so the one command covers the whole plugin
+    instead of sending remote users back here later.
+
+    ``find_spec`` rather than ``import``, because importing ``s3fs`` pulls in
+    aiobotocore and its botocore data files: a visible pause to answer a question that
+    only needs the module to exist.
+    """
+    missing = []
+    for name in REMOTE_PACKAGES:
+        try:
+            found = importlib.util.find_spec(name) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            missing.append(name)
+    return missing
+
+
+class GeoZarrViewerPlugin:
+    """The object QGIS keeps for the lifetime of the plugin."""
+
+    def __init__(self, iface):
+        self.iface = iface
+        self._actions: list[QAction] = []
+        self._load_dialog = None
+        self._registered = False
+
+    # ------------------------------------------------------------ lifecycle
+    def initGui(self) -> None:
+        from .provider import register_provider
+
+        self._registered = register_provider()
+        if not self._registered:
+            self._log("Failed to register the 'geozarr' data provider.", Qgis.Critical)
+
+        add = QAction(_icon("geozarr.svg"), "Add GeoZarr Layer…", self.iface.mainWindow())
+        add.setToolTip("Load a GeoZarr datacube from an Icechunk repository or Zarr store")
+        add.triggered.connect(self.show_load_dialog)
+
+        travel = QAction(_icon("history.svg"), "Time Travel…", self.iface.mainWindow())
+        travel.setToolTip("Switch the selected GeoZarr layer to a different Icechunk snapshot")
+        travel.triggered.connect(self.show_snapshot_dialog)
+
+        setup = QAction("Install Python Dependencies…", self.iface.mainWindow())
+        setup.setToolTip(
+            "Show the command that installs zarr, icechunk, fsspec and s3fs for this platform"
+        )
+        setup.triggered.connect(self.show_dependency_dialog)
+
+        for action in (add, travel, setup):
+            self.iface.addPluginToRasterMenu(PLUGIN_NAME, action)
+            self._actions.append(action)
+        self.iface.addRasterToolBarIcon(add)
+        self._toolbar_action = add
+
+        self._announce_dependencies()
+
+    # ------------------------------------------------------------ onboarding
+    def _announce_dependencies(self) -> None:
+        """Tell the user what is missing, once, with a way to fix it.
+
+        A modal dialog here would be wrong: ``initGui`` runs while QGIS is still
+        starting up, and on a fresh profile several plugins would fight over the
+        screen. So this is a message-bar item with a button, which is non-blocking and
+        stays until dismissed, and the instructions open only if asked for.
+        """
+        missing = check_dependencies()
+        optional = optional_dependencies()
+        if not missing and not optional:
+            return
+        if not missing and QgsSettings().value(SUPPRESS_KEY, False, type=bool):
+            # Only zarr is load-blocking. Once someone has said they know icechunk is
+            # absent, nagging about an optional package every launch is noise.
+            return
+
+        summary = ", ".join(m.split("(")[0].strip() for m in missing + optional)
+        widget = self.iface.messageBar().createMessage(
+            PLUGIN_NAME,
+            f"Python packages not available to QGIS: {summary}. "
+            + (
+                "The plugin cannot open stores until this is fixed."
+                if missing
+                else "Plain Zarr stores still work."
+            ),
+        )
+        button = QPushButton("Show me how", widget)
+        button.pressed.connect(self._on_notice_clicked)
+        widget.layout().addWidget(button)
+        self.iface.messageBar().pushWidget(widget, Qgis.Critical if missing else Qgis.Warning)
+        self._log(
+            f"Missing packages: {summary}. Raster → {PLUGIN_NAME} → "
+            "Install Python Dependencies… has the commands.",
+            Qgis.Warning,
+        )
+
+    def _on_notice_clicked(self) -> None:
+        self.iface.messageBar().clearWidgets()
+        self.show_dependency_dialog(show_suppress=True)
+
+    def show_dependency_dialog(self, show_suppress: bool = False) -> None:
+        """Open the platform-specific install instructions."""
+        from .gui import DependencyDialog
+
+        dialog = DependencyDialog(
+            check_dependencies(),
+            optional_dependencies(),
+            remote_dependencies(),
+            self.iface.mainWindow(),
+            show_suppress=show_suppress,
+        )
+        dialog.exec_()
+        if dialog.suppressed():
+            QgsSettings().setValue(SUPPRESS_KEY, True)
+
+    def unload(self) -> None:
+        for action in self._actions:
+            self.iface.removePluginRasterMenu(PLUGIN_NAME, action)
+        if getattr(self, "_toolbar_action", None) is not None:
+            self.iface.removeRasterToolBarIcon(self._toolbar_action)
+        self._actions.clear()
+
+        if self._load_dialog is not None:
+            self._load_dialog.close()
+            self._load_dialog = None
+
+        if self._registered:
+            from .provider import unregister_provider
+
+            # QGIS 3.x has no way to unregister a data provider, so this usually
+            # returns False and the 'geozarr' key stays in the registry for the rest
+            # of the session. Existing layers therefore keep working after the plugin
+            # is disabled, and re-enabling it is a no-op. Reloading still picks up
+            # code changes because the registered factory resolves the provider class
+            # lazily — see provider._create_provider.
+            unregister_provider()
+            self._registered = False
+
+    # --------------------------------------------------------------- slots
+    def show_load_dialog(self) -> None:
+        if check_dependencies():
+            # Same instructions as the startup notice, rather than a second, shorter
+            # and inevitably divergent copy of the advice.
+            self.show_dependency_dialog()
+            return
+
+        from .gui import GeoZarrLoadDialog
+
+        if self._load_dialog is None:
+            self._load_dialog = GeoZarrLoadDialog(self.iface.mainWindow())
+            self._load_dialog.layerRequested.connect(self.add_layer)
+            self._load_dialog.finished.connect(self._on_dialog_closed)
+        self._load_dialog.show()
+        self._load_dialog.raise_()
+        self._load_dialog.activateWindow()
+
+    def _on_dialog_closed(self, *_args) -> None:
+        self._load_dialog = None
+
+    def add_layer(self, uri: LayerUri) -> None:
+        """Build a layer from a resolved URI and put it on the map."""
+        from .provider import create_layer
+
+        layer = create_layer(uri)
+        if not layer.isValid():
+            detail = layer.customProperty("geozarr/error", "") or "unknown error"
+            self.iface.messageBar().pushMessage(
+                "GeoZarr Viewer", f"Could not load layer: {detail}", level=Qgis.Critical, duration=0
+            )
+            self._log(f"Layer creation failed for {uri.summary}: {detail}", Qgis.Critical)
+            return
+
+        QgsProject.instance().addMapLayer(layer)
+        self._log(f"Loaded {uri.summary}", Qgis.Info)
+        self.iface.messageBar().pushMessage(
+            "GeoZarr Viewer",
+            f"Loaded {layer.name()} at snapshot {uri.snapshot_id or '?'}",
+            level=Qgis.Success,
+            duration=6,
+        )
+
+    def show_snapshot_dialog(self) -> None:
+        layer = self.iface.activeLayer()
+        if not self._is_geozarr_layer(layer):
+            self.iface.messageBar().pushMessage(
+                "GeoZarr Viewer",
+                "Select a GeoZarr raster layer first.",
+                level=Qgis.Info,
+                duration=6,
+            )
+            return
+
+        from .gui import SnapshotDialog
+
+        dialog = SnapshotDialog(layer, self.iface.mainWindow())
+        dialog.exec_()
+
+    # ------------------------------------------------------------- helpers
+    @staticmethod
+    def _is_geozarr_layer(layer) -> bool:
+        return (
+            isinstance(layer, QgsRasterLayer)
+            and layer.isValid()
+            and layer.providerType() == PROVIDER_KEY
+        )
+
+    @staticmethod
+    def _log(message: str, level=Qgis.Info) -> None:
+        QgsMessageLog.logMessage(message, LOG_TAG, level)

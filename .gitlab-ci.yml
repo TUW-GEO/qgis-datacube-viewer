@@ -1,6 +1,6 @@
-# CI for geo-zarr: lint and test the library.
+# CI for geo-zarr: lint and test the library, and package the QGIS plugin.
 
-stages: [lint, test]
+stages: [lint, test, build]
 
 default:
   image: python:3.12-slim
@@ -43,3 +43,20 @@ test:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+
+# plugin/scripts/build_plugin.py is standard-library only: it validates
+# metadata.txt, builds the archive and re-opens it to assert the single-top-level-
+# directory layout QGIS requires. No environment, so this stays a fast check that a
+# metadata edit has not made the plugin uninstallable.
+#
+# The plugin's own pytest suite is not run here: it needs QGIS and pytest-qgis from
+# plugin/pixi.toml, which declares linux-64 only and takes minutes to solve.
+build:plugin:
+  stage: build
+  script:
+    - python plugin/scripts/build_plugin.py
+    - ls -lh plugin/build
+  artifacts:
+    name: "geozarr_viewer-$CI_COMMIT_REF_SLUG"
+    paths: [plugin/build/*.zip]
+    expire_in: 4 weeks

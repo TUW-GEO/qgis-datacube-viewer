@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <title>GeoZarr multiscale raster</title>
+  <!-- Three stacked, shrinking tiles: the pyramid, coarsest at the back. -->
+  <g fill="none" stroke-linejoin="round" stroke-width="1.4">
+    <rect x="3.2" y="3.2" width="13" height="13" rx="1.2" fill="#cfe3f7" stroke="#2b6cb0"/>
+    <rect x="6.1" y="6.1" width="13" height="13" rx="1.2" fill="#9ec5ea" stroke="#2b6cb0"/>
+    <rect x="9.0" y="9.0" width="12" height="12" rx="1.2" fill="#3f8ed0" stroke="#1a4971"/>
+  </g>
+  <!-- Chunk grid on the front tile. -->
+  <g stroke="#e8f2fb" stroke-width="0.9" opacity="0.85">
+    <path d="M13 9v12M17 9v12M9 13h12M9 17h12"/>
+  </g>
+</svg>
