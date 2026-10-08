@@ -47,11 +47,3 @@ filterwarnings = [
     "ignore:.*UnstableSpecificationWarning.*",
 ]
 timeout = 300
-
-# qgis-plugin-ci is the releaser driven by .github/workflows/release.yml. It only
-# needs to be told which directory is the plugin; the version, changelog and
-# archive name come from the git tag and metadata.txt.
-[tool.qgis-plugin-ci]
-plugin_path = "geozarr_viewer"
-github_organization_slug = "eodcgmbh"
-project_slug = "qgis-geozarr"

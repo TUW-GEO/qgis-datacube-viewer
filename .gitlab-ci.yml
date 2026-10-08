@@ -50,7 +50,8 @@ test:
 # metadata edit has not made the plugin uninstallable.
 #
 # The plugin's own pytest suite is not run here: it needs QGIS and pytest-qgis from
-# plugin/pixi.toml, which declares linux-64 only and takes minutes to solve.
+# plugin/pixi.toml, and that conda environment takes minutes to solve. Run it with
+# `pixi run test` in plugin/.
 build:plugin:
   stage: build
   # Tag pipelines are handled by release:plugin, which stamps the real version; two

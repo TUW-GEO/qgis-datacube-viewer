@@ -1,7 +1,8 @@
 [workspace]
 name = "qgis-geozarr"
 channels = ["conda-forge"]
-platforms = ["linux-64"]
+# win-64 is here so the suite can be run on a Windows dev machine; CI is linux-64.
+platforms = ["linux-64", "win-64"]
 
 # Development / CI environment. QGIS comes from conda-forge so the same
 # interpreter that runs the plugin also has zarr + icechunk available, which
