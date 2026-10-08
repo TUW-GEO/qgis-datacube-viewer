@@ -23,8 +23,13 @@ from __future__ import annotations
 #: ``metadata.txt``; ``scripts/build_plugin.py`` refuses to build if they drift.
 PLUGIN_NAME = "GEO-geo-zarr"
 
-__version__ = "0.1.0"
-__all__ = ["PLUGIN_NAME", "__version__", "classFactory"]
+#: No ``__version__`` here on purpose. The version comes from the git tag and is
+#: injected into the packaged ``metadata.txt`` by ``scripts/build_plugin.py``, so a
+#: literal in this file could only ever be a second, drifting answer -- it was
+#: already stale at "0.1.0" while metadata.txt said 0.2.1. Code that needs the
+#: version at runtime should read it from ``metadata.txt``, which is the file QGIS
+#: itself reads.
+__all__ = ["PLUGIN_NAME", "classFactory"]
 
 
 def classFactory(iface):

@@ -13,13 +13,53 @@ version 0.2.1  (geozarr_viewer/metadata.txt)
 It is MIT-licensed; `LICENSE` is the upstream file, kept as the license requires.
 Original author: Timothy Simons / EODC GmbH.
 
+That commit, `f01754e`, is the pristine import and is tagged `plugin-upstream-0.2.1`.
+Everything we have changed since is visible as:
+
+```bash
+git diff plugin-upstream-0.2.1 -- plugin/
+```
+
+## Deviations from upstream
+
+| Change | Why |
+| --- | --- |
+| Renamed to **GEO-geo-zarr** (`PLUGIN_NAME`, `metadata.txt`, log tag, dialog titles) | Three GeoZarr plugins can share one QGIS profile; two of them answered to nearly the same name. |
+| Its own named toolbar instead of `addRasterToolBarIcon()` | An icon on the shared Raster toolbar is indistinguishable from the other plugins'. |
+| **Version comes from the git tag**, not `metadata.txt` | See below. `metadata.txt` now holds the placeholder `0.0.0`. |
+| `__version__` removed from `geozarr_viewer/__init__.py` | It said `0.1.0` while `metadata.txt` said `0.2.1`. One source of truth, and it is not a Python literal. |
+| `.gitlab-ci.yml` at the repository root | Development happens on GitLab; upstream has no lint/test CI at all. |
+| `.github/workflows/release.yml` left in place but **inert** | It is EODC's path to plugins.qgis.org. GitLab never reads `.github/`, and it encodes the opposite versioning policy, so do not take it as current. |
+
+## Versioning
+
+The git tag is the version. Tag `v0.0.1` ships as `0.0.1`;
+`scripts/build_plugin.py` injects that into `metadata.txt` as the file goes into the
+zip. The working tree keeps `version=0.0.0` and the build **refuses to run** if
+someone hand-edits a real number in, because it would be silently overwritten.
+
+```bash
+python scripts/build_plugin.py                     # git describe -> 0.0.1.dev3+gabc1234
+python scripts/build_plugin.py --version 1.2.3     # explicit; this is what CI passes
+```
+
+Off-tag builds are marked (`.dev<n>+g<sha>`, plus `.dirty`) so an installable zip
+never looks like a release. Since the version is no longer visible in the tree, the
+build reads it back out of the finished archive and fails if it disagrees.
+
+A caveat that comes with this scheme: **a published version cannot be reused.** The
+package registry keys on name plus version, and a QGIS client that already installed
+`0.0.1` will not fetch a different `0.0.1`. Bump rather than retag.
+
 The copy is deliberate. Upstream is not expected to receive further commits, so
 there is no submodule, subtree or remote wired up here — these are just files we
 own now, and they are edited in place like any other code in this repository.
 
-Nothing was renamed or rewritten on the way in. Every path in the plugin's own
-tooling is relative to *this* directory (`REPO = Path(__file__).parent.parent` in
-`scripts/build_plugin.py`), so the tree works unmodified inside a subfolder. The
+Nothing was renamed or rewritten *on the way in* — the import was byte-for-byte, and
+the changes listed above came afterwards as ordinary commits. Every path in the
+plugin's own tooling is relative to *this* directory (`REPO =
+Path(__file__).parent.parent` in `scripts/build_plugin.py`), so the tree works
+unmodified inside a subfolder. The
 plugin keeps its own `pyproject.toml`, `pixi.toml`, `.gitignore` and `tests/`, which
 is what stops it colliding with the outer project's tooling:
 

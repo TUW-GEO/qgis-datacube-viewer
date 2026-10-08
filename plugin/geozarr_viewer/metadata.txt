@@ -10,7 +10,11 @@ name=GEO-geo-zarr
 qgisMinimumVersion=3.40
 qgisMaximumVersion=3.99
 description=Load and visualise GeoZarr-compliant Zarr stores, including Icechunk repositories and their multiscale pyramids.
-version=0.2.1
+; PLACEHOLDER. The version comes from the git tag (vX.Y.Z) and scripts/build_plugin.py
+; injects it here on the way into the .zip. Do not hand-edit a real number in: it
+; would be overwritten, and this file would then misreport what shipped. The build
+; refuses to run if this is anything other than 0.0.0. To release, tag the commit.
+version=0.0.0
 author=EODC GmbH
 email=timothy.simons@eodc.eu
 

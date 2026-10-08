@@ -54,6 +54,20 @@ Running the plugin's own test suite needs QGIS plus `pytest-qgis` via pixi, and
 `plugin/pixi.toml` declares `platforms = ["linux-64"]` only, so that part runs in
 WSL rather than natively on Windows.
 
+### Releasing the plugin
+
+The git tag is the version — `metadata.txt` carries the placeholder `0.0.0` and the
+build injects the real value, so the number lives in exactly one place:
+
+```bash
+git tag v0.0.2 && git push --follow-tags   # CI builds, publishes and makes a release
+```
+
+`v*` is the plugin's namespace, since the plugin is what this repository releases.
+Untagged builds self-identify as `0.0.1.dev3+gabc1234` (or `+dirty`), so an
+installable zip never passes for a release. A published version cannot be reused —
+bump rather than retag. Details in [plugin/UPSTREAM.md](plugin/UPSTREAM.md).
+
 ## Development setup
 
 Python 3.12+ is required. The project uses [uv](https://docs.astral.sh/uv/) for
