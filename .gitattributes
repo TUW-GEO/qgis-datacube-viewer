@@ -1,0 +1,7 @@
+# Normalize to LF in the repository; let Git decide the working-tree ending.
+* text=auto eol=lf
+
+*.png binary
+*.zip binary
+*.svg text eol=lf
+uv.lock linguist-generated=true -diff

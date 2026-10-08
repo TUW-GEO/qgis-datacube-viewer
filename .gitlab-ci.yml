@@ -1,0 +1,45 @@
+# CI for geo-zarr: lint and test the library.
+
+stages: [lint, test]
+
+default:
+  image: python:3.12-slim
+  cache:
+    key:
+      files: [pyproject.toml]
+    paths: [.cache/uv]
+
+variables:
+  UV_CACHE_DIR: .cache/uv
+  UV_LINK_MODE: copy
+
+.uv:
+  before_script:
+    - pip install --quiet --root-user-action=ignore uv
+    - uv sync --all-extras --group dev
+
+lint:
+  stage: lint
+  extends: .uv
+  script:
+    - uv run ruff check .
+    - uv run ruff format --check .
+    - uv run mypy
+
+test:
+  stage: test
+  extends: .uv
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.12", "3.13"]
+  image: python:${PYTHON_VERSION}-slim
+  script:
+    - uv run pytest --cov --cov-report=term --cov-report=xml:coverage.xml --junit-xml=report.xml
+  coverage: '/^TOTAL.+?(\d+\%)$/'
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
