@@ -135,6 +135,10 @@ class GeoZarrLoadDialog(QDialog):
         self._dataset: DatasetInfo | None = None
         self._axis_pickers: dict[str, _AxisPicker] = {}
         self._loading = False  # suppress _refresh while repopulating widgets
+        #: Store URI the rest of the dialog is currently describing. Compared against
+        #: the combo's text to tell "reconnect to the same store" (keep the dataset
+        #: and band selection) from "switch stores" (throw them away).
+        self._connected_uri = ""
 
         self._worker = StoreWorker(self)
         self._worker.failed.connect(self._on_worker_failed)
@@ -225,6 +229,12 @@ class GeoZarrLoadDialog(QDialog):
             "/path/to/icechunk_repo   or   s3://bucket/prefix"
         )
         self._uri_combo.lineEdit().returnPressed.connect(self._on_connect)
+        # Picking a recent store has to open it, not just fill the box in. Only
+        # `activated` -- it fires for a user's choice and not for the programmatic
+        # addItems/insertItem/setCurrentText this dialog does while populating,
+        # which with currentIndexChanged would reconnect on every repopulate and
+        # recurse through _on_refs_ready's insertItem.
+        self._uri_combo.activated.connect(lambda _index: self._on_connect())
 
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._on_browse)
@@ -429,6 +439,14 @@ class GeoZarrLoadDialog(QDialog):
         if not uri:
             self._show_messages("Enter the location of a store.", error=True)
             return
+        if not self._connect_button.isEnabled():
+            # Already opening something. One gesture can arrive twice -- pressing
+            # Return on a line edit whose text matches a list row emits both
+            # returnPressed and activated -- and _set_busy already tracks exactly
+            # this state on every success and failure path.
+            return
+        if uri != self._connected_uri:
+            self._forget_store()
         self._set_busy(True, f"Opening {uri} …")
 
         def job():
@@ -440,8 +458,31 @@ class GeoZarrLoadDialog(QDialog):
 
         self._worker.submit(job, self._on_refs_ready)
 
+    def _forget_store(self) -> None:
+        """Clear everything describing the previous store before opening another.
+
+        Without this, switching stores leaves the old store's datasets, bands and
+        axes on screen until the new one finishes opening -- and if it fails to
+        open, leaves them there permanently, under the new store's name and still
+        loadable. Blank is the honest state for "no store open".
+        """
+        self._connected_uri = ""
+        self._handle = None
+        self._store = None
+        self._dataset = None
+        self._refs = None
+        self._kind = None
+        self._add_button.setEnabled(False)
+        self._loading = True
+        try:
+            self._dataset_combo.clear()
+        finally:
+            self._loading = False
+        self._populate_dataset_widgets()  # manages _loading itself
+
     def _on_refs_ready(self, payload: Any) -> None:
         uri, kind, refs = payload
+        self._connected_uri = uri
         self._refs = refs
         self._kind = kind
         self._remember_recent(uri)

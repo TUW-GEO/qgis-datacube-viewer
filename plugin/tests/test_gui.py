@@ -71,6 +71,75 @@ def connected(dialog, store_uri: str):
     return dialog
 
 
+# ------------------------------------------------------------------ recents
+def test_choosing_a_recent_store_loads_it(dialog, store_uri: str) -> None:
+    """The dropdown used to fill the text box and nothing else.
+
+    Everything below the store row -- datasets, bands, axes -- kept describing
+    whatever was connected before, so picking a recent store looked like it had
+    worked while the form still belonged to another store.
+    """
+    dialog._uri_combo.clear()
+    dialog._uri_combo.addItem(store_uri)
+    dialog._uri_combo.setCurrentIndex(0)
+
+    dialog._uri_combo.activated.emit(0)  # what clicking the row does
+
+    assert pump(lambda: dialog._store is not None and dialog._dataset is not None)
+    assert dialog._connected_uri == store_uri
+    assert dialog._dataset_combo.count() > 0
+    assert dialog._band_list.count() > 0
+    assert dialog.build_uri().store_uri == store_uri
+
+
+def test_switching_stores_drops_the_previous_one(connected, store_uri, tmp_path) -> None:
+    """A failed open must not leave the old store's variables on screen.
+
+    They would still be checked, still be loadable, and now be labelled with the
+    new store's URI -- which is the one state worse than showing nothing.
+    """
+    assert connected._band_list.count() > 0
+    missing = str(tmp_path / "nowhere")
+    connected._uri_combo.addItem(missing)
+    connected._uri_combo.setCurrentText(missing)
+
+    connected._uri_combo.activated.emit(connected._uri_combo.count() - 1)
+    QgsApplication.processEvents()
+
+    assert connected._connected_uri == ""
+    assert connected._store is None
+    assert connected._band_list.count() == 0
+    assert connected._dataset_combo.count() == 0
+    assert not connected._add_button.isEnabled()
+
+
+def test_reconnecting_to_the_same_store_keeps_the_form(connected, store_uri: str) -> None:
+    """Re-picking the store already shown must not throw the selection away."""
+    datasets = connected._dataset_combo.count()
+    bands = connected._band_list.count()
+    assert connected._uri_combo.findText(store_uri) >= 0
+
+    connected._uri_combo.activated.emit(connected._uri_combo.findText(store_uri))
+    QgsApplication.processEvents()
+
+    assert connected._dataset_combo.count() == datasets
+    assert connected._band_list.count() == bands
+
+
+def test_a_connect_already_in_flight_is_not_started_twice(connected, store_uri: str) -> None:
+    """Return in the line edit and the list row can both fire for one gesture."""
+    connected._set_busy(True, "Opening …")
+    try:
+        before = connected._connected_uri
+        connected._uri_combo.setCurrentText(store_uri)
+        connected._on_connect()
+        # Nothing was reset and no job was submitted: the guard returned early.
+        assert connected._connected_uri == before
+        assert connected._store is not None
+    finally:
+        connected._set_busy(False)
+
+
 # ------------------------------------------------------------------- worker
 def test_worker_delivers_a_result(qgis_app) -> None:
     worker = StoreWorker()
