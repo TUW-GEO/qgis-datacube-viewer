@@ -7,9 +7,13 @@ from __future__ import annotations
 from .axis_panel import (
     AxisScrubber,
     GeoZarrCubeDock,
+    apply_stretch,
     axes_for_bands,
     axis_chunk_length,
+    has_auto_limits,
     is_geozarr_layer,
+    should_restretch,
+    slice_ranges,
 )
 from .dependencies import DependencyDialog
 from .load_dialog import GeoZarrLoadDialog
@@ -25,9 +29,13 @@ __all__ = [
     "PreviewResult",
     "SnapshotDialog",
     "StoreWorker",
+    "apply_stretch",
     "axes_for_bands",
     "axis_chunk_length",
+    "has_auto_limits",
     "is_geozarr_layer",
     "render_thumbnail",
+    "should_restretch",
+    "slice_ranges",
     "to_image",
 ]

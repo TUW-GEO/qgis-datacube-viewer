@@ -23,14 +23,21 @@ from geo_geozarr_viewer.core import AxisInfo, VariableInfo
 from geo_geozarr_viewer.gui.axis_panel import (
     DEBOUNCE_MS,
     DOCK_OBJECT_NAME,
+    LIMIT_CUMULATIVE_CUT,
+    LIMIT_NOT_SET,
+    LIMIT_STD_DEV,
     PANEL_TITLE,
     AxisScrubber,
     axes_for_bands,
     axis_chunk_length,
+    has_auto_limits,
     is_geozarr_layer,
+    should_restretch,
+    slice_ranges,
 )
 from geo_geozarr_viewer.layeruri import (
     INDEX_PROPERTY,
+    RESTRETCH_PROPERTY,
     LayerUri,
     decode_indices,
     decode_uri,
@@ -408,6 +415,140 @@ def test_a_project_restores_the_scrubbed_slice(qgis_app, fixture_info: FixtureIn
     # What GeoZarrViewerPlugin._on_layer_added does.
     assert reopened.dataProvider().setIndices(decode_indices(recorded))
     assert reopened.dataProvider().indices() == {"time": 1}
+
+
+# ------------------------------------------------------------------ restretch
+def _stretch_of(layer) -> tuple[float, float]:
+    enhancement = layer.renderer().contrastEnhancement()
+    return (enhancement.minimumValue(), enhancement.maximumValue())
+
+
+def _not_set_enum():
+    """The *typed* "not set" limit. setLimits refuses a plain int.
+
+    The plugin's LIMIT_* constants are ints on purpose, for reading limits() across
+    QGIS enum generations; writing still needs the real enum member.
+    """
+    from qgis.core import Qgis, QgsRasterMinMaxOrigin
+
+    enum = getattr(Qgis, "RasterRangeLimit", None)
+    if enum is not None and hasattr(enum, "NotSet"):
+        return enum.NotSet
+    return QgsRasterMinMaxOrigin.None_
+
+
+def _make_custom_range(layer, low: float = 10.0, high: float = 200.0) -> None:
+    """Put the layer in the state QGIS uses when a human types a range in.
+
+    The values stay inside uint8: QgsContrastEnhancement clamps to the band's
+    data type, so asking for -50 on the uint8 conv/red fixture silently gets 0
+    and the test would be measuring the clamp rather than the feature.
+    """
+    from qgis.core import QgsRasterMinMaxOrigin
+
+    origin = QgsRasterMinMaxOrigin()
+    origin.setLimits(_not_set_enum())
+    layer.renderer().setMinMaxOrigin(origin)
+    enhancement = layer.renderer().contrastEnhancement()
+    enhancement.setMinimumValue(low)
+    enhancement.setMaximumValue(high)
+
+
+def test_the_limit_constants_are_not_the_colliding_alias() -> None:
+    """QgsRasterMinMaxOrigin.None_ is bound to the *extent* enum, not the limit one.
+
+    Both are 0, so comparing the wrong one works by accident today. These constants
+    exist so the accident is not what the plugin relies on.
+    """
+    assert LIMIT_NOT_SET == 0
+    assert LIMIT_STD_DEV != LIMIT_NOT_SET
+    assert LIMIT_CUMULATIVE_CUT not in (LIMIT_NOT_SET, LIMIT_STD_DEV)
+
+
+def test_a_derived_range_counts_as_auto(layer) -> None:
+    assert has_auto_limits(layer)
+    assert should_restretch(layer)
+
+
+def test_a_typed_range_is_not_auto(layer) -> None:
+    _make_custom_range(layer)
+    assert not has_auto_limits(layer)
+    assert not should_restretch(layer)
+
+
+def test_the_property_overrides_either_way(layer) -> None:
+    layer.setCustomProperty(RESTRETCH_PROPERTY, "0")
+    assert not should_restretch(layer), "auto layer, frozen on purpose"
+    _make_custom_range(layer)
+    layer.setCustomProperty(RESTRETCH_PROPERTY, "1")
+    assert should_restretch(layer), "custom range, but asked to follow anyway"
+
+
+def test_slice_ranges_differ_between_slices(layer) -> None:
+    """The premise of the whole feature. If this is flat the fixture changed."""
+    view = layer.dataProvider().context.view()
+    first = slice_ranges(view.reader, view.bands, {"time": 0})
+    second = slice_ranges(view.reader, view.bands, {"time": 1})
+    assert first and second
+    assert first != second
+
+
+def test_an_unwritten_slice_reports_no_range(layer) -> None:
+    """conv time=0 is all fill, so there is nothing to stretch to.
+
+    Returning a range here would divide by zero in the renderer and paint the layer
+    one flat colour -- indistinguishable from the bug being fixed.
+    """
+    view = layer.dataProvider().context.view()
+    assert slice_ranges(view.reader, view.bands, {"time": 0}) == (None,)
+
+
+def test_scrubbing_moves_the_stretch(widget, layer) -> None:
+    before = _stretch_of(layer)
+    widget._rows[0].next.click()
+    assert _stretch_of(layer) != before
+
+
+def test_scrubbing_leaves_a_typed_range_alone(widget, layer) -> None:
+    """The user's explicit choice outranks following the data."""
+    _make_custom_range(layer)
+    widget.set_layer(layer)  # re-read the layer, as a selection change would
+    assert not widget._restretch.isChecked()
+    widget._rows[0].next.click()
+    assert _stretch_of(layer) == (10.0, 200.0)
+
+
+def test_unticking_freezes_the_stretch(widget, layer) -> None:
+    widget._restretch.setChecked(False)
+    frozen = _stretch_of(layer)
+    widget._rows[0].next.click()
+    assert _stretch_of(layer) == frozen
+    assert layer.customProperty(RESTRETCH_PROPERTY, "") == "0"
+
+
+def test_reticking_restretches_the_slice_already_shown(widget, layer) -> None:
+    """Otherwise the control looks inert until the next slider move."""
+    widget._rows[0].next.click()  # onto a slice with real data
+    widget._restretch.setChecked(False)
+    _make_custom_range(layer, 90.0, 95.0)  # a range the data does not fit in
+    widget._restretch.setChecked(True)
+    # Re-ticking recomputed from the slice on screen instead of waiting for the
+    # next slider move. The recomputed range is the data's, not the typed one.
+    assert _stretch_of(layer) != (90.0, 95.0)
+
+
+def test_the_checkbox_follows_the_selected_layer(qgis_app, layer, fixture_info) -> None:
+    flat = create_layer(LayerUri(store_uri=fixture_info.path, dataset="ngff"), "flat")
+    scrubber = AxisScrubber()
+    try:
+        scrubber.set_layer(layer)
+        assert not scrubber._restretch.isHidden()
+        scrubber.set_layer(flat)
+        assert scrubber._restretch.isHidden(), "nothing to scrub, nothing to rescale"
+        scrubber.set_layer(None)
+        assert scrubber._restretch.isHidden()
+    finally:
+        scrubber.deleteLater()
 
 
 # ------------------------------------------------------------------- chunk cost

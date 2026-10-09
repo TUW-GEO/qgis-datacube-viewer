@@ -40,10 +40,18 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Mapping, Sequence
 
-from qgis.core import QgsMapLayer, QgsRasterLayer
+import numpy as np
+from qgis.core import (
+    Qgis,
+    QgsContrastEnhancement,
+    QgsMapLayer,
+    QgsRasterLayer,
+    QgsRasterMinMaxOrigin,
+)
 from qgis.gui import QgsDockWidget
 from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtWidgets import (
+    QCheckBox,
     QFrame,
     QGridLayout,
     QLabel,
@@ -54,12 +62,44 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from ..core import AxisInfo, DatasetInfo
-from ..layeruri import INDEX_PROPERTY, PROVIDER_KEY, encode_indices
+from ..core import AxisInfo, DatasetInfo, DatasetReader, GeoZarrError
+from ..layeruri import (
+    INDEX_PROPERTY,
+    PROVIDER_KEY,
+    RESTRETCH_PROPERTY,
+    encode_indices,
+)
 
 #: Quiet period before a drag turns into a read. Long enough that a sweep across an
 #: axis is one read, short enough to feel like a direct response to the handle.
 DEBOUNCE_MS = 180
+
+
+def _limit(modern: str, legacy: str) -> int:
+    """One min/max *limits* value, as a plain int, across QGIS enum generations.
+
+    Needed because ``QgsRasterMinMaxOrigin.None_`` is bound to the wrong enum class:
+    on QGIS 3.44 it is a ``RasterRangeExtent``, while ``origin.limits()`` returns a
+    ``RasterRangeLimit``. Both are 0, so comparing them directly happens to work and
+    would keep working right up until one of the two enums is renumbered. Comparing
+    ints sidesteps it, and preferring ``Qgis.RasterRangeLimit`` keeps us on the names
+    QGIS actually maintains while still running on 3.40, which predates them.
+    """
+    enum = getattr(Qgis, "RasterRangeLimit", None)
+    if enum is not None and hasattr(enum, modern):
+        return int(getattr(enum, modern))
+    return int(getattr(QgsRasterMinMaxOrigin, legacy))
+
+
+#: "Nobody computed this; a human typed the range in."
+LIMIT_NOT_SET = _limit("NotSet", "None_")
+LIMIT_STD_DEV = _limit("StdDev", "StdDev")
+LIMIT_CUMULATIVE_CUT = _limit("CumulativeCut", "CumulativeCut")
+
+#: Overview size for the restretch sample. Deliberately small: this is recomputed
+#: on every slice change, and a stretch is a display decision, not a measurement.
+#: QGIS's own statistics default to "Estimated" for the same reason.
+STRETCH_SAMPLE = 256
 
 #: Dock title. Shown in View → Panels, so it carries the plugin's prefix.
 PANEL_TITLE = "GEO-GeoZarr cube"
@@ -134,6 +174,175 @@ def axis_chunk_length(dataset: DatasetInfo, axis: AxisInfo) -> int:
         if position is not None and position < len(variable.chunks):
             lengths.append(int(variable.chunks[position]))
     return max(lengths) if lengths else 1
+
+
+def has_auto_limits(layer: QgsRasterLayer) -> bool:
+    """Whether the layer's stretch is computed rather than typed in by the user.
+
+    ``QgsRasterMinMaxOrigin.limits()`` is QGIS's own record of this, and it answers
+    the question directly: ``None_`` means somebody entered a custom range, and any
+    other value (MinMax, StdDev, CumulativeCut) means QGIS derived it and is free to
+    derive it again. So the plugin does not need a notion of "auto" of its own.
+    """
+    renderer = layer.renderer()
+    if renderer is None:
+        return False
+    origin = renderer.minMaxOrigin()
+    return origin is not None and int(origin.limits()) != LIMIT_NOT_SET
+
+
+def should_restretch(layer: QgsRasterLayer) -> bool:
+    """Whether moving the slider should recompute this layer's stretch.
+
+    Defaults to :func:`has_auto_limits`, so a custom range is left alone and a
+    derived one follows the data -- which is what the user asked for and needs no
+    setting. :data:`RESTRETCH_PROPERTY` overrides it per layer, for the one case the
+    default gets wrong: holding a derived stretch still *on purpose*, so slices stay
+    visually comparable while scrubbing.
+    """
+    override = layer.customProperty(RESTRETCH_PROPERTY, "")
+    if str(override) != "":
+        return str(override).lower() in {"1", "true", "yes"}
+    return has_auto_limits(layer)
+
+
+def _limits_from(values: np.ndarray, origin: QgsRasterMinMaxOrigin) -> tuple[float, float]:
+    """Apply the layer's *own* chosen algorithm to a sample of the current slice.
+
+    Honouring ``origin.limits()`` rather than always taking min/max matters: someone
+    who set a 2-98 cumulative cut to tame outliers does not want plain min/max back
+    every time they nudge the slider.
+    """
+    limits = int(origin.limits()) if origin is not None else -1
+    if limits == LIMIT_STD_DEV:
+        factor = float(origin.stdDevFactor())
+        mean, deviation = float(values.mean()), float(values.std())
+        return mean - factor * deviation, mean + factor * deviation
+    if limits == LIMIT_CUMULATIVE_CUT:
+        lower = float(origin.cumulativeCutLower()) * 100.0
+        upper = float(origin.cumulativeCutUpper()) * 100.0
+        low, high = np.percentile(values.astype("float64"), (lower, upper))
+        return float(low), float(high)
+    return float(values.min()), float(values.max())
+
+
+def slice_ranges(
+    reader: DatasetReader,
+    bands: Sequence[str],
+    indices: Mapping[str, int],
+    origin: QgsRasterMinMaxOrigin | None = None,
+    sample: int = STRETCH_SAMPLE,
+) -> tuple[tuple[float, float] | None, ...]:
+    """Per-band ``(low, high)`` for the slice currently selected. None where unknown.
+
+    Computed from this plugin's own reader, *not* from
+    ``QgsRasterDataProvider.bandStatistics``. That method caches per
+    ``(band, stats, extent, sampleSize)`` and knows nothing about our axis indices,
+    so after a slice change it returns the previous slice's numbers -- and
+    ``QgsRasterLayer.setContrastEnhancement()``, which goes through it, would
+    faithfully re-apply them. Measured on the cube fixture: the real range moves from
+    -20.5..-3.1 at time 0 to -11.1..6.4 at time 3 while bandStatistics reports the
+    first pair throughout. The cache is not reachable from Python, so going around it
+    is the only option rather than a preference.
+    """
+    if not bands:
+        return ()
+    result = reader.read_overview(tuple(bands), max_size=sample, indices=dict(indices))
+    out: list[tuple[float, float] | None] = []
+    for position in range(len(bands)):
+        plane = result.data[position]
+        values = plane[result.mask] if result.mask.any() else plane.reshape(-1)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            out.append(None)  # a wholly unwritten slice has no range to show
+            continue
+        low, high = _limits_from(values, origin)
+        if not (np.isfinite(low) and np.isfinite(high)) or high <= low:
+            # A flat slice would divide by zero in the renderer, which paints the
+            # whole layer one colour and looks exactly like the bug being fixed.
+            out.append(None)
+            continue
+        out.append((low, high))
+    return tuple(out)
+
+
+def apply_stretch(layer: QgsRasterLayer, ranges: Sequence[tuple[float, float] | None]) -> bool:
+    """Push per-band ranges onto the layer's renderer. True if anything changed.
+
+    Covers the three renderers a GeoZarr layer actually gets: single-band grey (the
+    default for one variable), single-band pseudocolor (what anyone looking at
+    temperature switches to), and multiband colour (the composite opt-out). The
+    layer's ``minMaxOrigin`` is deliberately left untouched, so a derived stretch
+    stays derived and keeps following the slider.
+    """
+    renderer = layer.renderer()
+    if renderer is None or not ranges:
+        return False
+    first = ranges[0]
+
+    if hasattr(renderer, "setClassificationMin") and hasattr(renderer, "shader"):
+        if first is None:
+            return False
+        low, high = first
+        if (renderer.classificationMin(), renderer.classificationMax()) == (low, high):
+            return False
+        renderer.setClassificationMin(low)
+        renderer.setClassificationMax(high)
+        function = renderer.shader().rasterShaderFunction()
+        if function is not None and hasattr(function, "setMinimumValue"):
+            classes = len(function.colorRampItemList()) or 0
+            function.setMinimumValue(low)
+            function.setMaximumValue(high)
+            if hasattr(function, "classifyColorRamp"):
+                # Reclassifying is what moves the ramp stops; setting the bounds
+                # alone leaves every break where it was and changes nothing visible.
+                function.classifyColorRamp(classes, -1, layer.extent(), layer.dataProvider())
+        return True
+
+    if hasattr(renderer, "setContrastEnhancement") and hasattr(renderer, "contrastEnhancement"):
+        return _set_enhancement(
+            layer, renderer, 1, first, renderer.contrastEnhancement, renderer.setContrastEnhancement
+        )
+
+    changed = False
+    channels = (
+        ("redContrastEnhancement", "setRedContrastEnhancement", "redBand"),
+        ("greenContrastEnhancement", "setGreenContrastEnhancement", "greenBand"),
+        ("blueContrastEnhancement", "setBlueContrastEnhancement", "blueBand"),
+    )
+    for position, (getter, setter, band_getter) in enumerate(channels):
+        if not hasattr(renderer, setter) or position >= len(ranges):
+            continue
+        band = getattr(renderer, band_getter)() if hasattr(renderer, band_getter) else position + 1
+        changed |= _set_enhancement(
+            layer,
+            renderer,
+            band,
+            ranges[position],
+            getattr(renderer, getter),
+            getattr(renderer, setter),
+        )
+    return changed
+
+
+def _set_enhancement(layer, renderer, band, span, getter, setter) -> bool:
+    """Replace one channel's contrast enhancement, keeping its algorithm."""
+    if span is None:
+        return False
+    low, high = span
+    current = getter()
+    if current is not None and (current.minimumValue(), current.maximumValue()) == (low, high):
+        return False
+    provider = layer.dataProvider()
+    fresh = QgsContrastEnhancement(provider.dataType(band))
+    if current is not None:
+        fresh.setContrastEnhancementAlgorithm(current.contrastEnhancementAlgorithm())
+    else:
+        fresh.setContrastEnhancementAlgorithm(QgsContrastEnhancement.StretchToMinimumMaximum)
+    fresh.setMinimumValue(low)
+    fresh.setMaximumValue(high)
+    setter(fresh)
+    return True
 
 
 class AxisSliderRow:
@@ -246,6 +455,23 @@ class AxisScrubber(QWidget):
         #: Rebuilt per layer; everything axis-specific lives inside it, so that
         #: retargeting is one widget swap rather than a hunt for stale children.
         self._body: QWidget | None = None
+        self._restretch = QCheckBox("Rescale colours to each slice")
+        self._restretch.setToolTip(
+            "\n".join(
+                (
+                    "On: the layer's min/max is recomputed for every slice, using the",
+                    "algorithm the layer already uses (min/max, std dev or cumulative cut).",
+                    "",
+                    "Off: the stretch stays put, so slices stay visually comparable.",
+                    "",
+                    "Starts off for a layer whose range you typed in yourself, and on for",
+                    "one QGIS derived, which is what Layer Properties already records.",
+                )
+            )
+        )
+        self._restretch.toggled.connect(self._on_restretch_toggled)
+        self._outer.addWidget(self._restretch)
+
         self._status = QLabel()
         self._status.setWordWrap(True)
         self._outer.addWidget(self._status)
@@ -281,6 +507,7 @@ class AxisScrubber(QWidget):
         if self._layer is None:
             self._heading.setText("<i>No GeoZarr layer selected.</i>")
             self._status.setText("Select a GeoZarr layer in the Layers panel to scrub its axes.")
+            self._restretch.setVisible(False)
             return
 
         self._body = QWidget(self)
@@ -306,12 +533,53 @@ class AxisScrubber(QWidget):
             self._rows.append(row)
 
         self._load_from_layer()
+        # Reflect the layer rather than remember the widget: the checkbox follows the
+        # selection like everything else here, and its default is the layer's own
+        # min/max origin.
+        self._loading = True
+        try:
+            self._restretch.setChecked(should_restretch(self._layer))
+        finally:
+            self._loading = False
+        # Nothing to scrub means nothing to rescale on.
+        self._restretch.setVisible(bool(self._rows))
+
         if not self._rows:
             bands = self._bands()
             what = ", ".join(bands) if bands else "This dataset"
             self._status.setText(
                 f"{what} has no non-spatial dimensions — there is only one slice to show."
             )
+
+    def _on_restretch_toggled(self, checked: bool) -> None:
+        if self._loading or self._layer is None:
+            return
+        self._layer.setCustomProperty(RESTRETCH_PROPERTY, "1" if checked else "0")
+        # Turning it on should fix the slice already on screen, not just the next
+        # one -- otherwise the control looks like it did nothing.
+        if checked and self._restretch_now():
+            self._layer.triggerRepaint()
+
+    def _restretch_now(self) -> bool:
+        """Recompute and apply this layer's stretch for the current slice."""
+        context = getattr(self._provider, "context", None)
+        if context is None or self._layer is None:
+            return False
+        renderer = self._layer.renderer()
+        origin = renderer.minMaxOrigin() if renderer is not None else None
+        view = context.view()
+        try:
+            ranges = slice_ranges(view.reader, view.bands, view.indices, origin)
+        except GeoZarrError as exc:
+            # A failed stretch must not lose the slice change that triggered it.
+            self._status.setText(f"Could not rescale colours: {exc.detailed}")
+            return False
+        if not any(r is not None for r in ranges):
+            self._status.setText(
+                "This slice has no data to rescale to — the colours are unchanged."
+            )
+            return False
+        return apply_stretch(self._layer, ranges)
 
     def _dataset(self) -> DatasetInfo:
         return self._provider.context.dataset
@@ -403,29 +671,18 @@ class AxisScrubber(QWidget):
             return
         self._remember(self._provider.indices())
 
-        # TODO(contrast): the layer whites out when scrubbing an axis whose slices
-        # have different value ranges — reported against a temperature cube, where
-        # later dates render blank. QGIS computes the renderer's contrast
-        # enhancement (the band's min/max) *once*, from statistics gathered when the
-        # layer was created, i.e. from whichever slice was showing then. Changing
-        # the slice does not invalidate that, so a slice outside the original range
-        # clips to white. Nothing above is wrong: the provider is handing back the
-        # right pixels and the renderer is stretching them with stale limits.
-        #
-        # The fix is to restretch here, roughly:
-        #     layer.setContrastEnhancement(
-        #         QgsContrastEnhancement.StretchToMinimumMaximum,
-        #         QgsRasterMinMaxOrigin.MinMax, extent, sampleSize)
-        # but it must be opt-in, not automatic, because restretching every step
-        # makes a time series flicker in brightness and makes slices visually
-        # incomparable — exactly what someone comparing dates does not want. So:
-        # a tri-state on this panel ("stretch: fixed / per slice / whole cube"),
-        # defaulting to fixed limits computed over the whole axis rather than over
-        # one arbitrary slice. Computing cube-wide statistics needs a bounded scan
-        # (sample slices, not all of them), which is why this is a TODO and not a
-        # one-liner.
-        self._layer.triggerRepaint()
+        # The slice changed, so the old min/max describes data that is no longer on
+        # screen -- which is what made a layer white out when a later slice fell
+        # outside the first slice's range. Recompute before repainting so the paint
+        # uses the new stretch, and only when the layer's range is not one the user
+        # typed in; see should_restretch.
+        # _describe owns the status line, so it runs before the restretch rather
+        # than after -- otherwise it would wipe whatever _restretch_now complained
+        # about. Same trap as the error branch above.
         self._describe()
+        if should_restretch(self._layer):
+            self._restretch_now()
+        self._layer.triggerRepaint()
 
     def _remember(self, indices: Mapping[str, int]) -> None:
         """Record the slice on the layer so it survives a project save.

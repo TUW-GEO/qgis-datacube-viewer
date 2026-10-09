@@ -48,6 +48,12 @@ ERROR_PROPERTY = f"{PROVIDER_KEY}/error"
 #: project is read. See ``GeoZarrViewerPlugin._on_layer_added``.
 INDEX_PROPERTY = f"{PROVIDER_KEY}/indices"
 
+#: Layer custom property overriding whether the stretch follows the slice.
+#: Unset means "do what the layer's own min/max origin implies" -- see
+#: ``gui.axis_panel.should_restretch``. Set to "0"/"1" by the cube panel's
+#: checkbox, and persisted so the choice is per variable and survives a save.
+RESTRETCH_PROPERTY = f"{PROVIDER_KEY}/restretch"
+
 LEVEL_STRATEGIES: tuple[LevelStrategy, ...] = ("auto", "manual", "base", "coarsest")
 
 
