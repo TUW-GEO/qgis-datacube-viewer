@@ -178,6 +178,8 @@ def _make_stretch_effective(layer: QgsRasterLayer) -> bool:
         fresh.setContrastEnhancementAlgorithm(QgsContrastEnhancement.StretchToMinimumMaximum)
         setter(fresh)
         changed = True
+    if changed:
+        refresh_legend(layer)
     return changed
 
 
@@ -268,7 +270,42 @@ def slice_ranges(
     return tuple(out)
 
 
+def refresh_legend(layer: QgsRasterLayer) -> bool:
+    """Rebuild the layer's legend nodes so the colour bar matches the new range.
+
+    ``QgsColorRampLegendNode`` copies the ramp and its end labels when it is built,
+    so a changed shader does not reach the Layers panel until the nodes are rebuilt.
+    Neither ``triggerRepaint()`` nor ``emitStyleChanged()`` rebuilds them — verified
+    — because the renderer never changes identity here: the stretch is edited in
+    place rather than through ``setRenderer``, which is the change QGIS would
+    otherwise notice.
+
+    ``itemsChanged`` is the signal QGIS's own ``QgsDefaultRasterLegend`` emits for
+    exactly this, off ``rendererChanged``. Emitting it directly is the equivalent for
+    an in-place edit, and it reaches every model showing the layer — the Layers panel
+    and any print layout legend — without this module needing a ``QgisInterface``.
+    """
+    legend = layer.legend()
+    if legend is None:
+        return False
+    legend.itemsChanged.emit()
+    return True
+
+
 def apply_stretch(layer: QgsRasterLayer, ranges: Sequence[tuple[float, float] | None]) -> bool:
+    """Push per-band ranges onto the layer's renderer, and refresh its legend.
+
+    The legend refresh lives here rather than at the call sites because this is the
+    only place the ranges are mutated, so the colour bar cannot fall out of step
+    with the canvas however the stretch was triggered.
+    """
+    changed = _apply_ranges(layer, ranges)
+    if changed:
+        refresh_legend(layer)
+    return changed
+
+
+def _apply_ranges(layer: QgsRasterLayer, ranges: Sequence[tuple[float, float] | None]) -> bool:
     """Push per-band ranges onto the layer's renderer. True if anything changed.
 
     Covers the three renderers a GeoZarr layer actually gets: single-band grey (the

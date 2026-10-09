@@ -37,7 +37,13 @@ from .context import (
     pick_dataset,
 )
 from .raster_provider import GeoZarrRasterProvider, clone_count, qgis_data_type
-from .statistics import apply_stretch, cube_ranges, set_fixed_range, slice_ranges
+from .statistics import (
+    apply_stretch,
+    cube_ranges,
+    refresh_legend,
+    set_fixed_range,
+    slice_ranges,
+)
 
 __all__ = [
     "LEVEL_STRATEGIES",
@@ -60,6 +66,7 @@ __all__ = [
     "per_variable",
     "pick_dataset",
     "qgis_data_type",
+    "refresh_legend",
     "register_provider",
     "registry_supports_unregister",
     "set_fixed_range",

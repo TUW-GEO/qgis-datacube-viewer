@@ -19,6 +19,7 @@ from geo_geozarr_viewer.layeruri import LayerUri
 from geo_geozarr_viewer.provider import axes_for_bands, create_layer
 from geo_geozarr_viewer.provider.statistics import (
     LIMIT_NOT_SET,
+    apply_stretch,
     cube_ranges,
     current_stretch,
     has_auto_limits,
@@ -265,3 +266,28 @@ def test_byte_data_keeps_no_enhancement(layer) -> None:
         layer.renderer().contrastEnhancement().contrastEnhancementAlgorithm()
         == QgsContrastEnhancement.NoEnhancement
     ), "upgrading here would override a legitimate choice"
+
+
+# ------------------------------------------------------------------- the legend
+def test_applying_a_stretch_refreshes_the_legend(layer) -> None:
+    """The colour bar in the Layers panel is a separate cache from the canvas.
+
+    QgsColorRampLegendNode copies the ramp when it is built, and neither
+    triggerRepaint nor emitStyleChanged rebuilds it, because the stretch is edited
+    in place and the renderer never changes identity.
+    """
+    fired = []
+    layer.legend().itemsChanged.connect(lambda: fired.append(1))
+
+    assert apply_stretch(layer, ((10.0, 200.0),))
+    assert len(fired) == 1
+
+
+def test_an_unchanged_stretch_leaves_the_legend_alone(layer) -> None:
+    """Rebuilding legend nodes for nothing would churn the panel on every repaint."""
+    apply_stretch(layer, ((10.0, 200.0),))
+    fired = []
+    layer.legend().itemsChanged.connect(lambda: fired.append(1))
+
+    assert not apply_stretch(layer, ((10.0, 200.0),)), "same numbers, no change"
+    assert fired == []

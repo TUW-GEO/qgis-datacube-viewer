@@ -638,6 +638,29 @@ def test_the_panel_names_the_setting_that_ignores_the_range(widget, layer) -> No
         scrubber.deleteLater()
 
 
+def test_scrubbing_refreshes_the_legend_when_rescaling(widget, layer) -> None:
+    """Asked to rescale per slice, the colour bar has to follow the slice."""
+    widget._restretch.setChecked(True)
+    fired = []
+    layer.legend().itemsChanged.connect(lambda: fired.append(1))
+
+    widget._rows[0].next.click()
+
+    assert fired, "the legend never heard about the new range"
+
+
+def test_scrubbing_leaves_the_legend_alone_when_fixed(widget, layer) -> None:
+    """A fixed stretch means a fixed colour bar; rebuilding it would be churn."""
+    _load_as_the_plugin_does(widget, layer)
+    assert not widget._restretch.isChecked()
+    fired = []
+    layer.legend().itemsChanged.connect(lambda: fired.append(1))
+
+    widget._rows[0].next.click()
+
+    assert fired == []
+
+
 # ------------------------------------------------------------------- chunk cost
 def test_chunk_length_is_reported_per_axis(layer) -> None:
     dataset = layer.dataProvider().context.dataset
