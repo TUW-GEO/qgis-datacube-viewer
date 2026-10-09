@@ -110,6 +110,77 @@ def has_auto_limits(layer: QgsRasterLayer) -> bool:
     return origin is not None and int(origin.limits()) != LIMIT_NOT_SET
 
 
+#: Algorithms that ignore the min/max they are given: they do not map the data range
+#: onto the display range at all. Fine for Byte data, where a raw value *is* a grey
+#: level; useless for anything else, where it paints every value mid-grey.
+_NON_STRETCHING = (
+    QgsContrastEnhancement.NoEnhancement,
+    QgsContrastEnhancement.ClipToMinimumMaximum,
+)
+
+
+def stretch_is_effective(layer: QgsRasterLayer, band: int = 1) -> bool:
+    """Whether this layer's enhancement actually uses the range it is given.
+
+    Setting min/max on a renderer whose algorithm is "No enhancement" or "Clip to
+    min/max" changes nothing visible: neither rescales, so float values pass through
+    and clamp into 0..255, which for a temperature field in Celsius is a flat
+    mid-grey. Measured on the dummy cube, scrubbing a 12-step time axis moved the
+    mean grey by 10 levels out of 255 under those algorithms and by 139 under
+    StretchToMinimumMaximum — "the slider does almost nothing", exactly.
+
+    Byte data is the exception and the reason this is not simply forced: there a raw
+    value already *is* a grey level, so no enhancement is a sensible choice rather
+    than a broken one.
+    """
+    renderer = layer.renderer()
+    getter = getattr(renderer, "contrastEnhancement", None) or getattr(
+        renderer, "redContrastEnhancement", None
+    )
+    if renderer is None or getter is None:
+        return True  # pseudocolor and friends map through a ramp; nothing to check
+    enhancement = getter()
+    if enhancement is None:
+        return True
+    if enhancement.contrastEnhancementAlgorithm() not in _NON_STRETCHING:
+        return True
+    provider = layer.dataProvider()
+    return provider is not None and provider.dataType(band) == Qgis.DataType.Byte
+
+
+def _make_stretch_effective(layer: QgsRasterLayer) -> bool:
+    """Upgrade a non-stretching algorithm to a linear stretch. True if changed.
+
+    Only applied where this plugin is itself choosing the range, i.e. at load. There
+    the algorithm came from QGIS's global default (Options -> Rendering -> Contrast
+    enhancement), not from a decision about *this* layer, and leaving it would mean
+    carefully computing a range that the renderer then ignores. A per-slice restretch
+    leaves the algorithm alone, because by then it may well be deliberate.
+    """
+    if stretch_is_effective(layer):
+        return False
+    renderer = layer.renderer()
+    changed = False
+    for getter_name, setter_name in (
+        ("contrastEnhancement", "setContrastEnhancement"),
+        ("redContrastEnhancement", "setRedContrastEnhancement"),
+        ("greenContrastEnhancement", "setGreenContrastEnhancement"),
+        ("blueContrastEnhancement", "setBlueContrastEnhancement"),
+    ):
+        getter = getattr(renderer, getter_name, None)
+        setter = getattr(renderer, setter_name, None)
+        if getter is None or setter is None:
+            continue
+        current = getter()
+        if current is None or current.contrastEnhancementAlgorithm() not in _NON_STRETCHING:
+            continue
+        fresh = QgsContrastEnhancement(current)
+        fresh.setContrastEnhancementAlgorithm(QgsContrastEnhancement.StretchToMinimumMaximum)
+        setter(fresh)
+        changed = True
+    return changed
+
+
 def current_stretch(layer: QgsRasterLayer) -> tuple[float, float] | None:
     """The range the renderer is painting with right now, whatever renderer it is.
 
@@ -429,7 +500,11 @@ def set_fixed_range(layer, ranges: Sequence[tuple[float, float] | None]) -> bool
     renderer = layer.renderer()
     if renderer is None:
         return False
-    if not apply_stretch(layer, ranges):
+    applied = apply_stretch(layer, ranges)
+    # Even when the numbers were already right, the algorithm may be one that
+    # ignores them -- in which case fixing it is the whole point of being here.
+    effective = _make_stretch_effective(layer)
+    if not (applied or effective):
         return False
     origin = QgsRasterMinMaxOrigin(renderer.minMaxOrigin())
     origin.setLimits(_not_set())

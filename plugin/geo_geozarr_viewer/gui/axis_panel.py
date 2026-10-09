@@ -68,6 +68,7 @@ from ..provider.statistics import (
     current_stretch,
     has_auto_limits,
     slice_ranges,
+    stretch_is_effective,
 )
 
 #: Quiet period before a drag turns into a read. Long enough that a sweep across an
@@ -430,6 +431,15 @@ class AxisScrubber(QWidget):
             + (f" @ {view.snapshot_id[:8]}" if view.snapshot_id else "")
             + f"<br><span style='color: palette(mid);'>{colours}</span>"
         )
+        if not stretch_is_effective(self._layer):
+            # The range is set and ignored, so the slider looks broken while
+            # everything upstream of the renderer is fine. Say which knob it is.
+            self._status.setText(
+                "The layer's contrast enhancement is set to one that ignores "
+                "Min/Max, so every slice paints the same flat grey. Set it to "
+                "'Stretch to MinMax' in Symbology."
+            )
+            return
         costly = [r for r in self._rows if r.chunk_length > 1]
         if costly:
             names = ", ".join(f"{r.axis.name} ({r.chunk_length} deep)" for r in costly)

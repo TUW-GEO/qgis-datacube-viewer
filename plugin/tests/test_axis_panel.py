@@ -606,6 +606,38 @@ def test_the_readout_holds_still_when_fixed(widget, layer) -> None:
     assert widget._heading.text() == before
 
 
+def test_the_panel_names_the_setting_that_ignores_the_range(widget, layer) -> None:
+    """The slider looks broken while everything upstream of the renderer is fine.
+
+    Only reachable for non-Byte data, so this fakes the data type check by using a
+    float layer; the message is what matters.
+    """
+    from qgis.core import QgsContrastEnhancement
+
+    from geo_geozarr_viewer.provider import axes_for_bands, create_layer
+    from geo_geozarr_viewer.provider.statistics import stretch_is_effective
+
+    store = layer.dataProvider().context.uri.store_uri
+    floaty = create_layer(
+        LayerUri(store_uri=store, dataset="geo", bands=("temperature",)), "floaty"
+    )
+    enhancement = QgsContrastEnhancement(floaty.dataProvider().dataType(1))
+    enhancement.setContrastEnhancementAlgorithm(QgsContrastEnhancement.NoEnhancement)
+    floaty.renderer().setContrastEnhancement(enhancement)
+    assert not stretch_is_effective(floaty)
+
+    scrubber = AxisScrubber()
+    try:
+        scrubber.set_layer(floaty)
+        assert axes_for_bands(floaty.dataProvider().context.dataset, ("temperature",)) == (), (
+            "geo is 2-D, so this exercises _describe without any sliders"
+        )
+        scrubber._describe()
+        assert "ignores Min/Max" in scrubber._status.text()
+    finally:
+        scrubber.deleteLater()
+
+
 # ------------------------------------------------------------------- chunk cost
 def test_chunk_length_is_reported_per_axis(layer) -> None:
     dataset = layer.dataProvider().context.dataset

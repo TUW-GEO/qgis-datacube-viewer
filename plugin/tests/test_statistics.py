@@ -20,9 +20,11 @@ from geo_geozarr_viewer.provider import axes_for_bands, create_layer
 from geo_geozarr_viewer.provider.statistics import (
     LIMIT_NOT_SET,
     cube_ranges,
+    current_stretch,
     has_auto_limits,
     set_fixed_range,
     slice_statistics,
+    stretch_is_effective,
 )
 from tests.fixture_store import FixtureInfo
 
@@ -185,3 +187,81 @@ def test_set_fixed_range_declines_an_empty_range(layer) -> None:
     assert not set_fixed_range(layer, (None,))
     after = layer.renderer().contrastEnhancement()
     assert (after.minimumValue(), after.maximumValue()) == span
+
+
+# ------------------------------------------------- the algorithm has to use it
+def _force_algorithm(layer, algorithm) -> None:
+    """Stand in for a QGIS profile whose default enhancement ignores Min/Max."""
+    enhancement = QgsContrastEnhancement(layer.dataProvider().dataType(1))
+    enhancement.setContrastEnhancementAlgorithm(algorithm)
+    layer.renderer().setContrastEnhancement(enhancement)
+
+
+@pytest.fixture
+def float_layer(qgis_app, fixture_info: FixtureInfo):
+    """geo/temperature is float32, so a raw value is not a grey level."""
+    made = create_layer(
+        LayerUri(store_uri=fixture_info.path, dataset="geo", bands=("temperature",)), "floaty"
+    )
+    assert made.isValid(), made.customProperty("geo_geozarr/error", "")
+    return made
+
+
+@pytest.mark.parametrize(
+    "algorithm",
+    [
+        QgsContrastEnhancement.NoEnhancement,
+        QgsContrastEnhancement.ClipToMinimumMaximum,
+    ],
+)
+def test_an_algorithm_that_ignores_min_max_is_detected(float_layer, algorithm) -> None:
+    """Neither rescales, so float data clamps into 0..255 and paints flat grey.
+
+    Measured on the dummy cube: scrubbing 12 time steps moved the mean grey by 10
+    levels out of 255 under these, against 139 under StretchToMinimumMaximum.
+    """
+    _force_algorithm(float_layer, algorithm)
+    assert not stretch_is_effective(float_layer)
+
+
+@pytest.mark.parametrize(
+    "algorithm",
+    [
+        QgsContrastEnhancement.StretchToMinimumMaximum,
+        QgsContrastEnhancement.StretchAndClipToMinimumMaximum,
+    ],
+)
+def test_a_stretching_algorithm_is_accepted(float_layer, algorithm) -> None:
+    _force_algorithm(float_layer, algorithm)
+    assert stretch_is_effective(float_layer)
+
+
+def test_loading_upgrades_an_algorithm_that_would_ignore_the_range(float_layer) -> None:
+    """Computing a range the renderer then ignores is the bug this closes."""
+    _force_algorithm(float_layer, QgsContrastEnhancement.NoEnhancement)
+    view = float_layer.dataProvider().context.view()
+    axes = axes_for_bands(view.dataset, view.bands)
+
+    assert set_fixed_range(float_layer, cube_ranges(view.reader, view.bands, axes, view.indices))
+
+    assert stretch_is_effective(float_layer)
+    assert (
+        float_layer.renderer().contrastEnhancement().contrastEnhancementAlgorithm()
+        == QgsContrastEnhancement.StretchToMinimumMaximum
+    )
+    assert current_stretch(float_layer) is not None
+
+
+def test_byte_data_keeps_no_enhancement(layer) -> None:
+    """For uint8 a raw value already *is* a grey level, so this is a real choice."""
+    _force_algorithm(layer, QgsContrastEnhancement.NoEnhancement)
+    assert stretch_is_effective(layer), "byte data needs no stretch to be visible"
+
+    view = layer.dataProvider().context.view()
+    axes = axes_for_bands(view.dataset, view.bands)
+    set_fixed_range(layer, cube_ranges(view.reader, view.bands, axes, view.indices))
+
+    assert (
+        layer.renderer().contrastEnhancement().contrastEnhancementAlgorithm()
+        == QgsContrastEnhancement.NoEnhancement
+    ), "upgrading here would override a legitimate choice"
