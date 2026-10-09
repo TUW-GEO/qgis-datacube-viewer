@@ -22,6 +22,7 @@ from geo_geozarr_viewer.provider.statistics import (
     apply_stretch,
     cube_ranges,
     current_stretch,
+    fit_to_cube,
     has_auto_limits,
     set_fixed_range,
     slice_statistics,
@@ -291,3 +292,16 @@ def test_an_unchanged_stretch_leaves_the_legend_alone(layer) -> None:
 
     assert not apply_stretch(layer, ((10.0, 200.0),)), "same numbers, no change"
     assert fired == []
+
+
+def test_fit_to_cube_declines_a_2d_variable(qgis_app, fixture_info) -> None:
+    """No axis means no drift, so whatever QGIS worked out is already right."""
+    flat = create_layer(LayerUri(store_uri=fixture_info.path, dataset="ngff"), "flat")
+    assert fit_to_cube(flat) is False
+
+
+def test_fit_to_cube_fixes_the_range_it_computes(layer) -> None:
+    """Same action as the loader's default, so it has to leave the same state."""
+    assert fit_to_cube(layer)
+    assert not has_auto_limits(layer)
+    assert current_stretch(layer) is not None

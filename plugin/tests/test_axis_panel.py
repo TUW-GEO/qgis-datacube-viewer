@@ -661,6 +661,62 @@ def test_scrubbing_leaves_the_legend_alone_when_fixed(widget, layer) -> None:
     assert fired == []
 
 
+def test_the_button_returns_to_the_cube_range(widget, layer) -> None:
+    """Unticking freezes where you are; this is the way back to where you started.
+
+    Asserted against a deliberately wrong custom range rather than between slices:
+    the conv fixture's time axis is 2 long with slice 0 unwritten, so its cube range
+    and its only populated slice's range are the same number.
+    """
+    from geo_geozarr_viewer.provider import axes_for_bands
+    from geo_geozarr_viewer.provider.statistics import cube_ranges
+
+    view = layer.dataProvider().context.view()
+    expected = cube_ranges(
+        view.reader, view.bands, axes_for_bands(view.dataset, view.bands), view.indices
+    )[0]
+    _make_custom_range(layer, 90.0, 95.0)
+    widget.set_layer(layer)
+
+    widget._fit_cube.click()
+
+    low, high = _stretch_of(layer)
+    assert (low, high) != (90.0, 95.0)
+    assert low == pytest.approx(expected[0])
+    assert high == pytest.approx(expected[1])
+
+
+def test_the_button_turns_off_per_slice_rescaling(widget, layer) -> None:
+    """Otherwise the range it just set would be gone on the next slider move."""
+    widget._restretch.setChecked(True)
+    assert widget._restretch.isChecked()
+
+    widget._fit_cube.click()
+
+    assert not widget._restretch.isChecked()
+    assert layer.customProperty(RESTRETCH_PROPERTY, "") == "0"
+
+
+def test_the_button_leaves_the_range_fixed(widget, layer) -> None:
+    """A cube range QGIS might recompute is not a cube range for long."""
+    from geo_geozarr_viewer.provider.statistics import has_auto_limits
+
+    widget._fit_cube.click()
+    assert not has_auto_limits(layer)
+
+
+def test_the_button_is_hidden_when_there_is_no_cube(qgis_app, fixture_info) -> None:
+    flat = create_layer(LayerUri(store_uri=fixture_info.path, dataset="ngff"), "flat")
+    scrubber = AxisScrubber()
+    try:
+        scrubber.set_layer(flat)
+        assert scrubber._fit_cube.isHidden()
+        scrubber.set_layer(None)
+        assert scrubber._fit_cube.isHidden()
+    finally:
+        scrubber.deleteLater()
+
+
 # ------------------------------------------------------------------- chunk cost
 def test_chunk_length_is_reported_per_axis(layer) -> None:
     dataset = layer.dataProvider().context.dataset

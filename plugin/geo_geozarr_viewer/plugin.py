@@ -385,27 +385,18 @@ class GeoZarrViewerPlugin:
         Best-effort: a store that cannot be sampled still gets its layer, with
         whatever stretch QGIS worked out by itself.
         """
-        from .provider import axes_for_bands, cube_ranges, set_fixed_range
+        from .provider import fit_to_cube
 
-        provider = layer.dataProvider()
-        context = getattr(provider, "context", None)
-        if context is None:
-            return
-        view = context.view()
-        if not axes_for_bands(view.dataset, view.bands):
-            return  # nothing to scrub means nothing for the stretch to drift across
         try:
-            ranges = cube_ranges(
-                view.reader, view.bands, axes_for_bands(view.dataset, view.bands), view.indices
-            )
+            fitted = fit_to_cube(layer)
         except GeoZarrError as exc:
             self._log(f"Could not sample {layer.name()} for a stretch: {exc.detailed}", Qgis.Info)
             return
         except Exception as exc:
             self._log(f"Could not sample {layer.name()} for a stretch: {exc!r}", Qgis.Info)
             return
-        if set_fixed_range(layer, ranges):
-            self._log(f"Stretched {layer.name()} across its full cube: {ranges}", Qgis.Info)
+        if fitted:
+            self._log(f"Stretched {layer.name()} across its full cube", Qgis.Info)
 
     def _place(self, layers: list[QgsRasterLayer], uri: LayerUri, grouped: bool) -> None:
         """Add the layers to the project, in a group if there is more than one."""

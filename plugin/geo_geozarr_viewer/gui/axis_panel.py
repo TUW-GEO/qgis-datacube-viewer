@@ -44,10 +44,12 @@ from qgis.core import QgsMapLayer, QgsRasterLayer
 from qgis.gui import QgsDockWidget
 from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtWidgets import (
+    QApplication,
     QCheckBox,
     QFrame,
     QGridLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QSlider,
     QToolButton,
@@ -66,6 +68,7 @@ from ..provider.context import axes_for_bands
 from ..provider.statistics import (
     apply_stretch,
     current_stretch,
+    fit_to_cube,
     has_auto_limits,
     slice_ranges,
     stretch_is_effective,
@@ -269,6 +272,24 @@ class AxisScrubber(QWidget):
         self._restretch.toggled.connect(self._on_restretch_toggled)
         self._outer.addWidget(self._restretch)
 
+        # The way back. Unticking the box above freezes the range where it is,
+        # which is useful but is not the same as returning to the range the layer
+        # loaded with -- by then the per-slice ranges have overwritten it.
+        self._fit_cube = QPushButton("Rescale colours to whole cube")
+        self._fit_cube.setToolTip(
+            "\n".join(
+                (
+                    "Recompute the range over every slice and fix it there, which is",
+                    "what the layer loaded with. Also turns off per-slice rescaling,",
+                    "since that would overwrite it on the next move.",
+                    "",
+                    "Recomputed rather than remembered, so it follows a snapshot switch.",
+                )
+            )
+        )
+        self._fit_cube.clicked.connect(self._on_fit_cube)
+        self._outer.addWidget(self._fit_cube)
+
         self._status = QLabel()
         self._status.setWordWrap(True)
         self._outer.addWidget(self._status)
@@ -305,6 +326,7 @@ class AxisScrubber(QWidget):
             self._heading.setText("<i>No GeoZarr layer selected.</i>")
             self._status.setText("Select a GeoZarr layer in the Layers panel to scrub its axes.")
             self._restretch.setVisible(False)
+            self._fit_cube.setVisible(False)
             return
 
         self._body = QWidget(self)
@@ -341,8 +363,9 @@ class AxisScrubber(QWidget):
             self._restretch.setChecked(should_restretch(self._layer))
         finally:
             self._loading = False
-        # Nothing to scrub means nothing to rescale on.
+        # Nothing to scrub means nothing to rescale on, and no cube to span.
         self._restretch.setVisible(bool(self._rows))
+        self._fit_cube.setVisible(bool(self._rows))
 
         self._load_from_layer()
 
@@ -360,6 +383,34 @@ class AxisScrubber(QWidget):
         # Turning it on should fix the slice already on screen, not just the next
         # one -- otherwise the control looks like it did nothing.
         complaint = self._restretch_now() if checked else ""
+        self._describe()
+        if complaint:
+            self._status.setText(complaint)
+        self._layer.triggerRepaint()
+
+    def _on_fit_cube(self) -> None:
+        """Go back to a range computed over the whole cube."""
+        if self._layer is None:
+            return
+        # Turned off first, and quietly: with per-slice rescaling on, the range this
+        # is about to set would be replaced on the very next slider move.
+        self._loading = True
+        try:
+            self._restretch.setChecked(False)
+        finally:
+            self._loading = False
+        self._layer.setCustomProperty(RESTRETCH_PROPERTY, "0")
+
+        complaint = ""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            if not fit_to_cube(self._layer):
+                complaint = "Could not read enough of the cube to rescale."
+        except GeoZarrError as exc:
+            complaint = f"Could not rescale colours: {exc.detailed}"
+        finally:
+            QApplication.restoreOverrideCursor()
+
         self._describe()
         if complaint:
             self._status.setText(complaint)

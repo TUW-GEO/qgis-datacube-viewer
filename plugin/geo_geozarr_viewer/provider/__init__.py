@@ -40,6 +40,7 @@ from .raster_provider import GeoZarrRasterProvider, clone_count, qgis_data_type
 from .statistics import (
     apply_stretch,
     cube_ranges,
+    fit_to_cube,
     refresh_legend,
     set_fixed_range,
     slice_ranges,
@@ -62,6 +63,7 @@ __all__ = [
     "cube_ranges",
     "decode_uri",
     "default_indices",
+    "fit_to_cube",
     "is_registered",
     "per_variable",
     "pick_dataset",

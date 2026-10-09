@@ -40,6 +40,7 @@ from qgis.core import (
 )
 
 from ..core import AxisInfo, DatasetReader, GeoZarrError
+from .context import axes_for_bands
 
 #: Overview size for a statistics sample. A stretch is a display decision, not a
 #: measurement, and QGIS's own statistics default to "Estimated" for the same
@@ -547,6 +548,27 @@ def set_fixed_range(layer, ranges: Sequence[tuple[float, float] | None]) -> bool
     origin.setLimits(_not_set())
     renderer.setMinMaxOrigin(origin)
     return True
+
+
+def fit_to_cube(layer: QgsRasterLayer) -> bool:
+    """Stretch ``layer`` across its whole cube and fix the range there.
+
+    The loader's default and the panel's "whole cube" button are the same action,
+    so they are the same function. Both recompute rather than remembering the range
+    from load time, because a snapshot switch can change what the cube contains.
+
+    Returns False when there is nothing to do — a 2-D variable has no axis for the
+    stretch to drift along, so whatever QGIS worked out is already right.
+    """
+    provider = layer.dataProvider()
+    context = getattr(provider, "context", None)
+    if context is None:
+        return False
+    view = context.view()
+    axes = axes_for_bands(view.dataset, view.bands)
+    if not axes:
+        return False
+    return set_fixed_range(layer, cube_ranges(view.reader, view.bands, axes, view.indices))
 
 
 def _not_set():
