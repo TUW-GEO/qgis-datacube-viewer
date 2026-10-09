@@ -63,7 +63,12 @@ from ..layeruri import (
     encode_indices,
 )
 from ..provider.context import axes_for_bands
-from ..provider.statistics import apply_stretch, has_auto_limits, slice_ranges
+from ..provider.statistics import (
+    apply_stretch,
+    current_stretch,
+    has_auto_limits,
+    slice_ranges,
+)
 
 #: Quiet period before a drag turns into a read. Long enough that a sweep across an
 #: axis is one read, short enough to feel like a direct response to the handle.
@@ -323,7 +328,10 @@ class AxisScrubber(QWidget):
             row.next.clicked.connect(lambda _=False, r=row: self._step(r, +1))
             self._rows.append(row)
 
-        self._load_from_layer()
+        # The checkbox is settled *before* _load_from_layer, because _describe reads
+        # it to say whether the stretch is fixed or per-slice. Reversed, the readout
+        # describes the previously selected layer.
+        #
         # Reflect the layer rather than remember the widget: the checkbox follows the
         # selection like everything else here, and its default is the layer's own
         # min/max origin.
@@ -334,6 +342,8 @@ class AxisScrubber(QWidget):
             self._loading = False
         # Nothing to scrub means nothing to rescale on.
         self._restretch.setVisible(bool(self._rows))
+
+        self._load_from_layer()
 
         if not self._rows:
             bands = self._bands()
@@ -348,14 +358,22 @@ class AxisScrubber(QWidget):
         self._layer.setCustomProperty(RESTRETCH_PROPERTY, "1" if checked else "0")
         # Turning it on should fix the slice already on screen, not just the next
         # one -- otherwise the control looks like it did nothing.
-        if checked and self._restretch_now():
-            self._layer.triggerRepaint()
+        complaint = self._restretch_now() if checked else ""
+        self._describe()
+        if complaint:
+            self._status.setText(complaint)
+        self._layer.triggerRepaint()
 
-    def _restretch_now(self) -> bool:
-        """Recompute and apply this layer's stretch for the current slice."""
+    def _restretch_now(self) -> str:
+        """Recompute and apply this layer's stretch. Returns any complaint, or "".
+
+        Returns the message rather than writing it, because :meth:`_describe` owns
+        the status line and the two would otherwise race -- whichever ran second won,
+        and that ordering has already been got wrong twice here.
+        """
         context = getattr(self._provider, "context", None)
         if context is None or self._layer is None:
-            return False
+            return ""
         renderer = self._layer.renderer()
         origin = renderer.minMaxOrigin() if renderer is not None else None
         view = context.view()
@@ -363,14 +381,11 @@ class AxisScrubber(QWidget):
             ranges = slice_ranges(view.reader, view.bands, view.indices, origin)
         except GeoZarrError as exc:
             # A failed stretch must not lose the slice change that triggered it.
-            self._status.setText(f"Could not rescale colours: {exc.detailed}")
-            return False
+            return f"Could not rescale colours: {exc.detailed}"
         if not any(r is not None for r in ranges):
-            self._status.setText(
-                "This slice has no data to rescale to — the colours are unchanged."
-            )
-            return False
-        return apply_stretch(self._layer, ranges)
+            return "This slice has no data to rescale to — the colours are unchanged."
+        apply_stretch(self._layer, ranges)
+        return ""
 
     def _dataset(self) -> DatasetInfo:
         return self._provider.context.dataset
@@ -404,9 +419,16 @@ class AxisScrubber(QWidget):
         if context is None:
             return
         view = context.view()
+        stretch = current_stretch(self._layer)
+        if stretch is None:
+            colours = "colours: unknown range"
+        else:
+            how = "rescaled per slice" if self._restretch.isChecked() else "fixed"
+            colours = f"colours {stretch[0]:.3g} … {stretch[1]:.3g} ({how})"
         self._heading.setText(
             f"<b>{self._layer.name()}</b><br>{view.dataset.path or '/'} · {view.ref.label}"
             + (f" @ {view.snapshot_id[:8]}" if view.snapshot_id else "")
+            + f"<br><span style='color: palette(mid);'>{colours}</span>"
         )
         costly = [r for r in self._rows if r.chunk_length > 1]
         if costly:
@@ -467,12 +489,13 @@ class AxisScrubber(QWidget):
         # outside the first slice's range. Recompute before repainting so the paint
         # uses the new stretch, and only when the layer's range is not one the user
         # typed in; see should_restretch.
-        # _describe owns the status line, so it runs before the restretch rather
-        # than after -- otherwise it would wipe whatever _restretch_now complained
-        # about. Same trap as the error branch above.
+        # Restretch first so the readout in _describe shows the range that will
+        # actually be painted, then let _describe own the status line and only
+        # overwrite it with a complaint if there was one.
+        complaint = self._restretch_now() if should_restretch(self._layer) else ""
         self._describe()
-        if should_restretch(self._layer):
-            self._restretch_now()
+        if complaint:
+            self._status.setText(complaint)
         self._layer.triggerRepaint()
 
     def _remember(self, indices: Mapping[str, int]) -> None:

@@ -439,6 +439,22 @@ def _not_set_enum():
     return QgsRasterMinMaxOrigin.None_
 
 
+def _load_as_the_plugin_does(widget, layer) -> None:
+    """Put the layer in the state the loader leaves it in: a fixed cube-wide range.
+
+    The shared ``layer`` fixture calls create_layer directly, so it keeps the
+    stretch QGIS derived from slice 0 -- which other tests here depend on. These
+    tests are about what the *loaded* layer looks like, so they opt in.
+    """
+    from geo_geozarr_viewer.provider import axes_for_bands
+    from geo_geozarr_viewer.provider.statistics import cube_ranges, set_fixed_range
+
+    view = layer.dataProvider().context.view()
+    axes = axes_for_bands(view.dataset, view.bands)
+    assert set_fixed_range(layer, cube_ranges(view.reader, view.bands, axes, view.indices))
+    widget.set_layer(layer)  # re-read, as a selection change would
+
+
 def _make_custom_range(layer, low: float = 10.0, high: float = 200.0) -> None:
     """Put the layer in the state QGIS uses when a human types a range in.
 
@@ -551,6 +567,43 @@ def test_the_checkbox_follows_the_selected_layer(qgis_app, layer, fixture_info) 
         assert scrubber._restretch.isHidden()
     finally:
         scrubber.deleteLater()
+
+
+def test_the_panel_says_which_stretch_is_in_force(widget, layer) -> None:
+    """ "All my slices look the same" and "my slices look wrong" share a symptom.
+
+    One is per-slice rescaling working as asked, the other is a fixed range that
+    does not suit the data. Layer Properties cannot settle it -- it does not
+    live-refresh while open, so it shows a stale range -- so the panel says.
+    """
+    _load_as_the_plugin_does(widget, layer)
+    assert "fixed" in widget._heading.text()
+    widget._restretch.setChecked(True)
+    assert "rescaled per slice" in widget._heading.text()
+
+
+def test_the_readout_reports_the_range_actually_in_force(widget, layer) -> None:
+    """The readout is only worth having if it cannot drift from the renderer.
+
+    Asserted against the renderer rather than between two slices: the conv fixture's
+    time axis is 2 long and slice 0 is unwritten, so there is no pair of slices here
+    with different ranges to compare.
+    """
+    from geo_geozarr_viewer.provider.statistics import current_stretch
+
+    widget._restretch.setChecked(True)
+    widget._rows[0].next.click()
+    low, high = current_stretch(layer)
+    assert f"{low:.3g}" in widget._heading.text()
+    assert f"{high:.3g}" in widget._heading.text()
+
+
+def test_the_readout_holds_still_when_fixed(widget, layer) -> None:
+    _load_as_the_plugin_does(widget, layer)
+    assert not widget._restretch.isChecked()
+    before = widget._heading.text()
+    widget._rows[0].next.click()
+    assert widget._heading.text() == before
 
 
 # ------------------------------------------------------------------- chunk cost

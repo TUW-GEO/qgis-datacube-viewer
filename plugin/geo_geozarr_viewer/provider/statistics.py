@@ -110,6 +110,33 @@ def has_auto_limits(layer: QgsRasterLayer) -> bool:
     return origin is not None and int(origin.limits()) != LIMIT_NOT_SET
 
 
+def current_stretch(layer: QgsRasterLayer) -> tuple[float, float] | None:
+    """The range the renderer is painting with right now, whatever renderer it is.
+
+    Worth surfacing in the UI: with a fixed cube-wide range and per-slice rescaling
+    both plausible, "my slices all look the same" and "my slices look wrong" have the
+    same symptom and opposite causes, and the only way to tell them apart used to be
+    to open Layer Properties -- which does not live-refresh while it is open, so it
+    cheerfully shows a stale range.
+    """
+    renderer = layer.renderer()
+    if renderer is None:
+        return None
+    if hasattr(renderer, "classificationMin"):
+        low, high = renderer.classificationMin(), renderer.classificationMax()
+    else:
+        getter = getattr(renderer, "contrastEnhancement", None) or getattr(
+            renderer, "redContrastEnhancement", None
+        )
+        enhancement = getter() if getter is not None else None
+        if enhancement is None:
+            return None
+        low, high = enhancement.minimumValue(), enhancement.maximumValue()
+    if not (np.isfinite(low) and np.isfinite(high)):
+        return None
+    return float(low), float(high)
+
+
 def _limits_from(values: np.ndarray, origin: QgsRasterMinMaxOrigin) -> tuple[float, float]:
     """Apply the layer's *own* chosen algorithm to a sample of the current slice.
 
