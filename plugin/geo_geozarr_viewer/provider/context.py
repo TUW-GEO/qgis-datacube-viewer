@@ -16,10 +16,11 @@ mixed-age tiles at worst, never a torn read.
 from __future__ import annotations
 
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from ..core import (
+    AxisInfo,
     CrsInfo,
     DatasetInfo,
     DatasetReader,
@@ -122,6 +123,35 @@ def default_indices(
         value = int(requested.get(axis.name, 0))
         out[axis.name] = max(0, min(value, axis.size - 1))
     return out
+
+
+def axes_for_bands(dataset: DatasetInfo, bands: Sequence[str]) -> tuple[AxisInfo, ...]:
+    """The dataset axes that ``bands`` actually have, in dataset order.
+
+    ``DatasetInfo.axes`` is the union over every variable in the dataset, which is
+    the right answer for describing a store and the wrong one for driving a single
+    layer. An elevation grid stored beside a temperature time series has no time
+    dimension, so a time slider on an elevation layer moves nothing: the reader
+    indexes each variable by *its own* dims and ignores an index for a dim the
+    variable does not have (see ``DatasetReader._index_tuple``). Harmless, and a
+    control that is visibly harmless is worse than no control -- it invites the
+    user to conclude the layer is broken.
+
+    Union rather than intersection across ``bands``, matching what the reader does:
+    a composite whose bands disagree still gets a slider for an axis only some of
+    them have, and moving it moves those bands and leaves the others alone.
+
+    Falls back to the dataset's own axes when ``bands`` is empty or names nothing
+    the dataset has, rather than silently showing no sliders at all.
+    """
+    dims: set[str] = set()
+    for name in bands:
+        variable = dataset.base.variables.get(name)
+        if variable is not None:
+            dims.update(variable.dims)
+    if not dims:
+        return dataset.axes
+    return tuple(axis for axis in dataset.axes if axis.name in dims)
 
 
 def pick_dataset(store: StoreInfo, path: str) -> DatasetInfo:

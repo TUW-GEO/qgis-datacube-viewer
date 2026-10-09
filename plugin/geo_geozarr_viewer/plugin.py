@@ -27,7 +27,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QPushButton
 
 from . import PLUGIN_NAME
-from .core import REMOTE_PACKAGES, SUPPRESS_KEY
+from .core import REMOTE_PACKAGES, SUPPRESS_KEY, GeoZarrError
 from .layeruri import ERROR_PROPERTY, INDEX_PROPERTY, PROVIDER_KEY, LayerUri
 
 #: Tab name in the QGIS log panel. Same as the display name so that a message is
@@ -360,11 +360,52 @@ class GeoZarrViewerPlugin:
                 failures.append(f"{uri.bands[0] if uri.bands else uri.summary}: {detail}")
                 self._log(f"Layer creation failed for {uri.summary}: {detail}", Qgis.Critical)
                 continue
+            self._fix_stretch(layer)
             made.append(layer)
 
         if made:
             self._place(made, requests[0], grouped=grouped and len(made) > 1)
         self._report(made, failures, requests[0])
+
+    def _fix_stretch(self, layer: QgsRasterLayer) -> None:
+        """Stretch the layer over the whole cube rather than over one slice.
+
+        Left to itself, QGIS computes the contrast enhancement from whichever slice
+        happened to be showing when the layer was built. Scrub to a slice whose
+        values fall outside that range and the layer washes out; scrub with per-slice
+        rescaling on instead and the brightness flickers, which makes two dates
+        impossible to compare by eye. A range taken across the axis has neither
+        problem, so it is the default.
+
+        Recorded as a *user-defined* range, which is QGIS's own way of saying "these
+        numbers were chosen, do not recompute them" -- so nothing downstream quietly
+        replaces it, and the cube panel's "Rescale colours to each slice" starts off
+        and becomes a deliberate choice.
+
+        Best-effort: a store that cannot be sampled still gets its layer, with
+        whatever stretch QGIS worked out by itself.
+        """
+        from .provider import axes_for_bands, cube_ranges, set_fixed_range
+
+        provider = layer.dataProvider()
+        context = getattr(provider, "context", None)
+        if context is None:
+            return
+        view = context.view()
+        if not axes_for_bands(view.dataset, view.bands):
+            return  # nothing to scrub means nothing for the stretch to drift across
+        try:
+            ranges = cube_ranges(
+                view.reader, view.bands, axes_for_bands(view.dataset, view.bands), view.indices
+            )
+        except GeoZarrError as exc:
+            self._log(f"Could not sample {layer.name()} for a stretch: {exc.detailed}", Qgis.Info)
+            return
+        except Exception as exc:
+            self._log(f"Could not sample {layer.name()} for a stretch: {exc!r}", Qgis.Info)
+            return
+        if set_fixed_range(layer, ranges):
+            self._log(f"Stretched {layer.name()} across its full cube: {ranges}", Qgis.Info)
 
     def _place(self, layers: list[QgsRasterLayer], uri: LayerUri, grouped: bool) -> None:
         """Add the layers to the project, in a group if there is more than one."""

@@ -38,16 +38,9 @@ Three things make the scrubbing feel like a slider rather than a reload:
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
-import numpy as np
-from qgis.core import (
-    Qgis,
-    QgsContrastEnhancement,
-    QgsMapLayer,
-    QgsRasterLayer,
-    QgsRasterMinMaxOrigin,
-)
+from qgis.core import QgsMapLayer, QgsRasterLayer
 from qgis.gui import QgsDockWidget
 from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtWidgets import (
@@ -62,39 +55,20 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from ..core import AxisInfo, DatasetInfo, DatasetReader, GeoZarrError
+from ..core import AxisInfo, DatasetInfo, GeoZarrError
 from ..layeruri import (
     INDEX_PROPERTY,
     PROVIDER_KEY,
     RESTRETCH_PROPERTY,
     encode_indices,
 )
+from ..provider.context import axes_for_bands
+from ..provider.statistics import apply_stretch, has_auto_limits, slice_ranges
 
 #: Quiet period before a drag turns into a read. Long enough that a sweep across an
 #: axis is one read, short enough to feel like a direct response to the handle.
 DEBOUNCE_MS = 180
 
-
-def _limit(modern: str, legacy: str) -> int:
-    """One min/max *limits* value, as a plain int, across QGIS enum generations.
-
-    Needed because ``QgsRasterMinMaxOrigin.None_`` is bound to the wrong enum class:
-    on QGIS 3.44 it is a ``RasterRangeExtent``, while ``origin.limits()`` returns a
-    ``RasterRangeLimit``. Both are 0, so comparing them directly happens to work and
-    would keep working right up until one of the two enums is renumbered. Comparing
-    ints sidesteps it, and preferring ``Qgis.RasterRangeLimit`` keeps us on the names
-    QGIS actually maintains while still running on 3.40, which predates them.
-    """
-    enum = getattr(Qgis, "RasterRangeLimit", None)
-    if enum is not None and hasattr(enum, modern):
-        return int(getattr(enum, modern))
-    return int(getattr(QgsRasterMinMaxOrigin, legacy))
-
-
-#: "Nobody computed this; a human typed the range in."
-LIMIT_NOT_SET = _limit("NotSet", "None_")
-LIMIT_STD_DEV = _limit("StdDev", "StdDev")
-LIMIT_CUMULATIVE_CUT = _limit("CumulativeCut", "CumulativeCut")
 
 #: Overview size for the restretch sample. Deliberately small: this is recomputed
 #: on every slice change, and a stretch is a display decision, not a measurement.
@@ -132,35 +106,6 @@ def is_geozarr_layer(layer: QgsMapLayer | None) -> bool:
     return provider is not None and hasattr(provider, "setIndices")
 
 
-def axes_for_bands(dataset: DatasetInfo, bands: Sequence[str]) -> tuple[AxisInfo, ...]:
-    """The dataset axes that ``bands`` actually have, in dataset order.
-
-    ``DatasetInfo.axes`` is the union over every variable in the dataset, which is
-    the right answer for describing a store and the wrong one for driving a single
-    layer. An elevation grid stored beside a temperature time series has no time
-    dimension, so a time slider on an elevation layer moves nothing: the reader
-    indexes each variable by *its own* dims and ignores an index for a dim the
-    variable does not have (see ``DatasetReader._index_tuple``). Harmless, and a
-    control that is visibly harmless is worse than no control -- it invites the
-    user to conclude the layer is broken.
-
-    Union rather than intersection across ``bands``, matching what the reader does:
-    a composite whose bands disagree still gets a slider for an axis only some of
-    them have, and moving it moves those bands and leaves the others alone.
-
-    Falls back to the dataset's own axes when ``bands`` is empty or names nothing
-    the dataset has, rather than silently showing no sliders at all.
-    """
-    dims: set[str] = set()
-    for name in bands:
-        variable = dataset.base.variables.get(name)
-        if variable is not None:
-            dims.update(variable.dims)
-    if not dims:
-        return dataset.axes
-    return tuple(axis for axis in dataset.axes if axis.name in dims)
-
-
 def axis_chunk_length(dataset: DatasetInfo, axis: AxisInfo) -> int:
     """How many slices along ``axis`` share a chunk, over the bands at base level.
 
@@ -176,21 +121,6 @@ def axis_chunk_length(dataset: DatasetInfo, axis: AxisInfo) -> int:
     return max(lengths) if lengths else 1
 
 
-def has_auto_limits(layer: QgsRasterLayer) -> bool:
-    """Whether the layer's stretch is computed rather than typed in by the user.
-
-    ``QgsRasterMinMaxOrigin.limits()`` is QGIS's own record of this, and it answers
-    the question directly: ``None_`` means somebody entered a custom range, and any
-    other value (MinMax, StdDev, CumulativeCut) means QGIS derived it and is free to
-    derive it again. So the plugin does not need a notion of "auto" of its own.
-    """
-    renderer = layer.renderer()
-    if renderer is None:
-        return False
-    origin = renderer.minMaxOrigin()
-    return origin is not None and int(origin.limits()) != LIMIT_NOT_SET
-
-
 def should_restretch(layer: QgsRasterLayer) -> bool:
     """Whether moving the slider should recompute this layer's stretch.
 
@@ -204,145 +134,6 @@ def should_restretch(layer: QgsRasterLayer) -> bool:
     if str(override) != "":
         return str(override).lower() in {"1", "true", "yes"}
     return has_auto_limits(layer)
-
-
-def _limits_from(values: np.ndarray, origin: QgsRasterMinMaxOrigin) -> tuple[float, float]:
-    """Apply the layer's *own* chosen algorithm to a sample of the current slice.
-
-    Honouring ``origin.limits()`` rather than always taking min/max matters: someone
-    who set a 2-98 cumulative cut to tame outliers does not want plain min/max back
-    every time they nudge the slider.
-    """
-    limits = int(origin.limits()) if origin is not None else -1
-    if limits == LIMIT_STD_DEV:
-        factor = float(origin.stdDevFactor())
-        mean, deviation = float(values.mean()), float(values.std())
-        return mean - factor * deviation, mean + factor * deviation
-    if limits == LIMIT_CUMULATIVE_CUT:
-        lower = float(origin.cumulativeCutLower()) * 100.0
-        upper = float(origin.cumulativeCutUpper()) * 100.0
-        low, high = np.percentile(values.astype("float64"), (lower, upper))
-        return float(low), float(high)
-    return float(values.min()), float(values.max())
-
-
-def slice_ranges(
-    reader: DatasetReader,
-    bands: Sequence[str],
-    indices: Mapping[str, int],
-    origin: QgsRasterMinMaxOrigin | None = None,
-    sample: int = STRETCH_SAMPLE,
-) -> tuple[tuple[float, float] | None, ...]:
-    """Per-band ``(low, high)`` for the slice currently selected. None where unknown.
-
-    Computed from this plugin's own reader, *not* from
-    ``QgsRasterDataProvider.bandStatistics``. That method caches per
-    ``(band, stats, extent, sampleSize)`` and knows nothing about our axis indices,
-    so after a slice change it returns the previous slice's numbers -- and
-    ``QgsRasterLayer.setContrastEnhancement()``, which goes through it, would
-    faithfully re-apply them. Measured on the cube fixture: the real range moves from
-    -20.5..-3.1 at time 0 to -11.1..6.4 at time 3 while bandStatistics reports the
-    first pair throughout. The cache is not reachable from Python, so going around it
-    is the only option rather than a preference.
-    """
-    if not bands:
-        return ()
-    result = reader.read_overview(tuple(bands), max_size=sample, indices=dict(indices))
-    out: list[tuple[float, float] | None] = []
-    for position in range(len(bands)):
-        plane = result.data[position]
-        values = plane[result.mask] if result.mask.any() else plane.reshape(-1)
-        values = values[np.isfinite(values)]
-        if values.size == 0:
-            out.append(None)  # a wholly unwritten slice has no range to show
-            continue
-        low, high = _limits_from(values, origin)
-        if not (np.isfinite(low) and np.isfinite(high)) or high <= low:
-            # A flat slice would divide by zero in the renderer, which paints the
-            # whole layer one colour and looks exactly like the bug being fixed.
-            out.append(None)
-            continue
-        out.append((low, high))
-    return tuple(out)
-
-
-def apply_stretch(layer: QgsRasterLayer, ranges: Sequence[tuple[float, float] | None]) -> bool:
-    """Push per-band ranges onto the layer's renderer. True if anything changed.
-
-    Covers the three renderers a GeoZarr layer actually gets: single-band grey (the
-    default for one variable), single-band pseudocolor (what anyone looking at
-    temperature switches to), and multiband colour (the composite opt-out). The
-    layer's ``minMaxOrigin`` is deliberately left untouched, so a derived stretch
-    stays derived and keeps following the slider.
-    """
-    renderer = layer.renderer()
-    if renderer is None or not ranges:
-        return False
-    first = ranges[0]
-
-    if hasattr(renderer, "setClassificationMin") and hasattr(renderer, "shader"):
-        if first is None:
-            return False
-        low, high = first
-        if (renderer.classificationMin(), renderer.classificationMax()) == (low, high):
-            return False
-        renderer.setClassificationMin(low)
-        renderer.setClassificationMax(high)
-        function = renderer.shader().rasterShaderFunction()
-        if function is not None and hasattr(function, "setMinimumValue"):
-            classes = len(function.colorRampItemList()) or 0
-            function.setMinimumValue(low)
-            function.setMaximumValue(high)
-            if hasattr(function, "classifyColorRamp"):
-                # Reclassifying is what moves the ramp stops; setting the bounds
-                # alone leaves every break where it was and changes nothing visible.
-                function.classifyColorRamp(classes, -1, layer.extent(), layer.dataProvider())
-        return True
-
-    if hasattr(renderer, "setContrastEnhancement") and hasattr(renderer, "contrastEnhancement"):
-        return _set_enhancement(
-            layer, renderer, 1, first, renderer.contrastEnhancement, renderer.setContrastEnhancement
-        )
-
-    changed = False
-    channels = (
-        ("redContrastEnhancement", "setRedContrastEnhancement", "redBand"),
-        ("greenContrastEnhancement", "setGreenContrastEnhancement", "greenBand"),
-        ("blueContrastEnhancement", "setBlueContrastEnhancement", "blueBand"),
-    )
-    for position, (getter, setter, band_getter) in enumerate(channels):
-        if not hasattr(renderer, setter) or position >= len(ranges):
-            continue
-        band = getattr(renderer, band_getter)() if hasattr(renderer, band_getter) else position + 1
-        changed |= _set_enhancement(
-            layer,
-            renderer,
-            band,
-            ranges[position],
-            getattr(renderer, getter),
-            getattr(renderer, setter),
-        )
-    return changed
-
-
-def _set_enhancement(layer, renderer, band, span, getter, setter) -> bool:
-    """Replace one channel's contrast enhancement, keeping its algorithm."""
-    if span is None:
-        return False
-    low, high = span
-    current = getter()
-    if current is not None and (current.minimumValue(), current.maximumValue()) == (low, high):
-        return False
-    provider = layer.dataProvider()
-    fresh = QgsContrastEnhancement(provider.dataType(band))
-    if current is not None:
-        fresh.setContrastEnhancementAlgorithm(current.contrastEnhancementAlgorithm())
-    else:
-        fresh.setContrastEnhancementAlgorithm(QgsContrastEnhancement.StretchToMinimumMaximum)
-    fresh.setMinimumValue(low)
-    fresh.setMaximumValue(high)
-    setter(fresh)
-    return True
 
 
 class AxisSliderRow:

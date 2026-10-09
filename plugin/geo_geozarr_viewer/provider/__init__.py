@@ -28,8 +28,16 @@ from ..layeruri import (
     decode_uri,
     per_variable,
 )
-from .context import LayerContext, LayerView, choose_bands, default_indices, pick_dataset
+from .context import (
+    LayerContext,
+    LayerView,
+    axes_for_bands,
+    choose_bands,
+    default_indices,
+    pick_dataset,
+)
 from .raster_provider import GeoZarrRasterProvider, clone_count, qgis_data_type
+from .statistics import apply_stretch, cube_ranges, set_fixed_range, slice_ranges
 
 __all__ = [
     "LEVEL_STRATEGIES",
@@ -40,9 +48,12 @@ __all__ = [
     "LayerUri",
     "LayerView",
     "UriError",
+    "apply_stretch",
+    "axes_for_bands",
     "choose_bands",
     "clone_count",
     "create_layer",
+    "cube_ranges",
     "decode_uri",
     "default_indices",
     "is_registered",
@@ -51,6 +62,8 @@ __all__ = [
     "qgis_data_type",
     "register_provider",
     "registry_supports_unregister",
+    "set_fixed_range",
+    "slice_ranges",
     "unregister_provider",
 ]
 

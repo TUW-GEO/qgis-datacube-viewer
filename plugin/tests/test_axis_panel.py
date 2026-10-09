@@ -23,17 +23,12 @@ from geo_geozarr_viewer.core import AxisInfo, VariableInfo
 from geo_geozarr_viewer.gui.axis_panel import (
     DEBOUNCE_MS,
     DOCK_OBJECT_NAME,
-    LIMIT_CUMULATIVE_CUT,
-    LIMIT_NOT_SET,
-    LIMIT_STD_DEV,
     PANEL_TITLE,
     AxisScrubber,
     axes_for_bands,
     axis_chunk_length,
-    has_auto_limits,
     is_geozarr_layer,
     should_restretch,
-    slice_ranges,
 )
 from geo_geozarr_viewer.layeruri import (
     INDEX_PROPERTY,
@@ -44,6 +39,13 @@ from geo_geozarr_viewer.layeruri import (
     encode_indices,
 )
 from geo_geozarr_viewer.provider import create_layer
+from geo_geozarr_viewer.provider.statistics import (
+    LIMIT_CUMULATIVE_CUT,
+    LIMIT_NOT_SET,
+    LIMIT_STD_DEV,
+    has_auto_limits,
+    slice_ranges,
+)
 from tests.fixture_store import FixtureInfo
 
 pytestmark = pytest.mark.gui

@@ -34,6 +34,7 @@ from qgis.core import (
     Qgis,
     QgsCoordinateReferenceSystem,
     QgsDataProvider,
+    QgsRasterBandStats,
     QgsRasterBlock,
     QgsRasterDataProvider,
     QgsRasterIdentifyResult,
@@ -46,6 +47,7 @@ from ..core import BBox, GeoZarrError, RefSpec, describe_crs
 from ..core.reader import ReadRequest
 from ..layeruri import PROVIDER_KEY, LayerUri, decode_uri
 from .context import LayerContext, LayerView
+from .statistics import SliceStatisticsCache, slice_statistics
 
 # --------------------------------------------------------------------- dtype map
 _NUMPY_TO_QGIS: dict[str, Any] = {
@@ -158,6 +160,9 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
         self._error_title = ""
         self._context: LayerContext | None = context
         self._parsed: LayerUri | None = None
+        #: Replaces the statistics cache in QgsRasterDataProvider, which cannot
+        #: tell two slices of the same band apart. See .statistics.
+        self._stats = SliceStatisticsCache()
 
         if context is not None:
             self._parsed = context.uri
@@ -209,6 +214,7 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
         except GeoZarrError as exc:
             self._fail("Reload failed", exc.detailed)
             return False
+        self._stats.clear()
         return True
 
     # -- geometry ---------------------------------------------------------
@@ -595,7 +601,54 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
             return False
         if changed:
             self._error = self._error_title = ""
+            # Keyed on snapshot_id, so stale entries would not be returned anyway;
+            # cleared so a long-lived layer does not hoard every snapshot it visits.
+            self._stats.clear()
         return changed
+
+    # -- statistics -------------------------------------------------------
+    def bandStatistics(
+        self,
+        bandNo: int,
+        stats: Any = None,
+        extent: QgsRectangle | None = None,
+        sampleSize: int = 0,
+        feedback: Any = None,
+    ) -> Any:
+        """Statistics for the slice on screen, not for whichever one loaded first.
+
+        Overriding this is the whole fix for a class of staleness. The base
+        implementation caches on ``(band, stats, extent, sampleSize)``, a key with no
+        room for the axis indices this provider slices with, and that cache is not
+        reachable from Python to clear. So the contrast enhancement QGIS computes at
+        load, ``QgsRasterLayer.setContrastEnhancement()``, the Layer Properties
+        histogram and the "Load min/max values" button all kept reporting the first
+        slice. Answering here, from a cache that includes the indices, fixes all of
+        them at once.
+
+        QGIS does dispatch to this from C++ -- verified -- which is also why nothing
+        may escape it: an exception crossing back into a C++ virtual is a crash, not
+        a traceback. On any failure this returns an empty result, which QGIS reads as
+        "not gathered" and handles by falling back to the data type's range.
+        """
+        view = self._view()
+        if view is None or not view.bands:
+            return QgsRasterBandStats()
+        if not 1 <= bandNo <= len(view.bands):
+            return QgsRasterBandStats()
+
+        band = view.bands[bandNo - 1]
+        key = (bandNo, band, tuple(sorted(view.indices.items())), view.snapshot_id)
+        cached = self._stats.get(key)
+        if cached is not None:
+            return cached
+        try:
+            computed = slice_statistics(view.reader, band, bandNo, view.indices)
+        except Exception as exc:
+            self._fail("Statistics failed", f"{type(exc).__name__}: {exc}")
+            return QgsRasterBandStats()
+        self._stats.put(key, computed)
+        return computed
 
     def snapshotId(self) -> str | None:
         view = self._view()
