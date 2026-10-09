@@ -19,11 +19,13 @@ pytest.importorskip("qgis.core")
 from qgis.core import QgsApplication, QgsProject, QgsRectangle
 from qgis.PyQt.QtWidgets import QSlider
 
+from geo_geozarr_viewer.core import AxisInfo, VariableInfo
 from geo_geozarr_viewer.gui.axis_panel import (
     DEBOUNCE_MS,
     DOCK_OBJECT_NAME,
     PANEL_TITLE,
     AxisScrubber,
+    axes_for_bands,
     axis_chunk_length,
     is_geozarr_layer,
 )
@@ -145,6 +147,83 @@ def test_the_dock_is_named_for_layout_persistence() -> None:
     """QGIS keys the dock's geometry off the object name; renaming it resets layouts."""
     assert DOCK_OBJECT_NAME == "GeoGeoZarrCubeDock"
     assert PANEL_TITLE.startswith("GEO-")
+
+
+# --------------------------------------------------- axes the variable really has
+class _FakeLevel:
+    def __init__(self, variables):
+        self.variables = variables
+
+
+class _FakeDataset:
+    """Just the two attributes axes_for_bands reads, with the real dataclasses in them.
+
+    A hand-built dataset rather than a fixture store: the point is a dataset whose
+    variables disagree about their dimensions, and neither fixture store has one.
+    """
+
+    def __init__(self, axes, variables):
+        self.axes = axes
+        self.base = _FakeLevel(variables)
+
+
+def _variable(name: str, dims: tuple[str, ...]) -> VariableInfo:
+    return VariableInfo(
+        name=name,
+        path=name,
+        dtype="float32",
+        shape=tuple(4 for _ in dims),
+        dims=dims,
+        chunks=tuple(1 for _ in dims),
+    )
+
+
+@pytest.fixture
+def mixed_dataset():
+    """temperature has time; elevation does not. The reported case."""
+    return _FakeDataset(
+        axes=(AxisInfo("time", 3), AxisInfo("sensor", 2)),
+        variables={
+            "temperature": _variable("temperature", ("time", "y", "x")),
+            "elevation": _variable("elevation", ("y", "x")),
+            "moisture": _variable("moisture", ("sensor", "time", "y", "x")),
+        },
+    )
+
+
+def test_a_variable_without_time_gets_no_time_axis(mixed_dataset) -> None:
+    """The bug: elevation showed a time slider that moved nothing."""
+    assert axes_for_bands(mixed_dataset, ("elevation",)) == ()
+
+
+def test_a_variable_with_time_still_gets_it(mixed_dataset) -> None:
+    assert [a.name for a in axes_for_bands(mixed_dataset, ("temperature",))] == ["time"]
+
+
+def test_axes_come_back_in_dataset_order(mixed_dataset) -> None:
+    """Not in the variable's own dim order: the panel's row order must be stable."""
+    assert [a.name for a in axes_for_bands(mixed_dataset, ("moisture",))] == ["time", "sensor"]
+
+
+def test_a_composite_takes_the_union_of_its_bands(mixed_dataset) -> None:
+    """Matches the reader, which ignores an index for a dim a variable lacks."""
+    axes = axes_for_bands(mixed_dataset, ("elevation", "temperature"))
+    assert [a.name for a in axes] == ["time"]
+
+
+def test_no_bands_falls_back_to_the_dataset_axes(mixed_dataset) -> None:
+    assert axes_for_bands(mixed_dataset, ()) == mixed_dataset.axes
+
+
+def test_unknown_bands_fall_back_rather_than_hide_everything(mixed_dataset) -> None:
+    """Showing nothing would be a silent dead end; the dataset's own axes are a guess."""
+    assert axes_for_bands(mixed_dataset, ("nonesuch",)) == mixed_dataset.axes
+
+
+def test_the_scrubber_uses_the_layers_own_variable(widget, layer) -> None:
+    """End to end: conv/red has time, so the row is there and driven by the band."""
+    assert [r.axis.name for r in widget._rows] == ["time"]
+    assert widget._bands() == ("red",)
 
 
 # ------------------------------------------------------------------- one row per axis

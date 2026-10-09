@@ -38,7 +38,7 @@ Three things make the scrubbing feel like a slider rather than a reload:
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from qgis.core import QgsMapLayer, QgsRasterLayer
 from qgis.gui import QgsDockWidget
@@ -90,6 +90,35 @@ def is_geozarr_layer(layer: QgsMapLayer | None) -> bool:
         return False
     provider = layer.dataProvider()
     return provider is not None and hasattr(provider, "setIndices")
+
+
+def axes_for_bands(dataset: DatasetInfo, bands: Sequence[str]) -> tuple[AxisInfo, ...]:
+    """The dataset axes that ``bands`` actually have, in dataset order.
+
+    ``DatasetInfo.axes`` is the union over every variable in the dataset, which is
+    the right answer for describing a store and the wrong one for driving a single
+    layer. An elevation grid stored beside a temperature time series has no time
+    dimension, so a time slider on an elevation layer moves nothing: the reader
+    indexes each variable by *its own* dims and ignores an index for a dim the
+    variable does not have (see ``DatasetReader._index_tuple``). Harmless, and a
+    control that is visibly harmless is worse than no control -- it invites the
+    user to conclude the layer is broken.
+
+    Union rather than intersection across ``bands``, matching what the reader does:
+    a composite whose bands disagree still gets a slider for an axis only some of
+    them have, and moving it moves those bands and leaves the others alone.
+
+    Falls back to the dataset's own axes when ``bands`` is empty or names nothing
+    the dataset has, rather than silently showing no sliders at all.
+    """
+    dims: set[str] = set()
+    for name in bands:
+        variable = dataset.base.variables.get(name)
+        if variable is not None:
+            dims.update(variable.dims)
+    if not dims:
+        return dataset.axes
+    return tuple(axis for axis in dataset.axes if axis.name in dims)
 
 
 def axis_chunk_length(dataset: DatasetInfo, axis: AxisInfo) -> int:
@@ -261,7 +290,7 @@ class AxisScrubber(QWidget):
         self._outer.insertWidget(1, self._body)
 
         dataset = self._dataset()
-        for position, axis in enumerate(dataset.axes):
+        for position, axis in enumerate(axes_for_bands(dataset, self._bands())):
             if position:
                 line = QFrame()
                 line.setFrameShape(QFrame.HLine)
@@ -278,12 +307,19 @@ class AxisScrubber(QWidget):
 
         self._load_from_layer()
         if not self._rows:
+            bands = self._bands()
+            what = ", ".join(bands) if bands else "This dataset"
             self._status.setText(
-                "This dataset has no non-spatial dimensions — there is only one slice to show."
+                f"{what} has no non-spatial dimensions — there is only one slice to show."
             )
 
     def _dataset(self) -> DatasetInfo:
         return self._provider.context.dataset
+
+    def _bands(self) -> tuple[str, ...]:
+        """The variables this layer actually renders."""
+        context = getattr(self._provider, "context", None)
+        return tuple(context.view().bands) if context is not None else ()
 
     # ------------------------------------------------------------------ loading
     def _load_from_layer(self) -> None:

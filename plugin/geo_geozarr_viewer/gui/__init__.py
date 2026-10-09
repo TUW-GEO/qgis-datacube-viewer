@@ -7,6 +7,7 @@ from __future__ import annotations
 from .axis_panel import (
     AxisScrubber,
     GeoZarrCubeDock,
+    axes_for_bands,
     axis_chunk_length,
     is_geozarr_layer,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "PreviewResult",
     "SnapshotDialog",
     "StoreWorker",
+    "axes_for_bands",
     "axis_chunk_length",
     "is_geozarr_layer",
     "render_thumbnail",
