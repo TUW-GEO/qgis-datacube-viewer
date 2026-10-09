@@ -16,12 +16,13 @@ import pytest
 
 pytest.importorskip("qgis.core")
 
-from qgis.core import QgsApplication
+from qgis.core import QgsApplication, QgsSettings
 from qgis.PyQt.QtCore import Qt, QThreadPool
 
 from geo_geozarr_viewer.core import RefSpec, describe_store, open_store
 from geo_geozarr_viewer.core.reader import DatasetReader
 from geo_geozarr_viewer.gui import GeoZarrLoadDialog, render_thumbnail, to_image
+from geo_geozarr_viewer.gui.load_dialog import _SETTINGS_RECENT
 from geo_geozarr_viewer.gui.worker import StoreWorker
 from tests.fixture_store import FixtureInfo
 
@@ -138,6 +139,118 @@ def test_a_connect_already_in_flight_is_not_started_twice(connected, store_uri: 
         assert connected._store is not None
     finally:
         connected._set_busy(False)
+
+
+# ----------------------------------------------------------- missing recents
+def test_a_missing_local_entry_is_marked_not_removed(dialog, tmp_path) -> None:
+    """Greyed out, with an icon and a reason -- and still in the list.
+
+    An unmounted share or an unplugged drive is the common case, and it fixes
+    itself; deleting the entry would not.
+    """
+    gone = str(tmp_path / "unplugged.zarr")
+    dialog._rewrite_recents([gone])
+
+    assert dialog._recent_entries() == [gone], "the entry is kept"
+    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is not None
+    assert dialog._uri_combo.itemData(0, Qt.DecorationRole) is not None, (
+        "colour must not be the only carrier"
+    )
+    assert "Not found" in str(dialog._uri_combo.itemData(0, Qt.ToolTipRole))
+
+
+def test_marking_never_touches_the_item_text(dialog, tmp_path) -> None:
+    """The combo is editable, so item text feeds straight into parse_uri().
+
+    Appending "(not found)" to the label would send that string to the store
+    opener as the URI.
+    """
+    gone = str(tmp_path / "unplugged.zarr")
+    dialog._rewrite_recents([gone])
+    dialog._uri_combo.setCurrentIndex(0)
+    assert dialog._uri_combo.itemText(0) == gone
+    assert dialog._uri_combo.currentText() == gone
+    assert dialog.build_uri().store_uri == gone
+
+
+def test_a_present_local_entry_is_left_alone(dialog, store_uri: str) -> None:
+    dialog._rewrite_recents([store_uri])
+    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is None
+    assert dialog._uri_combo.itemData(0, Qt.DecorationRole) is None
+
+
+def test_remote_entries_are_never_probed(dialog) -> None:
+    """A probe would be credentialed network I/O, and a failure would not mean gone."""
+    for uri in ("s3://bucket/x.zarr", "gs://bucket/x.zarr", "https://host/x.zarr"):
+        assert dialog.recent_is_missing(uri) is False, uri
+    dialog._rewrite_recents(["s3://bucket/x.zarr"])
+    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is None
+
+
+def test_a_store_that_comes_back_loses_its_marking(dialog, tmp_path) -> None:
+    """Re-marked in place, so the grey is not sticky until the dialog reopens."""
+    path = tmp_path / "remounted.zarr"
+    dialog._rewrite_recents([str(path)])
+    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is not None
+    path.mkdir()
+    dialog._mark_missing_recents()
+    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is None
+
+
+def test_forgetting_an_entry_updates_the_list_and_the_settings(dialog, tmp_path) -> None:
+    gone = str(tmp_path / "gone.zarr")
+    keep = "s3://bucket/keep.zarr"
+    dialog._rewrite_recents([gone, keep])
+
+    dialog.forget_recent(gone)
+
+    assert dialog._recent_entries() == [keep]
+    stored = [str(e) for e in QgsSettings().value(_SETTINGS_RECENT, [], type=list)]
+    assert stored == [keep], "removal has to outlive the dialog"
+
+
+def test_pruning_drops_only_unreachable_local_entries(dialog, tmp_path, store_uri) -> None:
+    """Remote entries must survive: unreachable is not the same as gone."""
+    gone = str(tmp_path / "gone.zarr")
+    remote = "s3://bucket/keep.zarr"
+    dialog._rewrite_recents([store_uri, gone, remote])
+
+    dialog.prune_missing_recents()
+
+    assert dialog._recent_entries() == [store_uri, remote]
+
+
+def test_pruning_keeps_what_the_user_has_typed(dialog, tmp_path) -> None:
+    """Housekeeping must not clear a URI mid-edit."""
+    typed = "s3://typing/in/progress"
+    dialog._rewrite_recents([str(tmp_path / "gone.zarr")])
+    dialog._uri_combo.setCurrentText(typed)
+    dialog.prune_missing_recents()
+    assert dialog._uri_combo.currentText() == typed
+
+
+def test_marking_does_not_overwrite_what_the_user_typed(dialog, tmp_path) -> None:
+    """Qt refreshes an editable combo's line edit when its current row changes.
+
+    Marking touches every row, so without a guard it replaces the typed URI with
+    whatever row happens to be current -- and the dialog then connects to that
+    instead. This was caught by a *different* test connecting to the wrong store.
+    """
+    dialog._rewrite_recents([str(tmp_path / "leftover.zarr")])
+    typed = str(tmp_path / "what-i-actually-want.zarr")
+    dialog._uri_combo.setCurrentText(typed)
+
+    dialog._mark_missing_recents()
+
+    assert dialog._uri_combo.currentText() == typed
+    assert dialog.build_uri().store_uri == typed
+
+
+def test_connecting_to_a_new_store_leaves_it_selected(connected, store_uri: str) -> None:
+    """After a connect the combo's row and its text must agree with what opened."""
+    assert connected._connected_uri == store_uri
+    assert connected._uri_combo.currentText() == store_uri
+    assert connected._uri_combo.itemText(connected._uri_combo.currentIndex()) == store_uri
 
 
 # ------------------------------------------------------------------- worker

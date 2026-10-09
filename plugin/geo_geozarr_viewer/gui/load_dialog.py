@@ -15,12 +15,13 @@ seconds at a time.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from qgis.core import QgsSettings
 from qgis.gui import QgsProjectionSelectionWidget
 from qgis.PyQt.QtCore import Qt, QTimer, pyqtSignal
-from qgis.PyQt.QtGui import QGuiApplication, QPixmap
+from qgis.PyQt.QtGui import QBrush, QGuiApplication, QPalette, QPixmap
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -35,11 +36,13 @@ from qgis.PyQt.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -55,6 +58,7 @@ from ..core import (
     detect_kind,
     list_refs,
     open_store,
+    parse_uri,
 )
 from ..core.reader import RESAMPLING_METHODS, DatasetReader
 from ..layeruri import LEVEL_STRATEGIES, LayerUri, per_variable
@@ -235,6 +239,12 @@ class GeoZarrLoadDialog(QDialog):
         # which with currentIndexChanged would reconnect on every repopulate and
         # recurse through _on_refs_ready's insertItem.
         self._uri_combo.activated.connect(lambda _index: self._on_connect())
+        # Right-click a row to forget it. On the popup's view rather than on the
+        # combo, because an editable combo's own context menu belongs to its line
+        # edit and hijacking it would cost the user copy and paste.
+        view = self._uri_combo.view()
+        view.setContextMenuPolicy(Qt.CustomContextMenu)
+        view.customContextMenuRequested.connect(self._on_recent_context_menu)
 
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._on_browse)
@@ -413,6 +423,7 @@ class GeoZarrLoadDialog(QDialog):
     def _load_recent(self) -> None:
         recent = QgsSettings().value(_SETTINGS_RECENT, [], type=list) or []
         self._uri_combo.addItems([str(entry) for entry in recent])
+        self._mark_missing_recents()
         self._uri_combo.setCurrentText("")
 
     def _remember_recent(self, uri: str) -> None:
@@ -420,6 +431,106 @@ class GeoZarrLoadDialog(QDialog):
         recent = [str(e) for e in (settings.value(_SETTINGS_RECENT, [], type=list) or [])]
         recent = [uri] + [e for e in recent if e != uri]
         settings.setValue(_SETTINGS_RECENT, recent[:_MAX_RECENT])
+
+    @staticmethod
+    def recent_is_missing(uri: str) -> bool:
+        """Whether ``uri`` is a local path that is not on this machine right now.
+
+        Only local paths are answered. An existence probe against ``s3://``,
+        ``gs://`` or ``https://`` is network I/O, usually credentialed, and a
+        negative answer would mean "unreachable" rather than "gone" -- absent
+        credentials, a down VPN and a flaky endpoint are indistinguishable from a
+        deleted store. A dozen such probes on every dialog open would be slow *and*
+        wrong, so remote entries are always reported present.
+        """
+        try:
+            parsed = parse_uri(uri)
+        except Exception:
+            return False  # unparseable is a different complaint; let Connect say it
+        return parsed.is_local and not os.path.isdir(parsed.path)
+
+    def _mark_missing_recents(self) -> None:
+        """Grey out recent entries that are not reachable, without removing any.
+
+        Nothing is deleted: the usual reasons a local path is missing are temporary
+        -- an unmounted share, an unplugged drive, the other half of a dual boot --
+        and forgetting the entry would throw away something the user typed, in order
+        to fix a condition that fixes itself. Right-click offers removal for when
+        they actually mean it.
+
+        The rows stay selectable too. Connecting to one produces the real error
+        ("No such directory", or that it is not a Zarr store at all), which tells
+        the user more than a disabled row that cannot explain itself.
+
+        Colour is never the only carrier: the icon and the tooltip say the same
+        thing, for a high-contrast theme and for anyone who cannot see the grey. The
+        grey itself comes from the palette rather than a literal, so it survives a
+        dark theme -- as the palette(mid) stylesheets elsewhere here do.
+        """
+        # setItemData on an editable combo's *current* row makes QComboBox refresh
+        # its line edit from the model, silently replacing whatever the user typed
+        # with that row's text. Marking touches every row, so it would hand
+        # _on_connect a recent entry in place of the store the user asked for.
+        # Restoring the text afterwards is the whole guard -- do not drop it.
+        typed = self._uri_combo.currentText()
+        missing = QBrush(self.palette().color(QPalette.Disabled, QPalette.WindowText))
+        icon = self.style().standardIcon(QStyle.SP_MessageBoxWarning)
+        for row in range(self._uri_combo.count()):
+            uri = self._uri_combo.itemText(row)
+            # Cleared first, so a store that has come back loses its marking
+            # instead of keeping it until the dialog is next opened.
+            self._uri_combo.setItemData(row, None, Qt.ForegroundRole)
+            self._uri_combo.setItemData(row, None, Qt.DecorationRole)
+            self._uri_combo.setItemData(row, uri, Qt.ToolTipRole)
+            if not self.recent_is_missing(uri):
+                continue
+            self._uri_combo.setItemData(row, missing, Qt.ForegroundRole)
+            self._uri_combo.setItemData(row, icon, Qt.DecorationRole)
+            self._uri_combo.setItemData(
+                row,
+                f"{uri}\n\nNot found on this machine. The path may be on a drive or "
+                "share that is not mounted; the entry is kept either way.",
+                Qt.ToolTipRole,
+            )
+        if self._uri_combo.currentText() != typed:
+            self._uri_combo.setCurrentText(typed)
+
+    def _on_recent_context_menu(self, point) -> None:
+        row = self._uri_combo.view().indexAt(point).row()
+        menu = QMenu(self)
+        forget = menu.addAction("Forget this entry")
+        forget.setEnabled(row >= 0)
+        prune = menu.addAction("Remove entries not found")
+        prune.setEnabled(any(self.recent_is_missing(u) for u in self._recent_entries()))
+        chosen = menu.exec_(self._uri_combo.view().viewport().mapToGlobal(point))
+        if chosen is forget and row >= 0:
+            self.forget_recent(self._uri_combo.itemText(row))
+        elif chosen is prune:
+            self.prune_missing_recents()
+
+    def _recent_entries(self) -> list[str]:
+        return [self._uri_combo.itemText(row) for row in range(self._uri_combo.count())]
+
+    def _rewrite_recents(self, kept: list[str]) -> None:
+        """Replace the stored list and the combo with ``kept``, keeping the typed text."""
+        QgsSettings().setValue(_SETTINGS_RECENT, kept[:_MAX_RECENT])
+        typed = self._uri_combo.currentText()
+        self._loading = True
+        try:
+            self._uri_combo.clear()
+            self._uri_combo.addItems(kept)
+            self._uri_combo.setCurrentText(typed)
+        finally:
+            self._loading = False
+        self._mark_missing_recents()
+
+    def forget_recent(self, uri: str) -> None:
+        """Drop one entry from the list. Public for the context menu and tests."""
+        self._rewrite_recents([e for e in self._recent_entries() if e != uri])
+
+    def prune_missing_recents(self) -> None:
+        """Drop every entry that is not reachable. Only ever user-initiated."""
+        self._rewrite_recents([e for e in self._recent_entries() if not self.recent_is_missing(e)])
 
     def _apply_initial(self, initial: LayerUri) -> None:
         self._uri_combo.setCurrentText(initial.store_uri)
@@ -488,6 +599,16 @@ class GeoZarrLoadDialog(QDialog):
         self._remember_recent(uri)
         if self._uri_combo.findText(uri) < 0:
             self._uri_combo.insertItem(0, uri)
+        # Point the combo at the store that was actually opened. Inserting a row
+        # shifts the current index down, leaving it on an unrelated entry while the
+        # line edit shows this one -- a disagreement anything reading itemText or
+        # currentIndex would get wrong.
+        self._loading = True
+        try:
+            self._uri_combo.setCurrentIndex(self._uri_combo.findText(uri))
+        finally:
+            self._loading = False
+        self._mark_missing_recents()
 
         self._loading = True
         self._set_versioning_enabled(kind != "zarr")

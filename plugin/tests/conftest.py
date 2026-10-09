@@ -53,6 +53,27 @@ def clean_handle_cache():
     clear_cache()
 
 
+@pytest.fixture(autouse=True)
+def isolate_recent_stores():
+    """Keep each test's recent-stores list out of every other test's.
+
+    ``QgsSettings`` is process-global and persistent, so a test that adds or prunes
+    recent stores otherwise changes what the *next* test's dialog loads. That is
+    not hypothetical: a leftover entry once made a later test connect to a
+    different store than the one it asked for, because marking a row re-reads the
+    editable combo's text from the model.
+    """
+    from qgis.core import QgsSettings
+
+    from geo_geozarr_viewer.gui.load_dialog import _SETTINGS_RECENT
+
+    settings = QgsSettings()
+    before = settings.value(_SETTINGS_RECENT, [], type=list)
+    settings.setValue(_SETTINGS_RECENT, [])
+    yield
+    settings.setValue(_SETTINGS_RECENT, before)
+
+
 @pytest.fixture(scope="session")
 def real_store() -> str:
     path = os.environ.get(REAL_STORE_ENV, "")
