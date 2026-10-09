@@ -113,7 +113,13 @@ GDAL — and therefore QGIS — sees them:
 ```bash
 uv run --script scripts/plot_geozarr_reference.py dummy.zarr
 uv run --script scripts/plot_geozarr_reference.py dem.zarr --time 6 --gdal
+uv run --script scripts/plot_geozarr_reference.py cube.zarr --index sensor=1 --index time=7
 ```
+
+It finds the y and x axes by name, so a `--dim-order` store is checked and rendered
+exactly like a conventional one - if the two differ, something is wrong. `--index
+DIM=N` picks the slice per dimension (`--time` sets all of them at once), which is
+what a store with more than one non-spatial axis needs.
 
 `serve_zarr.py` serves a local store over HTTP with CORS headers and byte-range
 support, which is what browser viewers and sharded Zarr v3 stores need and what
@@ -134,3 +140,27 @@ uv run scripts/make_dummy_geozarr.py                           # -> dummy.zarr
 uv run scripts/make_dummy_geozarr.py --source copernicus -o dem.zarr
 uv run scripts/make_dummy_geozarr.py --zarr-format 2 --levels 1 -o flat_v2.zarr
 ```
+
+`--sensors` adds a string `sensor` axis (`AMSR2`, `SMOS`, `SMAP`) and a 4-D
+`soil_moisture` variable alongside the 3-D `temperature` and the 2-D fields, so one
+store exercises two browsable axes at once, plus per-sensor nodata:
+
+```bash
+uv run scripts/make_dummy_geozarr.py --sensors -o cube.zarr
+uv run scripts/make_dummy_geozarr.py --sensors ASCAT,SMAP -o ascat.zarr
+```
+
+`--dim-order` stores the variables under a permuted axis order. The pixel at a
+given coordinate is the same in every layout - only the metadata moves - so a
+reader that honours the dimension *names* sees identical data, while one that
+assumes `(..., y, x)` by position does not:
+
+```bash
+uv run scripts/make_dummy_geozarr.py --dim-order transposed -o yx_swapped.zarr
+uv run scripts/make_dummy_geozarr.py --dim-order y,x,time   -o time_last.zarr
+uv run scripts/make_dummy_geozarr.py --dim-order shuffled --sensors -o shuffled.zarr
+```
+
+The presets are `canonical`, `transposed` (y/x swapped), `axes-last`, `axes-split`
+(y and x not adjacent) and `shuffled`, which gives every variable its own
+permutation, drawn from `--seed` and stable across pyramid levels.

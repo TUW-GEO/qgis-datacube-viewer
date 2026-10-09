@@ -19,6 +19,16 @@ The store models a small alpine area around Innsbruck (Austria) and contains:
                                          "no data" swath edge in some months
 * ``land_cover``  (y, x)        uint8    categorical classes (CF flag_values)
 
+With ``--sensors`` the store also gains a *string* axis and a four-dimensional
+variable, which is what a browsable cube actually looks like:
+
+* ``sensor``        (sensor)              <U       "AMSR2", "SMOS", "SMAP"
+* ``soil_moisture`` (sensor, time, y, x)  float32  volumetric soil moisture
+                                                   [m3 m-3], one retrieval per
+                                                   sensor footprint, with frozen
+                                                   high ground and one missing
+                                                   sensor-month left as NaN
+
 Two terrain sources are available:
 
 * ``synthetic`` (default): offline, deterministic fractal terrain with a valley,
@@ -41,11 +51,19 @@ Layout with ``--levels N`` (N > 1, default 3)::
 
 With ``--levels 1`` a flat dataset is written directly at the store root.
 
+``--dim-order`` writes the same data under a permuted axis order (``(y, x, time)``,
+``(x, y)``, or a per-variable shuffle), which is what tells a reader that leans on
+dimension *names* apart from one that assumes ``(..., y, x)`` by position. Only the
+metadata moves: the pixel at a given coordinate is identical in every layout.
+
 Usage::
 
     uv run --script scripts/make_dummy_geozarr.py                     # -> dummy.zarr
     uv run --script scripts/make_dummy_geozarr.py --source copernicus -o dem.zarr
     uv run --script scripts/make_dummy_geozarr.py --zarr-format 2 --levels 1 -o flat_v2.zarr
+    uv run --script scripts/make_dummy_geozarr.py --dim-order shuffled -o shuffled.zarr
+    uv run --script scripts/make_dummy_geozarr.py --dim-order y,x,time -o time_last.zarr
+    uv run --script scripts/make_dummy_geozarr.py --sensors -o cube.zarr
 """
 
 from __future__ import annotations
@@ -54,6 +72,8 @@ import argparse
 import shutil
 import urllib.request
 import warnings
+import zlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -103,6 +123,20 @@ LAND_COVER_CLASSES = {
     5: "bare_rock",
     6: "snow_and_ice",
 }
+#: Values of the optional string ``sensor`` axis (``--sensors``).
+DEFAULT_SENSORS = ("AMSR2", "SMOS", "SMAP")
+
+#: Per-sensor footprint (blur radius in full-resolution pixels), dry/wet bias and
+#: retrieval noise. Loosely ranked after the real missions - SMOS has by far the
+#: coarsest footprint - so that the sensor axis actually changes the picture. An
+#: axis whose slices all look alike cannot reveal an off-by-one in the slicing.
+SENSOR_TRAITS = {
+    "AMSR2": {"radius": 2, "bias": -0.03, "noise": 0.012},
+    "SMOS": {"radius": 6, "bias": 0.04, "noise": 0.020},
+    "SMAP": {"radius": 3, "bias": 0.0, "noise": 0.008},
+}
+FALLBACK_SENSOR_TRAITS = {"radius": 3, "bias": 0.0, "noise": 0.015}
+
 # RGB colors, handy for a viewer's categorical legend
 LAND_COVER_COLORS = {
     0: "#000000",
@@ -292,6 +326,60 @@ def derive_temperature(elevation: np.ndarray, seed: int) -> tuple[np.ndarray, np
     return temp, time
 
 
+def moving_average(a: np.ndarray, radius: int, axis: int) -> np.ndarray:
+    """Centred moving average along ``axis``, edge-padded, via a cumulative sum."""
+    width = 2 * radius + 1
+    pad = [(0, 0)] * a.ndim
+    pad[axis] = (radius + 1, radius)
+    cumulative = np.cumsum(np.pad(a, pad, mode="edge"), axis=axis, dtype="float64")
+    hi, lo = [slice(None)] * a.ndim, [slice(None)] * a.ndim
+    hi[axis], lo[axis] = slice(width, None), slice(None, -width)
+    return (cumulative[tuple(hi)] - cumulative[tuple(lo)]) / width
+
+
+def box_blur(a: np.ndarray, radius: int) -> np.ndarray:
+    """Separable box blur over the trailing two (spatial) axes. Stands in for a
+    sensor footprint; a box rather than a Gaussian only to stay SciPy-free."""
+    if radius < 1:
+        return a
+    return moving_average(moving_average(a, radius, -2), radius, -1)
+
+
+def derive_soil_moisture(
+    elevation: np.ndarray, time: np.ndarray, sensors: Sequence[str], seed: int
+) -> np.ndarray:
+    """Volumetric soil moisture per sensor: ``(sensor, time, y, x)``, in m3/m3.
+
+    Wet valley floors, dry ridges, one annual harmonic peaking at snowmelt, then one
+    pass per sensor applying its footprint, bias and noise. Two kinds of gap are
+    baked in on purpose, because they are what a viewer gets wrong: high ground in
+    winter is *unretrievable* (frozen or snow-covered, so NaN rather than dry), and
+    one sensor loses a whole month, leaving an all-NaN slice that must come out as
+    nodata rather than as a stretch over nothing.
+    """
+    rng = np.random.default_rng(seed + 2)
+    low, high = np.percentile(elevation, [3, 97])
+    wetness = np.clip((high - elevation) / max(high - low, 1.0), 0, 1)  # 1 on the floor
+    months = np.arange(len(time))
+    seasonal = 1.0 + 0.35 * np.cos(2 * np.pi * (months - 3) / 12)
+    field = (0.08 + 0.32 * wetness)[None] * seasonal[:, None, None]
+
+    cube = np.empty((len(sensors), *field.shape), dtype="float32")
+    for index, name in enumerate(sensors):
+        traits = SENSOR_TRAITS.get(name, FALLBACK_SENSOR_TRAITS)
+        seen = box_blur(field, int(traits["radius"])) + traits["bias"]
+        seen = seen + rng.normal(0, traits["noise"], size=field.shape)
+        cube[index] = np.clip(seen, 0.02, 0.6)
+
+    frozen = elevation > 2000
+    for month in (0, 1, 11):
+        if month < len(time):
+            cube[:, month][:, frozen] = np.nan
+    if len(sensors) > 1 and len(time) > 7:
+        cube[1, 7] = np.nan
+    return cube
+
+
 def downsample_mean(a: np.ndarray, f: int) -> np.ndarray:
     *lead, ny, nx = a.shape
     blocks = a[..., : ny // f * f, : nx // f * f].reshape(*lead, ny // f, f, nx // f, f)
@@ -305,28 +393,198 @@ def downsample_nearest(a: np.ndarray, f: int) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- #
+# Dimension order
+# --------------------------------------------------------------------------- #
+#: Every dimension the store can use, in the order the variables are built in and
+#: in the order a CF writer would conventionally store them. ``--dim-order``
+#: permutes this on the way out; a variable only carries the dims it actually has.
+CANONICAL_DIMS = ("sensor", "time", "y", "x")
+
+SPATIAL_DIMS = ("y", "x")
+
+#: Sentinel ``--dim-order`` value: a different permutation per variable.
+SHUFFLED = "shuffled"
+
+#: Named permutations of :data:`CANONICAL_DIMS`, for ``--dim-order``.
+DIM_ORDER_PRESETS = {
+    "canonical": ("sensor", "time", "y", "x"),
+    "transposed": ("sensor", "time", "x", "y"),  # y/x swapped, extra axes still lead
+    "axes-last": ("y", "x", "sensor", "time"),  # pixel-interleaved style
+    "axes-split": ("y", "sensor", "x", "time"),  # y and x not even adjacent
+}
+
+
+class DimOrder:
+    """The on-disk axis order of each data variable.
+
+    GeoZarr does not require ``(..., y, x)``: the dimension *names* are what say
+    which axis is which, so code that reads the trailing two axes as the raster is
+    only right by luck. Writing the same terrain under a permuted order is the
+    cheapest way to tell those two readers apart - and, for a viewer, to check that
+    a slice through a cube still comes out north-up rather than mirrored.
+
+    A fixed ``spec`` (an order over some or all of :data:`CANONICAL_DIMS`) applies to
+    every variable. :data:`SHUFFLED` instead draws one permutation per variable
+    *name*, so a single store mixes layouts: ``elevation`` as ``(x, y)`` beside
+    ``temperature`` as ``(y, x, time)``. Keying on the name rather than drawing as we go keeps every
+    pyramid level of a variable in the same order, which the levels must agree on.
+    """
+
+    def __init__(self, spec: tuple[str, ...] | str = CANONICAL_DIMS, seed: int = 0):
+        self.spec = spec
+        self.seed = seed
+
+    @property
+    def is_shuffled(self) -> bool:
+        return self.spec == SHUFFLED
+
+    @property
+    def label(self) -> str:
+        return SHUFFLED if self.is_shuffled else ",".join(self.spec)
+
+    def for_variable(self, name: str, dims: Sequence[str]) -> tuple[str, ...]:
+        """The stored order of ``dims`` (given in canonical order) for ``name``."""
+        dims = tuple(dims)
+        if len(dims) < 2:
+            return dims
+        if not self.is_shuffled:
+            return tuple(sorted(dims, key=self._rank))
+        # crc32 of the name, not hash(): hash() is salted per interpreter run, which
+        # would make a store with a fixed --seed irreproducible.
+        rng = np.random.default_rng([self.seed, zlib.crc32(name.encode())])
+        return tuple(dims[i] for i in rng.permutation(len(dims)))
+
+    def _rank(self, dim: str) -> int:
+        spec = self.spec
+        return spec.index(dim) if dim in spec else len(spec)
+
+    def group_spatial_dims(self) -> tuple[str, ...]:
+        """The y/x order to advertise on a *group*.
+
+        Under :data:`SHUFFLED` the variables disagree, and no single answer is
+        right; the group keeps the conventional ``(y, x)`` and the per-array
+        ``spatial:dimensions`` carries the truth for each variable.
+        """
+        if self.is_shuffled:
+            return SPATIAL_DIMS
+        return tuple(d for d in self.spec if d in SPATIAL_DIMS)
+
+
+def parse_dim_order(value: str) -> tuple[str, ...] | str:
+    """Resolve a ``--dim-order`` value to a permutation or to :data:`SHUFFLED`.
+
+    A spec may name a subset of :data:`CANONICAL_DIMS` - ``y,x,time`` is accepted
+    even when the store also has a ``sensor`` axis - and the dims it leaves out are
+    appended in canonical order. That keeps the short spellings usable as the set of
+    dimensions grows, at the cost of being explicit: name every dim to pin the lot.
+    """
+    key = value.strip().lower()
+    if key == SHUFFLED:
+        return SHUFFLED
+    if key in DIM_ORDER_PRESETS:
+        return DIM_ORDER_PRESETS[key]
+    dims = tuple(d for d in key.replace(" ", ",").split(",") if d)
+    unknown = [d for d in dims if d not in CANONICAL_DIMS]
+    if unknown or len(set(dims)) != len(dims) or not dims:
+        choices = ", ".join([*DIM_ORDER_PRESETS, SHUFFLED])
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is neither a preset ({choices}) nor a comma-separated "
+            f"selection of distinct dimensions from {','.join(CANONICAL_DIMS)}"
+        )
+    return dims
+
+
+# --------------------------------------------------------------------------- #
 # Writing
 # --------------------------------------------------------------------------- #
-def geo_attrs(grid: Grid) -> dict:
+def geo_attrs(grid: Grid, dims: Sequence[str] = SPATIAL_DIMS) -> dict:
+    """Spatial convention attributes for a grid stored with its y/x axes as ``dims``."""
+    sizes = {"y": grid.ny, "x": grid.nx}
     return {
         "proj:code": f"EPSG:{grid.crs.to_epsg()}",
         "proj:wkt2": grid.crs.to_wkt(),
-        "spatial:dimensions": ["y", "x"],
+        "spatial:dimensions": list(dims),
         "spatial:transform": grid.transform,
-        "spatial:shape": [grid.ny, grid.nx],
+        "spatial:shape": [sizes[d] for d in dims],
         "spatial:bbox": grid.bbox,
         "spatial:registration": "pixel",
     }
 
 
+def reorder_spatial_attrs(attrs: dict, dims: Sequence[str], shape: Sequence[int]) -> None:
+    """Make an array's attributes describe the axis order it was actually stored in.
+
+    ``spatial:dimensions``, ``spatial:shape`` and CF's ``coordinates`` are statements
+    about axes, so they follow the permutation. ``spatial:transform`` and
+    ``GeoTransform`` deliberately do not: both map pixel (column, row) to CRS
+    coordinates in a fixed coefficient order, which says nothing about how the array
+    lays those pixels out in memory. Permuting them would move the raster instead of
+    describing it.
+    """
+    spatial = [d for d in dims if d in SPATIAL_DIMS]
+    if "spatial:dimensions" in attrs:
+        attrs["spatial:dimensions"] = spatial
+        attrs["spatial:shape"] = [int(shape[dims.index(d)]) for d in spatial]
+    if "coordinates" in attrs:
+        attrs["coordinates"] = " ".join(dims)
+
+
+@dataclass
+class Fields:
+    """The variables of one resolution level, always in canonical dimension order.
+
+    One object per level rather than a bag of arrays threaded through every call:
+    the level loop then reads as ``fields.coarsen(f)``, and adding a variable does
+    not widen three signatures. ``--dim-order`` is applied by the writer, so
+    everything here stays ``(sensor, time, y, x)``-ordered and the downsampling can
+    keep assuming the trailing two axes are the raster.
+    """
+
+    elevation: np.ndarray  # (y, x)
+    temperature: np.ndarray  # (time, y, x)
+    land_cover: np.ndarray  # (y, x)
+    time: np.ndarray  # (time,)
+    sensors: tuple[str, ...] = ()
+    soil_moisture: np.ndarray | None = None  # (sensor, time, y, x)
+
+    def coarsen(self, factor: int) -> Fields:
+        if factor == 1:
+            return self
+        return Fields(
+            elevation=downsample_mean(self.elevation, factor),
+            temperature=downsample_mean(self.temperature, factor),
+            land_cover=downsample_nearest(self.land_cover, factor),
+            time=self.time,
+            sensors=self.sensors,
+            soil_moisture=(
+                None if self.soil_moisture is None else downsample_mean(self.soil_moisture, factor)
+            ),
+        )
+
+
 class Writer:
-    def __init__(self, zarr_format: int, chunk: int):
+    def __init__(self, zarr_format: int, chunk: int, dim_order: DimOrder | None = None):
         self.zarr_format = zarr_format
         self.chunk = chunk
+        self.dim_order = dim_order or DimOrder()
+        #: Stored axis order of every multi-dimensional array written, for reporting.
+        self.stored_dims: dict[str, tuple[str, ...]] = {}
 
     def array(self, group, name, data, dims, attrs, fill_value=None, chunks=None):
         data = np.asarray(data)
+        dims = tuple(dims)
         attrs = dict(attrs)
+
+        order = self.dim_order.for_variable(name, dims)
+        if order != dims:
+            permutation = [dims.index(d) for d in order]
+            data = np.transpose(data, permutation)
+            if chunks is not None:
+                chunks = tuple(chunks[i] for i in permutation)
+            dims = order
+            reorder_spatial_attrs(attrs, dims, data.shape)
+        if len(dims) > 1:
+            self.stored_dims[name] = dims
         # Zstd instead of the v2 default Blosc, which not every GDAL build can decode
         kwargs = {}
         if self.zarr_format == 3:
@@ -340,10 +598,14 @@ class Writer:
                 min(s, self.chunk) if d in ("x", "y") else 1
                 for s, d in zip(data.shape, dims, strict=True)
             )
+        # Store text as variable-length UTF-8 (vlen-utf8 in both Zarr formats) rather
+        # than as the fixed-width numpy dtype, which is what xarray and the Zarr
+        # string data type agree on.
+        dtype = str if data.dtype.kind in "US" else data.dtype
         arr = group.create_array(
             name,
             shape=data.shape,
-            dtype=data.dtype,
+            dtype=dtype,
             chunks=chunks,
             fill_value=fill_value,
             attributes=attrs,
@@ -352,7 +614,13 @@ class Writer:
         arr[...] = data
         return arr
 
-    def dataset(self, group, grid: Grid, elevation, temperature, time, land_cover):
+    def dataset(self, group, grid: Grid, fields: Fields):
+        elevation, temperature, land_cover = (
+            fields.elevation,
+            fields.temperature,
+            fields.land_cover,
+        )
+        time, sensors = fields.time, fields.sensors
         crs = grid.crs
         cf = crs.to_cf()
         wkt = crs.to_wkt()
@@ -394,6 +662,21 @@ class Writer:
             },
             chunks=(len(time),),
         )
+        if sensors:
+            self.array(
+                group,
+                "sensor",
+                np.asarray(sensors),
+                ("sensor",),
+                {
+                    "long_name": "Satellite sensor",
+                    "description": (
+                        "Microwave soil moisture sensors; each carries its own "
+                        "footprint, bias and noise"
+                    ),
+                },
+                chunks=(len(sensors),),
+            )
 
         common = {"grid_mapping": "spatial_ref", "_CRS": {"wkt": wkt}, **geo_attrs(grid)}
         self.array(
@@ -440,6 +723,23 @@ class Writer:
             },
             fill_value=0,
         )
+        if fields.soil_moisture is not None:
+            self.array(
+                group,
+                "soil_moisture",
+                fields.soil_moisture,
+                ("sensor", "time", "y", "x"),
+                {
+                    **common,
+                    "standard_name": "volume_fraction_of_condensed_water_in_soil",
+                    "long_name": "Volumetric soil moisture per sensor (synthetic)",
+                    "units": "1",
+                    "valid_min": 0.0,
+                    "valid_max": 0.6,
+                    "coordinates": "sensor time y x",
+                },
+                fill_value=float("nan"),
+            )
 
 
 def main() -> None:
@@ -453,6 +753,29 @@ def main() -> None:
         "--levels", type=int, default=3, help="number of multiscale levels (1 = flat dataset)"
     )
     parser.add_argument("--chunk", type=int, default=128, help="spatial chunk size")
+    parser.add_argument(
+        "--dim-order",
+        type=parse_dim_order,
+        default=DIM_ORDER_PRESETS["canonical"],
+        metavar="ORDER",
+        help=(
+            "axis order to store the variables in: a preset ("
+            + ", ".join([*DIM_ORDER_PRESETS, SHUFFLED])
+            + "), or a comma-separated order such as 'y,x,time'. "
+            f"'{SHUFFLED}' picks a different permutation per variable (from --seed)"
+        ),
+    )
+    parser.add_argument(
+        "--sensors",
+        nargs="?",
+        const=",".join(DEFAULT_SENSORS),
+        default="",
+        metavar="NAME,NAME",
+        help=(
+            "add a string 'sensor' axis and a 4-D soil_moisture variable; bare "
+            f"--sensors uses {','.join(DEFAULT_SENSORS)}"
+        ),
+    )
     parser.add_argument("--zarr-format", type=int, choices=[2, 3], default=3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cache-dir", type=Path, default=Path(__file__).parent / ".cache")
@@ -475,32 +798,53 @@ def main() -> None:
         elevation, grid = copernicus_dem(args.size, args.cache_dir)
         source = "Copernicus GLO-90 DEM (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018, provided under COPERNICUS by the European Union and ESA"
 
+    sensors = tuple(name.strip() for name in args.sensors.split(",") if name.strip())
     land_cover = derive_land_cover(elevation, grid)
     temperature, time = derive_temperature(elevation, args.seed)
+    fields = Fields(
+        elevation=elevation,
+        temperature=temperature,
+        land_cover=land_cover,
+        time=time,
+        sensors=sensors,
+        soil_moisture=(
+            derive_soil_moisture(elevation, time, sensors, args.seed) if sensors else None
+        ),
+    )
 
     root = zarr.open_group(args.output, mode="w", zarr_format=args.zarr_format)
-    writer = Writer(args.zarr_format, args.chunk)
+    dim_order = DimOrder(args.dim_order, args.seed)
+    writer = Writer(args.zarr_format, args.chunk, dim_order)
+    spatial_dims = dim_order.group_spatial_dims()
     root_attrs = {
         "Conventions": "CF-1.10",
         "title": "Dummy GeoZarr test dataset (Innsbruck area)",
         "source": source,
-        "history": "Created by make_dummy_geozarr.py",
+        # Only mentioned when it is not the conventional order, so that a default
+        # run still produces byte-identical output to earlier versions of this script.
+        "history": "Created by make_dummy_geozarr.py"
+        + (
+            ""
+            if args.dim_order == DIM_ORDER_PRESETS["canonical"]
+            else f" (dim_order={dim_order.label})"
+        ),
         "zarr_conventions": [CONVENTION_PROJ, CONVENTION_SPATIAL],
-        **geo_attrs(grid),
+        **geo_attrs(grid, spatial_dims),
     }
 
     if args.levels == 1:
-        writer.dataset(root, grid, elevation, temperature, time, land_cover)
+        writer.dataset(root, grid, fields)
     else:
         layout = []
         for level in range(args.levels):
             f = 2**level
             g = grid.coarsen(f)
+            level_attrs = geo_attrs(g, spatial_dims)
             entry = {
                 "asset": str(level),
                 "transform": {"scale": [float(f), float(f)], "translation": [0.0, 0.0]},
                 "spatial:transform": g.transform,
-                "spatial:shape": [g.ny, g.nx],
+                "spatial:shape": level_attrs["spatial:shape"],
             }
             if level > 0:
                 entry["derived_from"] = str(level - 1)
@@ -508,15 +852,8 @@ def main() -> None:
                 entry["resampling_method"] = "average"
             layout.append(entry)
 
-            sub = root.create_group(str(level), attributes=geo_attrs(g))
-            writer.dataset(
-                sub,
-                g,
-                downsample_mean(elevation, f) if f > 1 else elevation,
-                downsample_mean(temperature, f) if f > 1 else temperature,
-                time,
-                downsample_nearest(land_cover, f) if f > 1 else land_cover,
-            )
+            sub = root.create_group(str(level), attributes=level_attrs)
+            writer.dataset(sub, g, fields.coarsen(f))
         root_attrs["zarr_conventions"].insert(0, CONVENTION_MULTISCALES)
         root_attrs["multiscales"] = {"layout": layout, "resampling_method": "average"}
 
@@ -533,6 +870,11 @@ def main() -> None:
     )
     print(f"  bbox: {grid.bbox}")
     print(f"  elevation: {np.nanmin(elevation):.0f} .. {np.nanmax(elevation):.0f} m")
+    print(f"  dim order: {dim_order.label}")
+    for name, dims in sorted(writer.stored_dims.items()):
+        print(f"    {name}: ({', '.join(dims)})")
+    if sensors:
+        print(f"  sensors: {', '.join(sensors)}")
 
 
 if __name__ == "__main__":
