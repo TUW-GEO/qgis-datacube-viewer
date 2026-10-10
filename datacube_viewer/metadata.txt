@@ -40,6 +40,7 @@ about=Adds a raster data provider for Zarr and NetCDF datacubes. Reads directly 
     Originally developed by EODC (https://eodc.eu) as "GeoZarr Viewer". MIT licensed.
     This is a renamed fork carrying local changes; it is not the EODC release.
 
+; Keep in step with keywords in pyproject.toml, which repeats these in order.
 tags=geozarr,zarr,netcdf,datacube,icechunk,raster,multiscale,pyramid,cog,earth observation
 
 category=Raster

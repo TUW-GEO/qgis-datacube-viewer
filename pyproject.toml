@@ -6,7 +6,21 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Colin Moldenhauer", email = "colin.moldenhauer@geo.tuwien.ac.at" }]
-keywords = ["zarr", "geozarr", "geospatial", "qgis", "raster"]
+# tags= from datacube_viewer/metadata.txt, same order, plus the last two. Keep in step.
+keywords = [
+    "geozarr",
+    "zarr",
+    "netcdf",
+    "datacube",
+    "icechunk",
+    "raster",
+    "multiscale",
+    "pyramid",
+    "cog",
+    "earth observation",
+    "geospatial",
+    "qgis",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
