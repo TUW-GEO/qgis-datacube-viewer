@@ -15,13 +15,13 @@ description=Load and visualise GeoZarr datacubes from Icechunk, Zarr and NetCDF,
 ; would be overwritten, and this file would then misreport what shipped. The build
 ; refuses to run if this is anything other than 0.0.0. To release, tag the commit.
 version=0.0.0
-author=EODC GmbH
-email=timothy.simons@eodc.eu
+author=TUW-GEO
+email=colin.moldenhauer@tuwien.ac.at
 
 ; Required by plugins.qgis.org; an upload without repository and tracker is rejected.
-repository=https://github.com/eodcgmbh/qgis-geozarr
-tracker=https://github.com/eodcgmbh/qgis-geozarr/issues
-homepage=https://github.com/eodcgmbh/qgis-geozarr
+repository=https://github.com/TUW-GEO/qgis-datacube-viewer
+tracker=https://github.com/TUW-GEO/qgis-datacube-viewer/issues
+homepage=https://github.com/TUW-GEO/qgis-datacube-viewer
 
 about=Adds a raster data provider for GeoZarr datacubes. Reads directly from Icechunk
     repositories (local, S3, GCS, Azure, R2 or HTTP) as well as plain Zarr v3 stores,
@@ -40,7 +40,7 @@ about=Adds a raster data provider for GeoZarr datacubes. Reads directly from Ice
     Originally developed by EODC (https://eodc.eu) as "GeoZarr Viewer". MIT licensed.
     This is a renamed fork carrying local changes; it is not the EODC release.
 
-tags=raster,zarr,geozarr,netcdf,icechunk,datacube,multiscale,pyramid,cog,earth observation
+tags=geozarr,zarr,netcdf,datacube,icechunk,raster,multiscale,pyramid,cog,earth observation
 
 category=Raster
 icon=icons/open_cube.svg
