@@ -1,4 +1,4 @@
-"""Datacube Viewer — a QGIS plugin for Icechunk, Zarr and NetCDF datacubes.
+"""Datacube Viewer — a QGIS plugin for Zarr, NetCDF and Icechunk datacubes.
 
 The package root stays import-light on purpose. ``datacube_viewer.core`` must be
 importable in a plain Python interpreter (that is what makes the data-access layer

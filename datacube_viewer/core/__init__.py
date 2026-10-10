@@ -1,4 +1,4 @@
-"""Data-access layer: Icechunk / Zarr / NetCDF metadata and pixel reads.
+"""Data-access layer: Zarr / NetCDF / Icechunk metadata and pixel reads.
 
 Nothing in this package imports ``qgis.*``. That is a deliberate, enforced boundary
 (see ``tests/test_layering.py``): it means the whole metadata and reading path can be

@@ -131,7 +131,7 @@ class DatacubeViewerPlugin:
             self._log(f"Failed to register the '{PROVIDER_KEY}' data provider.", Qgis.Critical)
 
         add = QAction(_icon("open_cube.svg"), "Add Datacube Layer…", self.iface.mainWindow())
-        add.setToolTip("Load a datacube from an Icechunk repository, Zarr store or NetCDF file")
+        add.setToolTip("Load a datacube from a Zarr store, NetCDF file or Icechunk repository")
         add.triggered.connect(self.show_load_dialog)
 
         travel = QAction(_icon("history.svg"), "Time Travel…", self.iface.mainWindow())

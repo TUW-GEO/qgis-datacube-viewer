@@ -30,7 +30,7 @@ from .core.reader import RESAMPLING_METHODS, LevelStrategy, Resampling
 #: "geozarr", and the registry holds one provider per key for the whole session, so
 #: sharing it would hand every layer of both plugins to whichever loaded first.
 PROVIDER_KEY = "datacube_viewer"
-PROVIDER_DESCRIPTION = "Datacube Viewer: Icechunk / Zarr / NetCDF raster"
+PROVIDER_DESCRIPTION = "Datacube Viewer: Zarr / NetCDF / Icechunk raster"
 
 #: Layer custom property holding the reason a layer failed to load. Namespaced by
 #: the provider key for the same reason.

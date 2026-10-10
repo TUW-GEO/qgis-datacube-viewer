@@ -1,4 +1,4 @@
-"""Opening Icechunk repositories, plain Zarr stores and NetCDF files read-only.
+"""Opening plain Zarr stores, NetCDF files and Icechunk repositories read-only.
 
 Everything here is read-only by construction: we only ever ask for
 ``Repository.readonly_session``, never ``writable_session``, so a mis-typed URI cannot
@@ -220,7 +220,7 @@ _PROBE_TIMEOUT = 10.0
 
 
 def detect_kind(uri: str) -> StoreKind:
-    """Decide whether a URI points at an Icechunk repo, a plain Zarr store or a NetCDF file.
+    """Decide whether a URI points at a plain Zarr store, a NetCDF file or an Icechunk repo.
 
     For local paths this is a cheap filesystem check: Zarr and Icechunk are
     *directories*, so a regular file can only be NetCDF. For ``http(s)://`` it is a

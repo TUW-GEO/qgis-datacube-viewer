@@ -9,7 +9,7 @@ name=Datacube Viewer
 ; Windows/macOS builds ship Python 3.12.
 qgisMinimumVersion=3.40
 qgisMaximumVersion=3.99
-description=Load and visualise datacubes from Icechunk, Zarr and NetCDF, including multiscale pyramids.
+description=Load and visualise datacubes from GeoZarr, Zarr, NetCDF and Icechunk, including multiscale pyramids.
 ; PLACEHOLDER. The version comes from the git tag (vX.Y.Z) and scripts/build_plugin.py
 ; injects it here on the way into the .zip. Do not hand-edit a real number in: it
 ; would be overwritten, and this file would then misreport what shipped. The build
@@ -23,11 +23,15 @@ repository=https://github.com/TUW-GEO/qgis-datacube-viewer
 tracker=https://github.com/TUW-GEO/qgis-datacube-viewer/issues
 homepage=https://github.com/TUW-GEO/qgis-datacube-viewer
 
-about=Adds a raster data provider for Zarr and NetCDF datacubes. Reads directly from
-    Icechunk repositories (local, S3, GCS, Azure, R2 or HTTP) as well as plain Zarr v3
-    stores and NetCDF files, resolves the CRS from zarr-conventions "proj:code" or CF grid mappings, and switches
-    between pyramid levels as you zoom. Icechunk branches, tags and snapshots can be
-    selected at load time and changed afterwards without re-adding the layer.
+about=Load GeoZarr datacubes, plain Zarr stores, NetCDF files and Icechunk repositories
+    as raster layers in QGIS.
+    Sliders in a dock panel step through the non-spatial axes of the cube (time, sensor,
+    etc.) and redraw the layer as you drag. The plugin reads directly from
+    plain Zarr v3 stores and NetCDF files as well as Icechunk repositories (local, S3,
+    GCS, Azure, R2 or HTTP), resolves the CRS from zarr-conventions "proj:code" or CF
+    grid mappings, and switches between pyramid levels as you zoom. Icechunk branches,
+    tags and snapshots can be selected at load time and changed afterwards without
+    re-adding the layer.
     .
     ONE MANUAL STEP AFTER INSTALL: this plugin needs the "zarr" (>=3) Python package
     for Zarr stores and/or "netCDF4" for NetCDF files, and QGIS's Plugin Manager does

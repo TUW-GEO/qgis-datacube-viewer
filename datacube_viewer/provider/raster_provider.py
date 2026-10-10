@@ -1,4 +1,4 @@
-"""``QgsRasterDataProvider`` over a datacube pyramid in an Icechunk repo, Zarr store or NetCDF file.
+"""``QgsRasterDataProvider`` over a datacube pyramid in a Zarr store, NetCDF file or Icechunk repo.
 
 The provider is deliberately thin. QGIS asks for "these pixels, in this projected
 rectangle, at this output size"; that maps one-to-one onto
@@ -188,7 +188,7 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
         return PROVIDER_KEY
 
     def description(self) -> str:
-        return "Multiscale raster from an Icechunk repository, Zarr store or NetCDF file"
+        return "Multiscale raster from a Zarr store, NetCDF file or Icechunk repository"
 
     def isValid(self) -> bool:
         return self._context is not None
