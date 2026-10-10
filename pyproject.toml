@@ -57,6 +57,12 @@ all = ["qgis-datacube-viewer[zarr,netcdf,icechunk,remote]"]
 Homepage = "https://github.com/TUW-GEO/qgis-datacube-viewer"
 Repository = "https://github.com/TUW-GEO/qgis-datacube-viewer"
 
+# How qgis-project finds the raster provider when a layer asks for it by key: the name
+# is the provider key, the value registers the provider with QGIS.
+# tests/test_packaging.py keeps the name equal to PROVIDER_KEY.
+[project.entry-points."qgis_project.providers"]
+datacube_viewer = "datacube_viewer.provider:register_provider"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
