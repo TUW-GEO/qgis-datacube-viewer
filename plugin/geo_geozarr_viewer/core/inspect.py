@@ -1,4 +1,4 @@
-"""Turn a Zarr hierarchy into :mod:`geo_geozarr_viewer.core.model` dataclasses.
+"""Turn a group/array hierarchy (Zarr or NetCDF, see :mod:`.nodes`) into model dataclasses.
 
 Three pyramid declarations are supported, because real stores use all of them:
 
@@ -70,15 +70,14 @@ def _attrs(node: Any) -> dict[str, Any]:
 
 
 def _dimension_names(array: Any, ndim: int) -> tuple[str, ...]:
-    """Dimension names for a Zarr array, covering v3 and v2 conventions."""
-    names = getattr(getattr(array, "metadata", None), "dimension_names", None)
-    if names:
+    """Dimension names for an array node; unnamed axes become ``dim_<i>``.
+
+    Where the names live (Zarr metadata, ``_ARRAY_DIMENSIONS``, a NetCDF variable's
+    dimensions) is the node adapter's business; see :mod:`.nodes`.
+    """
+    names = getattr(array, "dims", None)
+    if names and len(names) == ndim:
         return tuple(str(n) if n is not None else f"dim_{i}" for i, n in enumerate(names))
-
-    legacy = _attrs(array).get("_ARRAY_DIMENSIONS")
-    if isinstance(legacy, (list, tuple)) and len(legacy) == ndim:
-        return tuple(str(n) for n in legacy)
-
     return tuple(f"dim_{i}" for i in range(ndim))
 
 
@@ -753,6 +752,7 @@ def describe_store(
         snapshot_id=handle.snapshot_id,
         attrs=root_attrs,
         is_icechunk=handle.is_icechunk,
+        kind=handle.kind,
         skipped=tuple(skipped),
     )
 

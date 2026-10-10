@@ -30,7 +30,7 @@ git diff plugin-upstream-0.2.1 -- plugin/
 | `__version__` removed from `geo_geozarr_viewer/__init__.py` | It said `0.1.0` while `metadata.txt` said `0.2.1`. One source of truth, and it is not a Python literal. |
 | `.gitlab-ci.yml` at the repository root | Development happens on GitLab; upstream has no lint/test CI at all. |
 | `.github/` and `[tool.qgis-plugin-ci]` deleted | EODC's path to plugins.qgis.org. GitLab never reads `.github/`, and its tag-equals-`metadata.txt` check can no longer pass now that the version comes from the tag. |
-| Phase-0 spike scripts deleted (`spike_provider.py`, `spike_render.png`) and `make_sample_store.py` | The spike asked whether a pure-Python provider can render at all; the plugin is the answer. `make_sample_store.py` subsets a 13 GB store we do not have, and `scripts/make_dummy_geozarr.py` at the repository root covers the need. |
+| Phase-0 spike scripts deleted (`spike_provider.py`, `spike_render.png`) and `make_sample_store.py` | The spike asked whether a pure-Python provider can render at all; the plugin is the answer. `make_sample_store.py` subsets a 13 GB store we do not have, and `scripts/make_dummy_data.py` at the repository root covers the need. |
 
 ## Versioning
 

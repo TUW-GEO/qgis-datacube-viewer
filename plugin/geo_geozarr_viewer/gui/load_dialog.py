@@ -56,6 +56,7 @@ from ..core import (
     describe_crs,
     describe_store,
     detect_kind,
+    has_versions,
     list_refs,
     open_store,
     parse_uri,
@@ -230,7 +231,7 @@ class GeoZarrLoadDialog(QDialog):
         self._uri_combo.setEditable(True)
         self._uri_combo.setInsertPolicy(QComboBox.NoInsert)
         self._uri_combo.lineEdit().setPlaceholderText(
-            "/path/to/icechunk_repo   or   s3://bucket/prefix"
+            "/path/to/store_or_file.nc   or   s3://bucket/prefix"
         )
         self._uri_combo.lineEdit().returnPressed.connect(self._on_connect)
         # Picking a recent store has to open it, not just fill the box in. Only
@@ -246,8 +247,12 @@ class GeoZarrLoadDialog(QDialog):
         view.setContextMenuPolicy(Qt.CustomContextMenu)
         view.customContextMenuRequested.connect(self._on_recent_context_menu)
 
-        browse = QPushButton("Browse…")
+        browse = QPushButton("Folder…")
+        browse.setToolTip("Pick a Zarr store or Icechunk repository (a directory)")
         browse.clicked.connect(self._on_browse)
+        browse_file = QPushButton("File…")
+        browse_file.setToolTip("Pick a NetCDF file")
+        browse_file.clicked.connect(self._on_browse_file)
         self._connect_button = QPushButton("Connect")
         self._connect_button.setDefault(True)
         self._connect_button.clicked.connect(self._on_connect)
@@ -255,7 +260,8 @@ class GeoZarrLoadDialog(QDialog):
         grid.addWidget(QLabel("Location"), 0, 0)
         grid.addWidget(self._uri_combo, 0, 1)
         grid.addWidget(browse, 0, 2)
-        grid.addWidget(self._connect_button, 0, 3)
+        grid.addWidget(browse_file, 0, 3)
+        grid.addWidget(self._connect_button, 0, 4)
 
         self._ref_kind = QComboBox()
         self._ref_kind.addItems(["Branch", "Tag", "Snapshot"])
@@ -275,11 +281,11 @@ class GeoZarrLoadDialog(QDialog):
         version_row.addWidget(self._ref_kind)
         version_row.addWidget(self._ref_value, 1)
         grid.addLayout(version_row, 1, 1)
-        grid.addWidget(self._pin_check, 1, 2, 1, 2)
+        grid.addWidget(self._pin_check, 1, 2, 1, 3)
 
         self._snapshot_label = QLabel("")
         self._snapshot_label.setStyleSheet("color: palette(mid);")
-        grid.addWidget(self._snapshot_label, 2, 1, 1, 3)
+        grid.addWidget(self._snapshot_label, 2, 1, 1, 4)
 
         grid.setColumnStretch(1, 1)
         return group
@@ -540,7 +546,21 @@ class GeoZarrLoadDialog(QDialog):
     # ------------------------------------------------------------- actions
     def _on_browse(self) -> None:
         start = self._uri_combo.currentText() or ""
-        path = QFileDialog.getExistingDirectory(self, "Select an Icechunk or Zarr store", start)
+        path = QFileDialog.getExistingDirectory(
+            self, "Select a Zarr store or Icechunk repository", start
+        )
+        if path:
+            self._uri_combo.setCurrentText(path)
+            self._on_connect()
+
+    def _on_browse_file(self) -> None:
+        start = self._uri_combo.currentText() or ""
+        path, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Select a NetCDF file",
+            start,
+            "NetCDF (*.nc *.nc4 *.cdf);;All files (*)",
+        )
         if path:
             self._uri_combo.setCurrentText(path)
             self._on_connect()
@@ -565,7 +585,7 @@ class GeoZarrLoadDialog(QDialog):
             # asking for them would import icechunk — which is an optional dependency
             # precisely so that plain Zarr works without it.
             kind = detect_kind(uri)
-            return uri, kind, (RepositoryRefs() if kind == "zarr" else list_refs(uri))
+            return uri, kind, (list_refs(uri) if has_versions(kind) else RepositoryRefs())
 
         self._worker.submit(job, self._on_refs_ready)
 
@@ -611,18 +631,17 @@ class GeoZarrLoadDialog(QDialog):
         self._mark_missing_recents()
 
         self._loading = True
-        self._set_versioning_enabled(kind != "zarr")
+        self._set_versioning_enabled(has_versions(kind), kind)
         self._populate_refs(refs)
         self._loading = False
         self._inspect()
 
-    def _set_versioning_enabled(self, enabled: bool) -> None:
+    def _set_versioning_enabled(self, enabled: bool, kind: str | None = None) -> None:
         """Grey out the version controls for a store that has no history."""
         for widget in (self._ref_kind, self._ref_value, self._pin_check):
             widget.setEnabled(enabled)
-        self._snapshot_label.setText(
-            "" if enabled else "Plain Zarr store — no branches, tags or snapshots."
-        )
+        what = "NetCDF file" if kind == "netcdf" else "Plain Zarr store"
+        self._snapshot_label.setText("" if enabled else f"{what} — no branches, tags or snapshots.")
 
     def _populate_refs(self, refs: RepositoryRefs) -> None:
         kind = self._ref_kind.currentText().lower()

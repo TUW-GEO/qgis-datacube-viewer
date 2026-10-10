@@ -1,4 +1,4 @@
-"""Data-access layer: Icechunk / Zarr / GeoZarr metadata and pixel reads.
+"""Data-access layer: Icechunk / Zarr / NetCDF metadata and pixel reads.
 
 Nothing in this package imports ``qgis.*``. That is a deliberate, enforced boundary
 (see ``tests/test_layering.py``): it means the whole metadata and reading path can be
@@ -8,12 +8,15 @@ unit-tested with a plain Python interpreter, and reused by the fixture builder.
 from .crs import CrsBundle, describe_crs, resolve_crs
 from .environment import (
     ALL_PACKAGES,
+    FORMAT_CHOICES,
+    FORMAT_PACKAGES,
+    NEEDS_ZARR,
     OPTIONAL_PACKAGES,
     PACKAGE_ROLES,
     REMOTE_PACKAGES,
-    REQUIRED_PACKAGES,
     SUPPRESS_KEY,
     VERIFY_SNIPPET,
+    ZARR_PACKAGE,
     InstallCommand,
     detect_flavour,
     install_command,
@@ -46,16 +49,27 @@ from .model import (
     select_level,
 )
 from .reader import DatasetReader, ReadRequest, ReadResult
-from .store import StoreHandle, clear_cache, detect_kind, list_refs, open_store, parse_uri
+from .store import (
+    StoreHandle,
+    clear_cache,
+    detect_kind,
+    has_versions,
+    list_refs,
+    open_store,
+    parse_uri,
+)
 
 __all__ = [
     "ALL_PACKAGES",
+    "FORMAT_CHOICES",
+    "FORMAT_PACKAGES",
+    "NEEDS_ZARR",
     "OPTIONAL_PACKAGES",
     "PACKAGE_ROLES",
     "REMOTE_PACKAGES",
-    "REQUIRED_PACKAGES",
     "SUPPRESS_KEY",
     "VERIFY_SNIPPET",
+    "ZARR_PACKAGE",
     "Affine",
     "AxisInfo",
     "BBox",
@@ -89,6 +103,7 @@ __all__ = [
     "describe_store",
     "detect_flavour",
     "detect_kind",
+    "has_versions",
     "inspect_store",
     "install_command",
     "is_externally_managed",

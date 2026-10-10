@@ -7,11 +7,13 @@ of this plugin still leaves a user one manual step away from a working plugin, a
 old message ("install zarr>=3") was not enough to complete that step on Windows or
 macOS, where the interpreter to install into is buried inside the QGIS installation.
 
-The one command it prints covers everything the plugin can use — zarr, icechunk,
-fsspec and s3fs — minus whatever is already importable, so a fresh install is one
-paste rather than a return trip per package. Each line says what it unlocks
-(:data:`~geo_geozarr_viewer.core.environment.PACKAGE_ROLES`), because "install four
-packages" with no reason attached is what gets half-followed.
+The one command it prints covers whatever the user ticks, one checkbox per kind of
+store (Zarr, NetCDF, Icechunk, Zarr on cloud storage; see
+:data:`~geo_geozarr_viewer.core.environment.FORMAT_CHOICES`). Everything not yet
+importable starts ticked, so a fresh install is one paste rather than a return trip per
+package, and anything already installed is shown ticked and greyed out. Each checkbox
+says what it opens, because "install four packages" with no reason attached is what
+gets half-followed.
 
 Everything platform-specific is decided in :mod:`geo_geozarr_viewer.core.environment`.
 This module is layout: three numbered steps, the command in a monospace box with a
@@ -23,8 +25,8 @@ from __future__ import annotations
 
 from html import escape
 
-from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QFont
+from qgis.PyQt.QtCore import Qt, QUrl
+from qgis.PyQt.QtGui import QDesktopServices, QFont
 from qgis.PyQt.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -41,7 +43,16 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .. import PLUGIN_NAME
-from ..core import ALL_PACKAGES, PACKAGE_ROLES, SUPPRESS_KEY, VERIFY_SNIPPET, install_command
+from ..core import (
+    ALL_PACKAGES,
+    FORMAT_CHOICES,
+    NEEDS_ZARR,
+    PACKAGE_ROLES,
+    SUPPRESS_KEY,
+    VERIFY_SNIPPET,
+    ZARR_PACKAGE,
+    install_command,
+)
 
 __all__ = ["SUPPRESS_KEY", "DependencyDialog"]
 
@@ -62,14 +73,18 @@ def _monospace(text: str, rows: int) -> QPlainTextEdit:
     font = QFont("monospace")
     font.setStyleHint(QFont.Monospace)
     box.setFont(font)
+    _fit_rows(box, rows)
+    return box
 
+
+def _fit_rows(box: QPlainTextEdit, rows: int) -> None:
+    """Size ``box`` for ``rows`` lines plus the scrollbar and margins (see above)."""
     chrome = (
         2 * int(box.document().documentMargin())
         + 2 * box.frameWidth()
         + box.horizontalScrollBar().sizeHint().height()
     )
     box.setFixedHeight(box.fontMetrics().lineSpacing() * rows + chrome)
-    return box
 
 
 def _step(number: int, title: str) -> QLabel:
@@ -96,10 +111,13 @@ def _rule() -> QFrame:
 class DependencyDialog(QDialog):
     """Install instructions for this machine, for the packages that are missing.
 
-    ``missing`` blocks everything; ``optional`` (icechunk) and ``remote`` (fsspec,
-    s3fs) each cost the user one kind of store. All three go into a single command —
-    they come from the same pip, and splitting them into separate commands only
-    invites a second visit here once the first remote store fails to open.
+    ``missing`` blocks everything; ``optional`` (netCDF4, icechunk, ...) and ``remote``
+    (fsspec, s3fs) each cost the user one kind of store. Each kind is a checkbox, and
+    whatever is ticked goes into a single command — they come from the same pip, and
+    splitting them into separate commands only invites a second visit here once the
+    first remote store fails to open. Unticking a format drops its packages from the
+    command; ticking Icechunk or cloud Zarr also ticks Zarr, which they cannot work
+    without.
 
     ``show_suppress`` is on only for the notice that appears by itself. When the user
     asked for these instructions — from the menu, or by trying to add a layer — a
@@ -126,9 +144,14 @@ class DependencyDialog(QDialog):
         # Ask only for what is actually absent, so a user who already has zarr is not
         # told to reinstall it. With nothing absent the dialog was opened from the
         # menu out of curiosity, and the full list is the useful thing to show.
-        wanted = [self._spec(name) for name in self._missing + self._optional + self._remote]
-        self._wanted = tuple(wanted) or ALL_PACKAGES
-        self._install = install_command(self._wanted)
+        self._absent = {self._spec(n) for n in self._missing + self._optional + self._remote}
+        #: One checkbox per FORMAT_CHOICES entry, in the same order.
+        self._choices: list[QCheckBox] = []
+        self._syncing = False
+        self._command_box: QPlainTextEdit | None = None
+        self._copy_button: QPushButton | None = None
+        self._wanted: tuple[str, ...] = ()
+        self._install = install_command(())
 
         self._build_ui(show_suppress)
 
@@ -159,20 +182,31 @@ class DependencyDialog(QDialog):
         body.setContentsMargins(0, 0, 0, 0)
 
         body.addWidget(_body(self._headline()))
+        self._build_choices(body)
         body.addWidget(_rule())
 
         body.addWidget(_step(1, f"Open {self._install.terminal}"))
         if self._install.terminal_hint:
             body.addWidget(_body(self._install.terminal_hint))
+        launcher = self._install.terminal_launcher
+        if launcher is not None:
+            show_row = QHBoxLayout()
+            show = QPushButton(f"Show {launcher.name} in the file manager")
+            show.setToolTip(str(launcher))
+            show.clicked.connect(self._show_launcher)
+            show_row.addWidget(show)
+            show_row.addStretch(1)
+            body.addLayout(show_row)
 
         body.addWidget(_step(2, "Run this command"))
         command = self._install.command
-        body.addWidget(_monospace(command, command.count("\n") + 1))
+        self._command_box = _monospace(command, command.count("\n") + 1)
+        body.addWidget(self._command_box)
 
         copy_row = QHBoxLayout()
-        copy = QPushButton("Copy command")
-        copy.clicked.connect(self._copy)
-        copy_row.addWidget(copy)
+        self._copy_button = QPushButton("Copy command")
+        self._copy_button.clicked.connect(self._copy)
+        copy_row.addWidget(self._copy_button)
         self._copied = QLabel("")
         copy_row.addWidget(self._copied)
         copy_row.addStretch(1)
@@ -238,31 +272,108 @@ class DependencyDialog(QDialog):
         if self._missing:
             names = ", ".join(f"<b>{escape(self._spec(m))}</b>" for m in self._missing)
             lead = (
-                f"QGIS's Python cannot import {names}, so no store will open yet. "
+                f"QGIS's Python cannot import {names}, so no store will open yet "
+                "(either one is enough to start; each adds its own format). "
                 "The plugin itself is fine — the Plugin Manager unzips plugins, it "
                 "never runs pip, so this last step is manual."
             )
         elif self._optional or self._remote:
             lead = (
-                "Plain local Zarr stores already work. What is missing below is "
-                "optional — each package adds one kind of store, and nothing else "
-                "stops working without it."
+                "Stores in the formats you already have packages for work. What is "
+                "missing below is optional — each package adds one kind of store, "
+                "and nothing else stops working without it."
             )
         else:
             lead = (
                 f"Everything {PLUGIN_NAME} can use is already installed. The command "
                 "below is here for reference."
             )
-        return lead + self._package_list()
+        return lead + " Tick the formats you want to open:"
 
-    def _package_list(self) -> str:
-        """One line per package in the command: what it is, and what it is for."""
-        rows = ""
-        for spec in self._wanted:
-            role = PACKAGE_ROLES.get(spec, "")
-            rows += f"<li><tt>{escape(spec)}</tt>"
-            rows += f" — {escape(role)}</li>" if role else "</li>"
-        return f"<ul>{rows}</ul>" if rows else ""
+    # ------------------------------------------------------------------ choices
+    def _build_choices(self, body: QVBoxLayout) -> None:
+        """One checkbox per kind of store; the command follows whatever is ticked.
+
+        A format whose packages are all importable is shown ticked and greyed out, so
+        the list still reads as "everything this plugin can open" without asking for a
+        reinstall. If *nothing* is absent the dialog was opened from the menu for
+        reference, and every box is left ticked so the command shows the full set.
+        """
+        for title, packages in FORMAT_CHOICES:
+            absent = [p for p in packages if p in self._absent]
+            box = QCheckBox(f"{title}   ({', '.join(packages)})")
+            box.setToolTip("\n".join(f"{p}: {PACKAGE_ROLES[p]}" for p in packages))
+            box.setChecked(True)
+            box.setEnabled(bool(absent))
+            if not absent and self._absent:
+                box.setText(f"{box.text()} — already installed")
+            box.toggled.connect(lambda checked, b=box: self._on_choice_toggled(b, checked))
+            self._choices.append(box)
+            body.addWidget(box)
+        self._recompute()
+
+    def _selected_packages(self) -> tuple[str, ...]:
+        """Packages to install: the ticked formats' absent packages, in install order."""
+        if not self._absent:
+            return ALL_PACKAGES if self._choices_checked() else ()
+        wanted: list[str] = []
+        for (_title, packages), box in zip(FORMAT_CHOICES, self._choices):
+            if box.isChecked() and box.isEnabled():
+                wanted += [p for p in packages if p in self._absent]
+        return tuple(wanted)
+
+    def _choices_checked(self) -> bool:
+        return any(box.isChecked() for box in self._choices)
+
+    def _zarr_box(self) -> QCheckBox | None:
+        for (_title, packages), box in zip(FORMAT_CHOICES, self._choices):
+            if ZARR_PACKAGE in packages:
+                return box
+        return None
+
+    def _on_choice_toggled(self, box: QCheckBox, checked: bool) -> None:
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            self._keep_zarr_consistent(box, checked)
+        finally:
+            self._syncing = False
+        self._recompute()
+
+    def _keep_zarr_consistent(self, box: QCheckBox, checked: bool) -> None:
+        """Icechunk and cloud Zarr are useless without zarr: keep the ticks consistent.
+
+        Ticking one of them ticks Zarr; unticking Zarr unticks them. Boxes that are
+        greyed out (already installed) are never touched, and when zarr itself is
+        installed there is nothing to keep consistent.
+        """
+        zarr_box = self._zarr_box()
+        if zarr_box is None or not zarr_box.isEnabled():
+            return
+        dependants = [
+            other
+            for (_title, packages), other in zip(FORMAT_CHOICES, self._choices)
+            if any(p in NEEDS_ZARR for p in packages) and other.isEnabled()
+        ]
+        if box is zarr_box and not checked:
+            for other in dependants:
+                other.setChecked(False)
+        elif box in dependants and checked:
+            zarr_box.setChecked(True)
+
+    def _recompute(self) -> None:
+        """Rebuild the command for the current ticks and show it."""
+        self._wanted = self._selected_packages()
+        self._install = install_command(self._wanted)
+        if self._command_box is None:
+            return  # still building the layout
+        command = self._install.command if self._wanted else "# tick at least one format above"
+        self._command_box.setPlainText(command)
+        _fit_rows(self._command_box, command.count("\n") + 1)
+        if self._copy_button is not None:
+            self._copy_button.setEnabled(bool(self._wanted))
+        self._copied.setText("")
 
     def _notes(self) -> list[str]:
         notes = list(self._install.notes)
@@ -276,6 +387,17 @@ class DependencyDialog(QDialog):
         return notes
 
     # -------------------------------------------------------------------- slots
+    def _show_launcher(self) -> None:
+        """Open the folder holding this QGIS's shell launcher.
+
+        Through Qt rather than by starting explorer.exe: the core never spawns
+        processes, and the folder is all the user needs -- double-clicking the launcher
+        in it opens the shell.
+        """
+        launcher = self._install.terminal_launcher
+        if launcher is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(launcher.parent)))
+
     def _copy(self) -> None:
         QApplication.clipboard().setText(self._install.command)
         self._copied.setText("Copied.")

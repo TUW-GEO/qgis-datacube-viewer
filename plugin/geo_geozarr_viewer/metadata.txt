@@ -29,13 +29,13 @@ about=Adds a raster data provider for GeoZarr datacubes. Reads directly from Ice
     between pyramid levels as you zoom. Icechunk branches, tags and snapshots can be
     selected at load time and changed afterwards without re-adding the layer.
     .
-    ONE MANUAL STEP AFTER INSTALL: this plugin needs the "zarr" (>=3) Python package,
-    and QGIS's Plugin Manager does not install Python packages. After installing,
-    open Raster > GEO-geo-zarr > GEO-Install Python Dependencies... - it detects your
-    operating system and QGIS build and shows the exact command to run, where to run
-    it, and the interpreter it targets. "icechunk" is optional and only needed for
-    Icechunk repositories; plain Zarr v3 stores work without it. Both require Python
-    3.12 or newer, which means QGIS 3.40 or newer.
+    ONE MANUAL STEP AFTER INSTALL: this plugin needs the "zarr" (>=3) Python package
+    for Zarr stores and/or "netCDF4" for NetCDF files, and QGIS's Plugin Manager does
+    not install Python packages. After installing, open Raster > GEO-geo-zarr >
+    GEO-Install Python Dependencies... - it detects your operating system and QGIS
+    build and shows the exact command to run, where to run it, and the interpreter it
+    targets. "icechunk" is optional and only needed for Icechunk repositories. zarr
+    and icechunk require Python 3.12 or newer, which means QGIS 3.40 or newer.
     .
     Originally developed by EODC (https://eodc.eu) as "GeoZarr Viewer". MIT licensed.
     This is a renamed fork carrying local changes; it is not the EODC release.

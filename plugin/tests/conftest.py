@@ -63,7 +63,13 @@ def isolate_recent_stores():
     different store than the one it asked for, because marking a row re-reads the
     editable combo's text from the model.
     """
-    from qgis.core import QgsSettings
+    try:
+        from qgis.core import QgsSettings
+    except ImportError:
+        # No QGIS in this interpreter: only core-layer tests can run, and they have
+        # no recent-stores list to protect.
+        yield
+        return
 
     from geo_geozarr_viewer.gui.load_dialog import _SETTINGS_RECENT
 

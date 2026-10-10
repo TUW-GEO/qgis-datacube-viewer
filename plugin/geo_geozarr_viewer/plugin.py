@@ -46,33 +46,44 @@ def _icon(name: str) -> QIcon:
     return QIcon(path) if os.path.exists(path) else QIcon()
 
 
-def check_dependencies() -> list[str]:
-    """Required packages missing from this interpreter. Empty means "good to go".
-
-    Only ``zarr`` is required. ``icechunk`` is optional — without it the plugin still
-    reads plain Zarr v3 stores, and the data layer raises a clear
-    ``MissingDependencyError`` if someone points it at an Icechunk repository. Making
-    it a hard requirement would block the only fallback available on a machine where
-    the icechunk wheel cannot be installed.
-    """
-    missing = []
+def _format_problems() -> list[str]:
+    """Format libraries (``zarr``, ``netCDF4``) this interpreter cannot use, as report lines."""
+    problems = []
     try:
         import zarr
 
         if int(zarr.__version__.split(".")[0]) < 3:
-            missing.append(f"zarr>=3 (found {zarr.__version__})")
+            problems.append(f"zarr>=3 (found {zarr.__version__})")
     except ImportError:
-        missing.append("zarr>=3")
-    return missing
+        problems.append("zarr>=3")
+    try:
+        import netCDF4  # noqa: F401
+    except ImportError:
+        problems.append("netCDF4")
+    return problems
+
+
+def check_dependencies() -> list[str]:
+    """What blocks the plugin entirely. Empty means "good to go".
+
+    No single package is required: ``zarr`` opens Zarr, ``netCDF4`` opens NetCDF. Only
+    when *neither* is usable can no store be opened, and then both are reported, since
+    either one fixes it and the user may want the other too. ``icechunk`` is never
+    blocking — without it the data layer raises a clear ``MissingDependencyError`` for
+    Icechunk repositories only.
+    """
+    problems = _format_problems()
+    return problems if len(problems) == 2 else []
 
 
 def optional_dependencies() -> list[str]:
     """Missing packages that narrow what can be opened but do not disable the plugin."""
+    missing = [] if check_dependencies() else _format_problems()
     try:
         import icechunk  # noqa: F401
     except ImportError:
-        return ["icechunk"]
-    return []
+        missing.append("icechunk")
+    return missing
 
 
 def remote_dependencies() -> list[str]:
@@ -222,8 +233,8 @@ class GeoZarrViewerPlugin:
         if not missing and not optional:
             return
         if not missing and QgsSettings().value(SUPPRESS_KEY, False, type=bool):
-            # Only zarr is load-blocking. Once someone has said they know icechunk is
-            # absent, nagging about an optional package every launch is noise.
+            # Only "no format library at all" is load-blocking. Once someone has said
+            # they know an optional package is absent, nagging every launch is noise.
             return
 
         summary = ", ".join(m.split("(")[0].strip() for m in missing + optional)
@@ -233,7 +244,7 @@ class GeoZarrViewerPlugin:
             + (
                 "The plugin cannot open stores until this is fixed."
                 if missing
-                else "Plain Zarr stores still work."
+                else "Everything else still works."
             ),
         )
         button = QPushButton("Show me how", widget)

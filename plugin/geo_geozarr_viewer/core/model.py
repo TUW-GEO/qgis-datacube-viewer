@@ -335,6 +335,8 @@ class StoreInfo:
     snapshot_id: str | None = None
     attrs: dict[str, Any] = field(default_factory=dict)
     is_icechunk: bool = True
+    #: Storage format: "icechunk", "zarr" or "netcdf".
+    kind: str = "icechunk"
     #: Groups that were skipped, with the reason — surfaced in the UI so a user whose
     #: dataset is missing learns why instead of seeing an empty list.
     skipped: tuple[tuple[str, str], ...] = ()

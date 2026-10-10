@@ -21,6 +21,7 @@ from geo_geozarr_viewer.core.environment import (
     WINDOWS,
     detect_flavour,
     install_command,
+    osgeo4w_launcher,
     qgis_python,
 )
 
@@ -147,3 +148,26 @@ def test_every_flavour_produces_a_usable_block(tmp_path, flavour):
     assert cmd.command.strip(), "a flavour with no command would be a dead end"
     assert cmd.terminal.strip()
     assert cmd.label
+
+
+def test_osgeo4w_launcher_is_found_for_the_running_qgis(tmp_path):
+    """Several QGIS versions can coexist; the shell must belong to the running one."""
+    root = tmp_path / "QGIS 3.44.15"
+    (root / "apps" / "Python312").mkdir(parents=True)
+    (root / "bin").mkdir()
+    (root / "OSGeo4W.bat").write_text("@echo off")
+    other = tmp_path / "QGIS 3.28.0"
+    other.mkdir()
+    (other / "OSGeo4W.bat").write_text("@echo off")
+
+    prefix, exe = str(root / "apps" / "Python312"), str(root / "bin" / "qgis-bin.exe")
+    assert osgeo4w_launcher(prefix, exe) == root / "OSGeo4W.bat"
+    cmd = install_command(("zarr>=3",), WINDOWS, prefix, exe)
+    assert cmd.terminal_launcher == root / "OSGeo4W.bat"
+
+
+def test_no_launcher_when_there_is_no_osgeo4w(tmp_path):
+    assert osgeo4w_launcher(str(tmp_path), str(tmp_path / "python")) is None
+    assert (
+        install_command(("zarr>=3",), LINUX, sys.prefix, sys.executable).terminal_launcher is None
+    )

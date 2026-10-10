@@ -33,22 +33,40 @@ import sysconfig
 from dataclasses import dataclass, field
 from pathlib import Path
 
-#: Hard requirement. Anything less and the plugin cannot open a store at all.
-REQUIRED_PACKAGES = ("zarr>=3",)
-#: Only needed for Icechunk repositories; plain Zarr v3 works without it.
+#: One package per storage format family. No single one is mandatory, but with none of
+#: them the plugin cannot open a store at all, so the startup check is "at least one".
+FORMAT_PACKAGES = ("zarr>=3", "netCDF4")
+#: Only needed for Icechunk repositories (which also need zarr); plain Zarr v3 works
+#: without it.
 OPTIONAL_PACKAGES = ("icechunk",)
 #: Only needed for plain Zarr on cloud object storage. ``http(s)://`` is served by
 #: :mod:`geo_geozarr_viewer.core.http_store` and Icechunk brings its own object client,
 #: so neither of those needs these.
 REMOTE_PACKAGES = ("fsspec", "s3fs")
 #: What a first-time install should ask for: everything, in one command.
-ALL_PACKAGES = REQUIRED_PACKAGES + OPTIONAL_PACKAGES + REMOTE_PACKAGES
+ALL_PACKAGES = FORMAT_PACKAGES + OPTIONAL_PACKAGES + REMOTE_PACKAGES
+
+#: What the install dialog offers as checkboxes: ``(what it opens, pip packages)``, in
+#: the order they are installed. Flattened, this is :data:`ALL_PACKAGES`.
+FORMAT_CHOICES = (
+    ("Zarr stores", ("zarr>=3",)),
+    ("NetCDF files", ("netCDF4",)),
+    ("Icechunk repositories, with branches, tags and snapshots", ("icechunk",)),
+    ("Zarr on s3://, gs:// and az://", REMOTE_PACKAGES),
+)
+#: Packages that do nothing without zarr, so choosing one of them chooses zarr too.
+NEEDS_ZARR = OPTIONAL_PACKAGES + REMOTE_PACKAGES
+ZARR_PACKAGE = "zarr>=3"
+
+#: pip name -> conda-forge name, where they differ.
+_CONDA_NAMES = {"netCDF4": "netcdf4"}
 
 #: What each package buys the user, in one clause. The install dialog prints these
 #: beside the packages it is asking for, so nobody has to guess why opening one file
 #: needs four installs. Keyed by pip requirement, as it appears in the command.
 PACKAGE_ROLES = {
-    "zarr>=3": "required: no store opens without it",
+    "zarr>=3": "Zarr stores (and Icechunk, which is built on it)",
+    "netCDF4": "NetCDF files (.nc)",
     "icechunk": "Icechunk repositories and time travel",
     "fsspec": "plain Zarr over s3://, gs:// and az:// (http(s):// needs nothing)",
     "s3fs": "the S3 backend for fsspec (gs:// wants gcsfs, az:// wants adlfs)",
@@ -163,6 +181,26 @@ def qgis_python(
     return None
 
 
+def osgeo4w_launcher(prefix: str | None = None, executable: str | None = None) -> Path | None:
+    """The ``OSGeo4W.bat`` that opens the OSGeo4W Shell for *this* QGIS, if it exists.
+
+    The Start-menu entry "OSGeo4W Shell" is a shortcut to this file in the QGIS install
+    root. It is derived from the running interpreter rather than searched for, because
+    several QGIS versions can be installed side by side and the shell has to belong to
+    the one that is running: a package installed through another version's Python is
+    invisible here. Walks up from ``sys.prefix`` (``<root>\\apps\\Python312``) and from the
+    executable (``<root>\\bin\\qgis-bin.exe``), which both sit inside the root.
+    """
+    prefix = sys.prefix if prefix is None else prefix
+    executable = sys.executable if executable is None else executable
+    for start in (Path(prefix), Path(executable)):
+        for directory in (start, *start.parents):
+            launcher = directory / "OSGeo4W.bat"
+            if launcher.is_file():
+                return launcher
+    return None
+
+
 def is_externally_managed(stdlib: str | None = None) -> bool:
     """True when PEP 668 will make pip refuse to install into this interpreter.
 
@@ -198,6 +236,9 @@ class InstallCommand:
     interpreter: Path | None
     #: Caveats that apply to this specific environment.
     notes: tuple[str, ...] = field(default_factory=tuple)
+    #: The file that opens ``terminal`` (Windows: this QGIS's ``OSGeo4W.bat``), when it
+    #: could be located. The dialog offers to show its folder in the file manager.
+    terminal_launcher: Path | None = None
 
     @property
     def label(self) -> str:
@@ -225,7 +266,7 @@ def install_command(
     spec = " ".join(f'"{p}"' if any(c in p for c in "><=") else p for p in packages)
 
     if flavour == CONDA:
-        conda = [p for p in packages if not p.startswith("icechunk")]
+        conda = [_CONDA_NAMES.get(p, p) for p in packages if not p.startswith("icechunk")]
         pip = [p for p in packages if p.startswith("icechunk")]
         lines = []
         if conda:
@@ -252,12 +293,14 @@ def install_command(
             flavour=flavour,
             terminal="OSGeo4W Shell",
             terminal_hint=(
-                "Start menu → the QGIS folder → OSGeo4W Shell. "
+                "Start menu → the QGIS folder → OSGeo4W Shell (or double-click "
+                "OSGeo4W.bat in the QGIS folder). "
                 "Do not use Command Prompt or PowerShell: they have a different "
                 "Python on PATH and the packages will land where QGIS cannot see them."
             ),
             command=f"python -m pip install --user {spec}",
             interpreter=interpreter,
+            terminal_launcher=osgeo4w_launcher(prefix, executable),
             notes=(
                 'If the shell answers "python is not recognized", run  py3_env  first, '
                 "then the command again.",
@@ -335,4 +378,7 @@ def install_command(
 
 
 #: Paste this into Plugins → Python Console to confirm the install worked.
-VERIFY_SNIPPET = "import zarr, sys; print(zarr.__version__, sys.executable)"
+VERIFY_SNIPPET = (
+    "import sys, importlib.util as u; "
+    "print({m: u.find_spec(m) is not None for m in ('zarr', 'icechunk', 'netCDF4')}, sys.executable)"
+)

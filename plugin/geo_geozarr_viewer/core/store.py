@@ -1,4 +1,4 @@
-"""Opening Icechunk repositories (and plain Zarr stores) read-only.
+"""Opening Icechunk repositories, plain Zarr stores and NetCDF files read-only.
 
 Everything here is read-only by construction: we only ever ask for
 ``Repository.readonly_session``, never ``writable_session``, so a mis-typed URI cannot
@@ -7,6 +7,11 @@ damage a repository.
 Refs are always resolved to a concrete snapshot ID before use. A branch tip moves;
 a snapshot ID is immutable, which makes it both a sound cache key and the thing that
 makes "reload" a meaningful action.
+
+Which format a location holds is :func:`detect_kind`'s job, and :func:`open_store`
+hands back the same :class:`StoreHandle` for all of them: a root
+:class:`~geo_geozarr_viewer.core.nodes.GroupNode` plus a little provenance. Everything
+downstream works against that node tree and never learns which library produced it.
 """
 
 from __future__ import annotations
@@ -22,8 +27,23 @@ from urllib.parse import parse_qsl, urlsplit
 
 from .errors import MissingDependencyError, RefNotFoundError, StoreOpenError
 from .model import RefSpec, RepositoryRefs, SnapshotInfo
+from .nodes import GroupNode, lookup
+from .zarr_nodes import ZarrGroup
 
-StoreKind = Literal["icechunk", "zarr"]
+StoreKind = Literal["icechunk", "zarr", "netcdf"]
+
+#: Kinds with no history to browse: one fixed state, no branches, tags or snapshots.
+UNVERSIONED_KINDS: tuple[str, ...] = ("zarr", "netcdf")
+
+#: URL suffixes that mark a location as NetCDF (an OPeNDAP endpoint) rather than a
+#: Zarr/Icechunk root.
+_NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf", ".netcdf")
+
+
+def has_versions(kind: str | None) -> bool:
+    """Whether stores of this kind carry branches, tags and snapshots."""
+    return kind not in UNVERSIONED_KINDS
+
 
 _log = logging.getLogger(__name__)
 
@@ -200,16 +220,20 @@ _PROBE_TIMEOUT = 10.0
 
 
 def detect_kind(uri: str) -> StoreKind:
-    """Decide whether a URI points at an Icechunk repo or a plain Zarr store.
+    """Decide whether a URI points at an Icechunk repo, a plain Zarr store or a NetCDF file.
 
-    For local paths this is a cheap filesystem check, and for ``http(s)://`` it is one
-    request for ``zarr.json``. Other cloud schemes are assumed to be Icechunk — probing
-    them would need credentials and an object-store client — and a plain Zarr store
-    there can be forced with :func:`open_store`'s ``kind`` argument.
+    For local paths this is a cheap filesystem check: Zarr and Icechunk are
+    *directories*, so a regular file can only be NetCDF. For ``http(s)://`` it is a
+    ``.nc`` suffix check (an OPeNDAP URL) or else one request for ``zarr.json``. Other
+    cloud schemes are assumed to be Icechunk — probing them would need credentials and
+    an object-store client — and a plain Zarr store there can be forced with
+    :func:`open_store`'s ``kind`` argument.
     """
     parsed = parse_uri(uri)
 
     if parsed.scheme in {"http", "https"}:
+        if parsed.path.lower().endswith(_NETCDF_SUFFIXES):
+            return "netcdf"
         # Public Zarr stores served straight off a web server are common enough that
         # guessing "icechunk" here is what made https:// URLs unusable: the guess sent
         # them through Repository.open(), which cannot read a plain Zarr hierarchy.
@@ -219,6 +243,8 @@ def detect_kind(uri: str) -> StoreKind:
         return "icechunk"
 
     root = parsed.path
+    if os.path.isfile(root):
+        return "netcdf"
     # A Zarr store announces itself with metadata at the top level.
     for marker in _ZARR_MARKERS:
         if os.path.exists(os.path.join(root, marker)):
@@ -311,6 +337,48 @@ def _require_discoverable(root: Any, target: Any, uri: str) -> None:
             "copy from somewhere listable (a local directory, s3://, gs://, az://)."
         ),
     )
+
+
+# ------------------------------------------------------------------------- NetCDF
+def _netcdf_target(uri: str) -> tuple[str, str]:
+    """``(what to hand netCDF4, fingerprint)`` for a NetCDF location.
+
+    A local file is fingerprinted by size and modification time. NetCDF has no
+    snapshots, but a file *can* be rewritten under a running QGIS, and keying the
+    handle cache on the fingerprint means the next open sees the new contents instead
+    of a stale handle. OPeNDAP URLs have no cheap fingerprint and are cached by URL.
+    """
+    parsed = parse_uri(uri)
+    if not parsed.is_local:
+        return uri, ""
+    try:
+        stat = os.stat(parsed.path)
+    except OSError as exc:
+        raise StoreOpenError(
+            f"No such file: {parsed.path}", hint="Point at a NetCDF file (.nc)."
+        ) from exc
+    if not os.path.isfile(parsed.path):
+        raise StoreOpenError(
+            f"{parsed.path} is a directory, not a NetCDF file.",
+            hint="Pick the .nc file itself. A directory is read as a Zarr store.",
+        )
+    return parsed.path, f"{stat.st_size}-{stat.st_mtime_ns}"
+
+
+def _open_netcdf_store(uri: str, ref: RefSpec | None) -> StoreHandle:
+    from .netcdf_nodes import open_netcdf
+
+    ref = ref or RefSpec("branch", "-")
+    target, fingerprint = _netcdf_target(uri)
+    key = (uri, "netcdf", fingerprint)
+    with _cache_lock:
+        cached = _handle_cache.get(key)
+        if cached is not None:
+            _handle_cache.move_to_end(key)
+            return cached
+    handle = StoreHandle(uri, ref, open_netcdf(target, uri), None, kind="netcdf")
+    _remember(key, handle)
+    return handle
 
 
 # --------------------------------------------------------------------- repository
@@ -416,17 +484,23 @@ def resolve_snapshot_id(repo: Any, ref: RefSpec) -> str:
 class StoreHandle:
     """A live, read-only view of one snapshot of one store.
 
-    Holds the Zarr root group. Safe to share between threads for *reading* — Zarr 3's
-    sync API and Icechunk's readonly store are both thread-safe for concurrent gets.
+    Holds the root :class:`~geo_geozarr_viewer.core.nodes.GroupNode`, whichever format
+    it came from. Safe to share between threads for *reading* — Zarr 3's sync API and
+    Icechunk's readonly store are both thread-safe for concurrent gets, and the NetCDF
+    adapter serialises access to its file itself.
     """
 
     uri: str
     ref: RefSpec
-    root: Any
+    root: GroupNode
     snapshot_id: str | None = None
-    is_icechunk: bool = True
+    kind: StoreKind = "icechunk"
     _session: Any = None
     _repo: Any = None
+
+    @property
+    def is_icechunk(self) -> bool:
+        return self.kind == "icechunk"
 
     @property
     def cache_key(self) -> tuple[str, str, str]:
@@ -434,23 +508,16 @@ class StoreHandle:
 
     def group(self, path: str) -> Any:
         """Fetch a subgroup by ``/``-separated path (``""`` returns the root)."""
-        node = self.root
-        for part in [p for p in path.split("/") if p]:
-            try:
-                node = node[part]
-            except KeyError as exc:
-                raise StoreOpenError(f"No group at path {path!r} in this snapshot.") from exc
-        return node
+        try:
+            return lookup(self.root, path, "group")
+        except KeyError as exc:
+            raise StoreOpenError(f"No group at path {path!r} in this snapshot.") from exc
 
     def array(self, path: str) -> Any:
-        node = self.root
-        parts = [p for p in path.split("/") if p]
-        for part in parts:
-            try:
-                node = node[part]
-            except KeyError as exc:
-                raise StoreOpenError(f"No array at path {path!r} in this snapshot.") from exc
-        return node
+        try:
+            return lookup(self.root, path, "array")
+        except KeyError as exc:
+            raise StoreOpenError(f"No array at path {path!r} in this snapshot.") from exc
 
 
 def open_store(
@@ -462,8 +529,11 @@ def open_store(
     immutable snapshot is free, while re-opening a *branch* that has since moved
     correctly produces a new handle.
     """
-    zarr = _require_zarr()
     store_kind = kind or detect_kind(uri)
+    if store_kind == "netcdf":
+        # Before _require_zarr: reading NetCDF must not need zarr installed.
+        return _open_netcdf_store(uri, ref)
+    zarr = _require_zarr()
 
     if store_kind == "zarr":
         ref = ref or RefSpec("branch", "-")
@@ -479,7 +549,7 @@ def open_store(
         except Exception as exc:
             raise StoreOpenError(f"Could not open Zarr group at {uri}: {exc}") from exc
         _require_discoverable(root, target, uri)
-        handle = StoreHandle(uri, ref, root, None, is_icechunk=False)
+        handle = StoreHandle(uri, ref, ZarrGroup(root), None, kind="zarr")
         _remember(key, handle)
         return handle
 
@@ -505,7 +575,7 @@ def open_store(
             f"Snapshot {snapshot_id[:8]} does not contain a readable Zarr hierarchy: {exc}"
         ) from exc
 
-    handle = StoreHandle(uri, ref, root, snapshot_id, True, session, repo)
+    handle = StoreHandle(uri, ref, ZarrGroup(root), snapshot_id, "icechunk", session, repo)
     _remember(key, handle)
     return handle
 

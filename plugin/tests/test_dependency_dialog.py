@@ -71,13 +71,64 @@ def test_already_installed_remote_packages_are_not_asked_for(dialog) -> None:
 
 
 def test_every_package_says_what_it_is_for(dialog) -> None:
-    """Four packages with no reasons attached is what gets half-followed."""
+    """Four packages with no reasons attached is what gets half-followed.
+
+    The reason is the checkbox itself: it names the kind of store the package opens.
+    """
     d = dialog(missing=["zarr>=3"], optional=["icechunk"], remote=["fsspec", "s3fs"])
-    headline = d._headline()
-    assert headline.count("<li>") == 4
+    labels = " | ".join(box.text() for box in d._choices)
     for spec in d._wanted:
-        assert env.PACKAGE_ROLES[spec] in headline
-    assert "s3://" in headline, "the reason to install fsspec is the schemes it unlocks"
+        assert spec in labels
+        assert env.PACKAGE_ROLES[spec] in " ".join(box.toolTip() for box in d._choices)
+    assert "s3://" in labels, "the reason to install fsspec is the schemes it unlocks"
+
+
+def test_there_is_one_checkbox_per_format(dialog) -> None:
+    d = dialog(missing=["zarr>=3", "netCDF4"], optional=["icechunk"], remote=["fsspec", "s3fs"])
+    assert [box.text().split("  ")[0] for box in d._choices] == [
+        title for title, _packages in env.FORMAT_CHOICES
+    ]
+    assert all(box.isChecked() and box.isEnabled() for box in d._choices)
+
+
+def test_unticking_a_format_drops_its_packages_from_the_command(dialog) -> None:
+    d = dialog(missing=["zarr>=3", "netCDF4"], optional=["icechunk"])
+    assert "netCDF4" in d._install.command
+    d._choices[1].setChecked(False)  # NetCDF
+    assert "netCDF4" not in d._install.command
+    assert "netCDF4" not in d._command_box.toPlainText()
+    assert "zarr" in d._command_box.toPlainText()
+
+
+def test_icechunk_and_cloud_zarr_cannot_be_chosen_without_zarr(dialog) -> None:
+    d = dialog(missing=["zarr>=3"], optional=["icechunk"], remote=["fsspec", "s3fs"])
+    zarr_box, _netcdf, icechunk_box, cloud_box = d._choices
+
+    zarr_box.setChecked(False)
+    assert not icechunk_box.isChecked() and not cloud_box.isChecked()
+
+    icechunk_box.setChecked(True)
+    assert zarr_box.isChecked(), "ticking icechunk has to bring zarr along"
+    assert "zarr>=3" in d._wanted and "icechunk" in d._wanted
+
+
+def test_installed_formats_are_shown_but_not_offered(dialog) -> None:
+    d = dialog(missing=["netCDF4"])  # zarr, icechunk and the cloud extras are installed
+    zarr_box, netcdf_box, icechunk_box, cloud_box = d._choices
+    for installed in (zarr_box, icechunk_box, cloud_box):
+        assert installed.isChecked() and not installed.isEnabled()
+        assert "already installed" in installed.text()
+    assert netcdf_box.isEnabled()
+    assert d._wanted == ("netCDF4",)
+
+
+def test_nothing_ticked_leaves_nothing_to_copy(dialog) -> None:
+    d = dialog(missing=["zarr>=3", "netCDF4"])
+    for box in d._choices:
+        box.setChecked(False)
+    assert d._wanted == ()
+    assert not d._copy_button.isEnabled()
+    assert d._command_box.toPlainText().startswith("#")
 
 
 def test_the_menu_entry_lists_everything_when_nothing_is_missing(dialog) -> None:
@@ -157,3 +208,32 @@ def test_copy_puts_the_command_on_the_clipboard(dialog) -> None:
     d = dialog(flavour=env.LINUX)
     d._copy()
     assert QApplication.clipboard().text() == d._install.command
+
+
+def test_windows_offers_to_show_the_shell_launcher(dialog, tmp_path) -> None:
+    from qgis.PyQt.QtWidgets import QPushButton
+
+    root = tmp_path / "QGIS 3.44.15"
+    (root / "apps" / "Python312").mkdir(parents=True)
+    (root / "bin").mkdir()
+    (root / "OSGeo4W.bat").write_text("@echo off")
+    import geo_geozarr_viewer.gui.dependencies as depmod
+
+    real = depmod.install_command
+    depmod.install_command = lambda pkgs: real(
+        pkgs, env.WINDOWS, str(root / "apps" / "Python312"), str(root / "bin" / "qgis-bin.exe")
+    )
+    try:
+        d = dialog()
+    finally:
+        depmod.install_command = real
+    buttons = [b for b in d.findChildren(QPushButton) if "OSGeo4W.bat" in b.text()]
+    assert len(buttons) == 1
+    assert buttons[0].toolTip() == str(root / "OSGeo4W.bat")
+
+
+def test_other_platforms_have_no_launcher_button(dialog) -> None:
+    from qgis.PyQt.QtWidgets import QPushButton
+
+    d = dialog(flavour=env.LINUX)
+    assert not [b for b in d.findChildren(QPushButton) if "file manager" in b.text()]

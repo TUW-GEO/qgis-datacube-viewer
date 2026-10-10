@@ -5,8 +5,37 @@
 > Suijker's similarly named plugin when several are installed at once.
 
 Loads GeoZarr-compliant Zarr stores into QGIS as raster layers with multiscale
-pyramids. It works with either [Icechunk](https://icechunk.io) repositories or
-regular Zarr v3 stores.
+pyramids. It works with [Icechunk](https://icechunk.io) repositories, regular Zarr
+v3 stores and NetCDF files.
+
+## Supported formats
+
+| Format | Where | Versions (branch / tag / snapshot) | Needs |
+| --- | --- | --- | --- |
+| **Icechunk** repository | local path, `s3://`, `gs://`, `az://`, `r2://`, `http(s)://` | yes | `zarr`, `icechunk` |
+| **Zarr** store (v3, and v2 with `_ARRAY_DIMENSIONS`) | local directory, `http(s)://` (needs consolidated metadata), `s3://`, `gs://`, `az://` | no | `zarr`; `fsspec` + a filesystem package for the cloud schemes |
+| **NetCDF-4 / HDF5** and classic **NetCDF-3** file (`.nc`, `.nc4`, `.cdf`) | local file; OPeNDAP URL ending in `.nc` (untested) | no | `netCDF4` |
+
+The format is detected from the location: a regular file is NetCDF, a directory is
+Zarr or Icechunk. The data model is the same in all three (groups, named dimensions,
+arrays, attributes), so georeferencing, multiscale pyramids, CRS resolution and the
+time/band sliders behave identically; the plugin reads them through a small
+format-neutral layer (`core/nodes.py`), and a new format is one adapter against it.
+
+NetCDF specifics:
+
+- Groups are real NetCDF-4 groups. A group sees the coordinate variables and the CRS
+  variable (`spatial_ref`, a grid mapping) of its parent groups, so one set of
+  coordinates can be declared once at the top and shared by several data groups, as
+  xarray and NCO write them. A group's own variables take precedence, and a coordinate
+  is not inherited when a nearer group declares a different dimension of the same name.
+- NetCDF attributes are flat, so structured metadata (`multiscales`, `zarr_conventions`)
+  is read from JSON text attributes.
+- Values are read as stored; `_FillValue`, `scale_factor` and `add_offset` are applied
+  by the plugin, as for Zarr.
+- Only one thread reads a given file at a time (HDF5 is not thread-safe).
+- While a file is open in QGIS, other programs cannot write to it on Windows.
+- A plain `https://` link to a `.nc` file cannot be read in place; download it.
 
 ## Installing
 
@@ -25,13 +54,15 @@ if it does not show up in the list.
 
 ### 2. The Python packages
 
-The Plugin Manager unzips plugins; it never runs pip. So this step is manual, and only
-`zarr` is required — the rest each add one kind of store:
+The Plugin Manager unzips plugins; it never runs pip. So this step is manual. No single
+package is mandatory, but you need at least one of `zarr` or `netCDF4` — each adds the
+formats listed above:
 
 | Package | What it buys you |
 | --- | --- |
-| `zarr>=3` | Required: no store opens without it. |
+| `zarr>=3` | Zarr stores, and Icechunk (which is built on it). |
 | `icechunk` | Icechunk repositories, and their branches, tags and snapshots. |
+| `netCDF4` | NetCDF files. |
 | `fsspec` + `s3fs` | Plain Zarr on `s3://`, `gs://` and `az://`. `http(s)://` needs neither — the plugin reads it directly. For `gs://` use `gcsfs` and for `az://` use `adlfs` in place of `s3fs`. |
 
 The plugin detects your environment and shows the command with your packages already
@@ -39,16 +70,19 @@ filled in: **Raster → GEO-geo-zarr → GEO-Install Python Dependencies…**. F
 
 | | Where to run it | Command |
 | --- | --- | --- |
-| **Windows** | **OSGeo4W Shell** (Start menu → the QGIS folder). *Not* `cmd` or PowerShell — they have a different Python on `PATH`. | `python -m pip install --user "zarr>=3" icechunk fsspec s3fs` |
-| **macOS** | **Terminal** (Applications → Utilities) | `/Applications/QGIS.app/Contents/MacOS/bin/python3 -m pip install --user "zarr>=3" icechunk fsspec s3fs` |
-| **Linux** (system QGIS) | any terminal | `python3 -m pip install --user "zarr>=3" icechunk fsspec s3fs` |
-| **conda / pixi** | a terminal with the env activated | `conda install -c conda-forge "zarr>=3" fsspec s3fs` then `python -m pip install icechunk` |
+| **Windows** | **OSGeo4W Shell** (Start menu → the QGIS folder). *Not* `cmd` or PowerShell — they have a different Python on `PATH`. | `python -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
+| **macOS** | **Terminal** (Applications → Utilities) | `/Applications/QGIS.app/Contents/MacOS/bin/python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
+| **Linux** (system QGIS) | any terminal | `python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
+| **conda / pixi** | a terminal with the env activated | `conda install -c conda-forge "zarr>=3" netcdf4 fsspec s3fs` then `python -m pip install icechunk` |
 
-Drop what you do not need — everything after `zarr` is optional and independent.
+Drop what you do not need — each package adds one kind of store; you need at least one of `zarr` or `netCDF4`.
 
 Then **restart QGIS** — packages are imported once per session, so re-enabling the
 plugin is not enough. Confirm in the Python Console with
-`import zarr, sys; print(zarr.__version__, sys.executable)`.
+
+```python
+import sys, importlib.util as u; print({m: u.find_spec(m) is not None for m in ('zarr', 'icechunk', 'netCDF4')}, sys.executable)
+```
 
 Notes that catch people out:
 
