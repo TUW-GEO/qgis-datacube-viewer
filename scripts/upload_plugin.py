@@ -42,6 +42,10 @@ def build_request(zip_path: Path, token: str) -> urllib.request.Request:
         data=body,
         headers={
             "Authorization": f"Bearer {token}",
+            # The registry sits behind Cloudflare, which answers urllib's default
+            # "Python-urllib" agent with HTTP 403 "error code: 1010" before the request
+            # reaches the registry.
+            "User-Agent": "datacube-viewer-upload/1.0 (+https://github.com/TUW-GEO/qgis-datacube-viewer)",
             "Content-Type": f"multipart/form-data; boundary={boundary}",
         },
         method="POST",
