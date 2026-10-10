@@ -28,8 +28,8 @@ git diff plugin-upstream-0.2.1 -- datacube_viewer/
 | Its own named toolbar instead of `addRasterToolBarIcon()` | An icon on the shared Raster toolbar is indistinguishable from the other plugins'. |
 | **Version comes from the git tag**, not `metadata.txt` | See below. `metadata.txt` now holds the placeholder `0.0.0`. |
 | `__version__` removed from `datacube_viewer/__init__.py` | It said `0.1.0` while `metadata.txt` said `0.2.1`. One source of truth, and it is not a Python literal. |
-| `.github/workflows/ci.yml` | Upstream has no lint/test CI at all. This one lints, tests, builds the zip and attaches it to a GitHub release on a `v*` tag. |
-| `.github/` and `[tool.qgis-plugin-ci]` deleted | EODC's path to plugins.qgis.org. Its tag-equals-`metadata.txt` check can no longer pass now that the version comes from the tag. Replaced by the workflow above, which does not upload to plugins.qgis.org. |
+| `.github/workflows/ci.yml` | Upstream has no lint/test CI at all. This one lints and tests every branch push once; a `v*` tag then waits for the green run on `main` for that commit, builds the zip, attaches it to a GitHub release and uploads it to plugins.qgis.org. **Tag on `main` after merging**: a tag on a commit that never ran on `main` (squash or merge-commit merges create new hashes) fails the release job. |
+| `.github/` and `[tool.qgis-plugin-ci]` deleted | EODC's path to plugins.qgis.org. Its tag-equals-`metadata.txt` check can no longer pass now that the version comes from the tag. Replaced by the workflow above, which uploads with a per-plugin API token (`QGIS_TOKEN`) via `scripts/upload_plugin.py`. |
 | Phase-0 spike scripts deleted (`spike_provider.py`, `spike_render.png`) and `make_sample_store.py` | The spike asked whether a pure-Python provider can render at all; the plugin is the answer. `make_sample_store.py` subsets a 13 GB store we do not have, and `scripts/make_dummy_data.py` at the repository root covers the need. |
 
 ## Versioning
