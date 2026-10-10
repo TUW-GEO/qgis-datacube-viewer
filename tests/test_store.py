@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 
@@ -43,7 +45,9 @@ def test_parse_uri_schemes(uri: str, scheme: str, container: str) -> None:
 
 
 def test_parse_uri_expands_relative_paths() -> None:
-    assert parse_uri("relative/path").path.startswith("/")
+    path = parse_uri("relative/path").path
+    assert os.path.isabs(path)
+    assert path == os.path.join(os.getcwd(), "relative", "path")
 
 
 def test_parse_uri_rejects_unknown_scheme() -> None:
