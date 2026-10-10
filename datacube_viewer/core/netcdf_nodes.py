@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -39,6 +40,8 @@ from typing import Any
 import numpy as np
 
 from .errors import StoreOpenError
+
+_log = logging.getLogger(__name__)
 
 
 class _File:
@@ -79,10 +82,10 @@ def _attributes(node: Any) -> dict[str, Any]:
     for key in node.ncattrs():
         try:
             out[key] = _plain(node.getncattr(key))
-        except Exception:
+        except Exception as exc:
             # An attribute of an unsupported type (compound, opaque) must not hide
             # the rest of the node's metadata.
-            continue
+            _log.debug("Skipping NetCDF attribute %r: %s", key, exc)
     return out
 
 

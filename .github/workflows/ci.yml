@@ -42,6 +42,10 @@ jobs:
           UV_PYTHON: "3.12"
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      # plugins.qgis.org runs Bandit on every upload and blocks the plugin on a finding,
+      # so catch one here rather than after the tag. Run through uvx so it needs no
+      # entry in the dev group; the pin keeps a new Bandit rule from failing old commits.
+      - run: uvx bandit@1.9.4 -q -r datacube_viewer
 
   test:
     if: ${{ !startsWith(github.ref, 'refs/tags/') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork) }}
