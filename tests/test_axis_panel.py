@@ -156,7 +156,7 @@ def test_retargeting_away_does_not_apply_to_the_new_layer(qgis_app, layer, fixtu
 def test_the_dock_is_named_for_layout_persistence() -> None:
     """QGIS keys the dock's geometry off the object name; renaming it resets layouts."""
     assert DOCK_OBJECT_NAME == "DatacubeViewerDock"
-    assert PANEL_TITLE.startswith("GEO-")
+    assert PANEL_TITLE == "Datacube Viewer"
 
 
 # --------------------------------------------------- axes the variable really has

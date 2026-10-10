@@ -93,10 +93,11 @@ def test_there_is_one_checkbox_per_format(dialog) -> None:
 
 def test_unticking_a_format_drops_its_packages_from_the_command(dialog) -> None:
     d = dialog(missing=["zarr>=3", "netCDF4"], optional=["icechunk"])
-    assert "netCDF4" in d._install.command
+    # conda-forge spells it "netcdf4", pip "netCDF4"; which one depends on the interpreter.
+    assert "netcdf4" in d._install.command.lower()
     d._choices[1].setChecked(False)  # NetCDF
-    assert "netCDF4" not in d._install.command
-    assert "netCDF4" not in d._command_box.toPlainText()
+    assert "netcdf4" not in d._install.command.lower()
+    assert "netcdf4" not in d._command_box.toPlainText().lower()
     assert "zarr" in d._command_box.toPlainText()
 
 
