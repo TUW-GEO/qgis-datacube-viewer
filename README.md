@@ -1,10 +1,5 @@
 # Datacube Viewer
 
-> A QGIS plugin, forked from [EODC's GeoZarr Viewer](https://github.com/eodcgmbh/qgis-geozarr)
-> (MIT); see [UPSTREAM.md](UPSTREAM.md) for what changed. Renamed so it stays
-> distinguishable from upstream and from Wietze Suijker's similarly named plugin when
-> several are installed at once.
-
 Loads GeoZarr datacubes into QGIS as raster layers with multiscale
 pyramids. It works with [Icechunk](https://icechunk.io) repositories, regular Zarr
 v3 stores and NetCDF files.
@@ -249,3 +244,10 @@ and `--format netcdf` (implied by a `.nc` output) writes the same data as NetCDF
 uv run scripts/make_dummy_data.py --nest 3 -o nested.zarr
 uv run scripts/make_dummy_data.py --nest 3 --sensors -o nested.nc
 ```
+
+## Origin
+
+Datacube Viewer is a fork of [EODC's GeoZarr Viewer](https://github.com/eodcgmbh/qgis-geozarr)
+(MIT); see [UPSTREAM.md](UPSTREAM.md) for what changed. It was renamed so it stays
+distinguishable from upstream and from Wietze Suijker's similarly named plugin when
+several are installed at once.
