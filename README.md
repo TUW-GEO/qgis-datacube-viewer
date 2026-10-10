@@ -77,7 +77,9 @@ Then **restart QGIS** — packages are imported once per session, so re-enabling
 plugin is not enough. Confirm in the Python Console with
 
 ```python
-import sys, importlib.util as u; print({m: u.find_spec(m) is not None for m in ('zarr', 'icechunk', 'netCDF4')}, sys.executable)
+import sys, importlib.util as u
+
+print({m: u.find_spec(m) is not None for m in ("zarr", "icechunk", "netCDF4")}, sys.executable)
 ```
 
 Notes that catch people out:
