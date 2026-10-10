@@ -164,8 +164,16 @@ The git tag is the version — `metadata.txt` carries the placeholder `0.0.0` an
 build injects the real value, so the number lives in exactly one place:
 
 ```bash
-git tag v0.0.2 && git push --follow-tags   # CI builds the zip and attaches it to a GitHub release
+git tag v0.0.2 && git push && git push --tags   # on main: CI tests, then builds the zip,
+                                                # attaches it to a GitHub release and uploads it to plugins.qgis.org
 ```
+
+Tag on `main` itself, after merging: the release job waits for the test run on `main`
+for the tagged commit and fails if that commit was never pushed to `main`.
+
+The registry upload needs the repository secret `QGIS_TOKEN`: the API token created on
+the plugin's page on plugins.qgis.org (log in there with GitHub). The first upload of a
+plugin is moderated there before it becomes public.
 
 `v*` is the plugin's namespace, since the plugin is what this repository releases.
 Untagged builds self-identify as `0.0.1.dev3+gabc1234` (or `+dirty`), so an

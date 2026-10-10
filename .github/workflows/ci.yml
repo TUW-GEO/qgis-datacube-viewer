@@ -5,17 +5,23 @@
 # 0.0.1. datacube_viewer/metadata.txt holds the placeholder 0.0.0 and
 # scripts/build_plugin.py injects the real value on the way into the .zip, so the
 # number is written down in exactly one place. `v*` is the plugin's namespace, because
-# the plugin is what this repository releases.
+# the plugin is what this repository releases. A tag also uploads the zip to the QGIS
+# plugin registry (plugins.qgis.org).
 #
-# The tests that need QGIS skip themselves in the test job; they need QGIS and
-# pytest-qgis from pixi.toml, and that conda environment takes minutes to solve. Run
-# them with `pixi run test`.
+# The tests that need QGIS skip themselves in the `test` job, which runs on plain
+# uv/PyPI. The `test-qgis` job runs the full suite in the conda environment from
+# pixi.toml (QGIS and pytest-qgis from conda-forge). Locally: `pixi run test`.
 
 name: CI
 
+# Tests run once per commit, on every branch push and never on a tag push. A pull
+# request from a fork is the one case no push event covers, so only those run on the
+# pull_request event; same-repo PRs would otherwise run everything twice (push + PR).
+# A tag push only starts `release`, which waits for the main run of the tagged commit
+# and releases the moment it is green, so `git push && git push --tags` works.
 on:
   push:
-    branches: [main]
+    branches: ["**"]
     tags: ["v[0-9]*"]
   pull_request:
 
@@ -24,6 +30,7 @@ permissions:
 
 jobs:
   lint:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +44,7 @@ jobs:
       - run: uv run ruff format --check .
 
   test:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -57,13 +65,27 @@ jobs:
           name: junit-${{ matrix.python-version }}
           path: report.xml
 
+  # The full suite, including the Qt and raster-provider tests that need a real QGIS.
+  # pixi.lock pins the environment, so a run is reproducible and nothing is re-solved.
+  # QT_QPA_PLATFORM=offscreen is set in tests/conftest.py, so no display is needed.
+  test-qgis:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          locked: true
+          cache: true
+      - run: pixi run test
+
   # scripts/build_plugin.py is standard-library only: it validates metadata.txt,
   # builds the archive and re-opens it to assert the single-top-level-directory layout
   # QGIS requires, so this stays a fast check that a metadata edit has not made the
   # plugin uninstallable. Tag pushes are handled by `release`, which stamps the real
   # version; two archives differing only in version number would be a trap.
   build:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,15 +103,30 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      # Lint and test are not repeated for the tag; they ran when the commit was pushed
+      # to main. Wait for that run (it may still be in progress, or not exist yet if the
+      # tag arrived first) and continue only if it passed.
+      - name: Wait for the tests on main for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for _ in $(seq 1 12); do
+            id=$(gh run list --workflow ci.yml --branch main --event push               --commit "$GITHUB_SHA" --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$id" ] && break
+            sleep 10
+          done
+          if [ -z "$id" ]; then
+            echo "::error::No CI run on main for $GITHUB_SHA. Push the commit to main before tagging it."
+            exit 1
+          fi
+          gh run watch "$id" --interval 15 --exit-status
       - name: Build and publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,3 +136,10 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "build/datacube_viewer-$version.zip" \
             --title "Datacube Viewer $GITHUB_REF_NAME" \
             --notes "Datacube Viewer QGIS plugin $GITHUB_REF_NAME. Install with Plugins > Manage and Install Plugins > Install from ZIP."
+      # After the GitHub release, so a registry hiccup never blocks the release itself.
+      # Needs the QGIS_TOKEN secret: the API token created on the plugin's page on
+      # plugins.qgis.org.
+      - name: Publish to plugins.qgis.org
+        env:
+          QGIS_TOKEN: ${{ secrets.QGIS_TOKEN }}
+        run: python scripts/upload_plugin.py "build/datacube_viewer-${GITHUB_REF_NAME#v}.zip"
