@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from geo_geozarr_viewer.core import (
+from datacube_viewer.core import (
     BBox,
     DatasetReader,
     ReadRequest,
@@ -13,8 +13,8 @@ from geo_geozarr_viewer.core import (
     describe_store,
     open_store,
 )
-from geo_geozarr_viewer.core.errors import ReadError
-from geo_geozarr_viewer.core.reader import ReaderConfig
+from datacube_viewer.core.errors import ReadError
+from datacube_viewer.core.reader import ReaderConfig
 from tests.fixture_store import _pattern
 
 

@@ -1,6 +1,6 @@
 """The architectural boundary, enforced.
 
-``geo_geozarr_viewer.core`` (and the two policy modules above it) must be importable
+``datacube_viewer.core`` (and the two policy modules above it) must be importable
 without QGIS. This is not style policing: it is what lets the metadata and read path
 be tested in a plain interpreter, keeps the fixture builder usable outside QGIS, and
 stops render-loop code from quietly acquiring a dependency on the GUI.
@@ -22,20 +22,20 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 
 QGIS_FREE_MODULES = [
-    "geo_geozarr_viewer",
-    "geo_geozarr_viewer.core",
-    "geo_geozarr_viewer.core.crs",
-    "geo_geozarr_viewer.core.environment",
-    "geo_geozarr_viewer.core.geometry",
-    "geo_geozarr_viewer.core.inspect",
-    "geo_geozarr_viewer.core.model",
-    "geo_geozarr_viewer.core.netcdf_nodes",
-    "geo_geozarr_viewer.core.nodes",
-    "geo_geozarr_viewer.core.zarr_nodes",
-    "geo_geozarr_viewer.core.reader",
-    "geo_geozarr_viewer.core.store",
-    "geo_geozarr_viewer.layeruri",
-    "geo_geozarr_viewer.selection",
+    "datacube_viewer",
+    "datacube_viewer.core",
+    "datacube_viewer.core.crs",
+    "datacube_viewer.core.environment",
+    "datacube_viewer.core.geometry",
+    "datacube_viewer.core.inspect",
+    "datacube_viewer.core.model",
+    "datacube_viewer.core.netcdf_nodes",
+    "datacube_viewer.core.nodes",
+    "datacube_viewer.core.zarr_nodes",
+    "datacube_viewer.core.reader",
+    "datacube_viewer.core.store",
+    "datacube_viewer.layeruri",
+    "datacube_viewer.selection",
 ]
 
 
@@ -70,7 +70,7 @@ def test_module_imports_without_qgis(module: str) -> None:
 def test_core_package_does_not_reference_qgis_in_source() -> None:
     """A lazy ``import qgis`` inside a function would slip past the import test."""
     offenders = []
-    for path in (REPO / "geo_geozarr_viewer" / "core").rglob("*.py"):
+    for path in (REPO / "datacube_viewer" / "core").rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         for number, line in enumerate(text.splitlines(), start=1):
             stripped = line.strip()

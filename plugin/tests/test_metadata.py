@@ -10,7 +10,7 @@ import math
 
 import pytest
 
-from geo_geozarr_viewer.core import (
+from datacube_viewer.core import (
     Affine,
     BBox,
     CrsBundle,

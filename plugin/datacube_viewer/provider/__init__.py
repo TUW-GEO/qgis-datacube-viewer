@@ -1,6 +1,6 @@
 """QGIS integration layer: the raster data provider and its registration.
 
-Importing this package pulls in ``qgis.*``. Nothing in :mod:`geo_geozarr_viewer.core`
+Importing this package pulls in ``qgis.*``. Nothing in :mod:`datacube_viewer.core`
 may import from here — that boundary is what keeps the data-access layer testable
 without a QGIS application, and it is enforced by ``tests/test_layering.py``.
 """

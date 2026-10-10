@@ -267,7 +267,7 @@ def validate(store: StoreInfo, uri: LayerUri, combine: bool = True) -> list[Issu
     """Check a load request. An empty list means "safe to load with no caveats".
 
     ``combine`` says whether the selected variables are destined for one multi-band
-    layer or for one layer each (see :func:`geo_geozarr_viewer.layeruri.per_variable`).
+    layer or for one layer each (see :func:`datacube_viewer.layeruri.per_variable`).
     It only affects warnings that are specific to compositing.
     """
     issues: list[Issue] = []

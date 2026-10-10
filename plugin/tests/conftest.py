@@ -5,7 +5,7 @@ it is a few seconds of Icechunk commits; doing that per test would dominate the 
 time and, worse, make people stop running the tests.
 
 ``pytest-qgis`` starts a ``QgsApplication`` for the whole session and provides the
-``qgis_app`` fixture. Tests that only touch :mod:`geo_geozarr_viewer.core` must *not*
+``qgis_app`` fixture. Tests that only touch :mod:`datacube_viewer.core` must *not*
 request it — that is what keeps the "core does not need QGIS" claim honest rather
 than accidental.
 """
@@ -43,10 +43,10 @@ def store_uri(fixture_info: FixtureInfo) -> str:
 def clean_handle_cache():
     """Drop the module-level store handle cache around a test.
 
-    :func:`geo_geozarr_viewer.core.open_store` memoises handles, which is right in
+    :func:`datacube_viewer.core.open_store` memoises handles, which is right in
     production and wrong in a test that wants to observe a fresh open.
     """
-    from geo_geozarr_viewer.core import clear_cache
+    from datacube_viewer.core import clear_cache
 
     clear_cache()
     yield
@@ -71,7 +71,7 @@ def isolate_recent_stores():
         yield
         return
 
-    from geo_geozarr_viewer.gui.load_dialog import _SETTINGS_RECENT
+    from datacube_viewer.gui.load_dialog import _SETTINGS_RECENT
 
     settings = QgsSettings()
     before = settings.value(_SETTINGS_RECENT, [], type=list)

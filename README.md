@@ -1,13 +1,13 @@
-# geo-zarr
+# Datacube Viewer
 
-Tooling for inspecting and visualizing [GeoZarr](https://github.com/zarr-conventions)
-stores, independently of QGIS.
+A QGIS plugin for viewing [GeoZarr](https://github.com/zarr-conventions) datacubes
+(Icechunk, Zarr, NetCDF), plus QGIS-free scripts for generating test data and
+checking what a store really contains.
 
 ## Layout
 
 ```
 plugin/                   the QGIS plugin — see plugin/README.md and plugin/UPSTREAM.md
-src/geozarr/              library + `geozarr` CLI
 scripts/                  standalone PEP 723 scripts (dummy data, reference renderer, HTTP server)
 tests/                    pytest suite
 docs/                     documentation
@@ -38,11 +38,11 @@ QGIS 3.44 LTR is installed and its bundled Python 3.12 **already has** `zarr` 3.
 ```bash
 python plugin/scripts/deploy_dev.py            # symlink into the QGIS profile
 python plugin/scripts/deploy_dev.py --copy     # if symlinks are unavailable
-python plugin/scripts/build_plugin.py          # -> plugin/build/geo_geozarr_viewer-<version>.zip
+python plugin/scripts/build_plugin.py          # -> plugin/build/datacube_viewer-<version>.zip
 ```
 
 With the symlink in place and the **Plugin Reloader** plugin (already installed),
-editing a file under `plugin/geo_geozarr_viewer/` and pressing reload picks the change
+editing a file under `plugin/datacube_viewer/` and pressing reload picks the change
 up without restarting QGIS. Then: **Raster → GeoZarr Viewer → Add GeoZarr Layer…**
 
 Note that a second, unrelated GeoZarr plugin by Wietze Suijker (`qgis_geozarr`,
@@ -83,20 +83,6 @@ Common tasks:
 ```bash
 uv run pytest                      # tests
 uv run ruff check . && uv run ruff format .
-uv run mypy
-```
-
-## Using the library
-
-```bash
-uv run geozarr info dummy.zarr
-```
-
-```python
-from geozarr import describe
-
-info = describe("dummy.zarr")
-print(info.crs, info.is_multiscale, [lvl.shape for lvl in info.levels])
 ```
 
 ## Diagnostics
@@ -131,14 +117,14 @@ uv run --script scripts/serve_zarr.py dummy.zarr
 
 ## Test data
 
-`scripts/make_dummy_geozarr.py` writes a small GeoZarr store (elevation,
+`scripts/make_dummy_data.py` writes a small GeoZarr store (elevation,
 temperature, land cover) around Innsbruck. It declares its own dependencies
 inline (PEP 723), so it runs without the project environment:
 
 ```bash
-uv run scripts/make_dummy_geozarr.py                           # -> dummy.zarr
-uv run scripts/make_dummy_geozarr.py --source copernicus -o dem.zarr
-uv run scripts/make_dummy_geozarr.py --zarr-format 2 --levels 1 -o flat_v2.zarr
+uv run scripts/make_dummy_data.py                           # -> dummy.zarr
+uv run scripts/make_dummy_data.py --source copernicus -o dem.zarr
+uv run scripts/make_dummy_data.py --zarr-format 2 --levels 1 -o flat_v2.zarr
 ```
 
 `--sensors` adds a string `sensor` axis (`AMSR2`, `SMOS`, `SMAP`) and a 4-D
@@ -146,8 +132,8 @@ uv run scripts/make_dummy_geozarr.py --zarr-format 2 --levels 1 -o flat_v2.zarr
 store exercises two browsable axes at once, plus per-sensor nodata:
 
 ```bash
-uv run scripts/make_dummy_geozarr.py --sensors -o cube.zarr
-uv run scripts/make_dummy_geozarr.py --sensors ASCAT,SMAP -o ascat.zarr
+uv run scripts/make_dummy_data.py --sensors -o cube.zarr
+uv run scripts/make_dummy_data.py --sensors ASCAT,SMAP -o ascat.zarr
 ```
 
 `--dim-order` stores the variables under a permuted axis order. The pixel at a
@@ -156,11 +142,20 @@ reader that honours the dimension *names* sees identical data, while one that
 assumes `(..., y, x)` by position does not:
 
 ```bash
-uv run scripts/make_dummy_geozarr.py --dim-order transposed -o yx_swapped.zarr
-uv run scripts/make_dummy_geozarr.py --dim-order y,x,time   -o time_last.zarr
-uv run scripts/make_dummy_geozarr.py --dim-order shuffled --sensors -o shuffled.zarr
+uv run scripts/make_dummy_data.py --dim-order transposed -o yx_swapped.zarr
+uv run scripts/make_dummy_data.py --dim-order y,x,time   -o time_last.zarr
+uv run scripts/make_dummy_data.py --dim-order shuffled --sensors -o shuffled.zarr
 ```
 
 The presets are `canonical`, `transposed` (y/x swapped), `axes-last`, `axes-split`
 (y and x not adjacent) and `shuffled`, which gives every variable its own
 permutation, drawn from `--seed` and stable across pyramid levels.
+
+`--nest` buries the dataset inside nested groups (`--nest 3` gives
+`survey/region/area/{0,1,2}`, or pass a path such as `--nest campaign/alps/inn`),
+and `--format netcdf` (implied by a `.nc` output) writes the same data as NetCDF-4:
+
+```bash
+uv run scripts/make_dummy_data.py --nest 3 -o nested.zarr
+uv run scripts/make_dummy_data.py --nest 3 --sensors -o nested.nc
+```

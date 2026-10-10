@@ -8,7 +8,7 @@ A symlink rather than a copy is the whole point: with the QGIS "Plugin Reloader"
 installed, editing a file here and pressing the reload shortcut picks the change up
 immediately. A copy would need re-running this script for every edit.
 
-Note that ``geo_geozarr_viewer.core`` must still import ``zarr`` and ``icechunk`` from
+Note that ``datacube_viewer.core`` must still import ``zarr`` and ``icechunk`` from
 *QGIS's* interpreter, which is a different environment from this repo's pixi env.
 The script checks that and says so, because "the plugin does nothing" is otherwise a
 confusing way to discover a missing dependency.
@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-PACKAGE = "geo_geozarr_viewer"
+PACKAGE = "datacube_viewer"
 SOURCE = REPO / PACKAGE
 
 
@@ -124,7 +124,7 @@ def deploy(profile: str, copy: bool, force: bool) -> int:
     print()
     check_qgis_dependencies()
     print()
-    print("Now start QGIS and enable 'GEO-geo-zarr' in Plugins > Manage and Install.")
+    print("Now start QGIS and enable 'Datacube Viewer' in Plugins > Manage and Install.")
     print("Install 'Plugin Reloader' too — then edits here take effect without a restart.")
     return 0
 

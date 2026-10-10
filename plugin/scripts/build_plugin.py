@@ -1,6 +1,6 @@
 """Package the plugin into the ZIP the QGIS Plugin Manager expects.
 
-    pixi run build            -> build/geo_geozarr_viewer-<version>.zip
+    pixi run build            -> build/datacube_viewer-<version>.zip
 
 QGIS requires the archive to contain exactly one top-level directory whose name is
 the Python package name, and that directory must hold ``metadata.txt`` and
@@ -27,7 +27,7 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-PACKAGE = "geo_geozarr_viewer"
+PACKAGE = "datacube_viewer"
 SOURCE = REPO / PACKAGE
 BUILD = REPO / "build"
 
@@ -50,7 +50,7 @@ REQUIRED = ("metadata.txt", "__init__.py", "plugin.py")
 
 #: The git tag identifies the release: strip this prefix and what is left *is* the
 #: version. Plain ``v*`` belongs to the plugin because the plugin is what this
-#: repository releases; if the geozarr library under ../src ever ships, give it its
+#: repository releases; any other releasable component would need its
 #: own prefix rather than overloading this one.
 TAG_PREFIX = "v"
 

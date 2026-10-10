@@ -16,7 +16,7 @@ import pytest
 netCDF4 = pytest.importorskip("netCDF4")
 zarr = pytest.importorskip("zarr")
 
-from geo_geozarr_viewer.core import (  # noqa: E402
+from datacube_viewer.core import (  # noqa: E402
     DatasetReader,
     ReadRequest,
     StoreOpenError,
@@ -24,7 +24,7 @@ from geo_geozarr_viewer.core import (  # noqa: E402
     detect_kind,
     open_store,
 )
-from geo_geozarr_viewer.core.store import has_versions  # noqa: E402
+from datacube_viewer.core.store import has_versions  # noqa: E402
 
 NX, NY, NT = 40, 30, 3
 X0, Y0, RES = 500_000.0, 5_000_000.0, 10.0

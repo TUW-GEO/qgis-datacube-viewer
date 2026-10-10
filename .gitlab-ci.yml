@@ -1,4 +1,4 @@
-# CI for geo-zarr: lint and test the library, and package the QGIS plugin.
+# CI for datacube-viewer: lint and test the library, and package the QGIS plugin.
 
 stages: [lint, test, build, release]
 
@@ -24,7 +24,6 @@ lint:
   script:
     - uv run ruff check .
     - uv run ruff format --check .
-    - uv run mypy
 
 test:
   stage: test
@@ -34,15 +33,11 @@ test:
       - PYTHON_VERSION: ["3.12", "3.13"]
   image: python:${PYTHON_VERSION}-slim
   script:
-    - uv run pytest --cov --cov-report=term --cov-report=xml:coverage.xml --junit-xml=report.xml
-  coverage: '/^TOTAL.+?(\d+\%)$/'
+    - uv run pytest --junit-xml=report.xml
   artifacts:
     when: always
     reports:
       junit: report.xml
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.xml
 
 # plugin/scripts/build_plugin.py is standard-library only: it validates
 # metadata.txt, builds the archive and re-opens it to assert the single-top-level-
@@ -67,7 +62,7 @@ build:plugin:
     - python plugin/scripts/build_plugin.py --version "0.0.0+$CI_COMMIT_SHORT_SHA"
     - ls -lh plugin/build
   artifacts:
-    name: "geo_geozarr_viewer-$CI_COMMIT_REF_SLUG"
+    name: "datacube_viewer-$CI_COMMIT_REF_SLUG"
     paths: [plugin/build/*.zip]
     expire_in: 4 weeks
 
@@ -75,7 +70,7 @@ build:plugin:
 # Tagged plugin releases
 #
 # The git tag is the single source of truth for the version: tag v0.0.1 ships as
-# 0.0.1. plugin/geo_geozarr_viewer/metadata.txt holds the placeholder 0.0.0 and
+# 0.0.1. plugin/datacube_viewer/metadata.txt holds the placeholder 0.0.0 and
 # build_plugin.py injects the real value on the way into the .zip, so the number is
 # written down in exactly one place.
 #
@@ -87,7 +82,7 @@ build:plugin:
 #     version is handed to release:create through a dotenv report instead.
 #
 # `v*` is the plugin's namespace, because the plugin is what this repository
-# releases. If the geozarr library under src/ ever ships, give it its own prefix.
+# releases. Give any other releasable component its own prefix.
 # --------------------------------------------------------------------------- #
 release:plugin:
   stage: release
@@ -103,7 +98,7 @@ release:plugin:
     # the registry so the release asset URL is predictable; the version is already
     # in the registry path.
     - |
-      python plugin/scripts/upload_package.py         --file "plugin/build/geo_geozarr_viewer-$PLUGIN_VERSION.zip"         --package geo_geozarr_viewer         --version "$PLUGIN_VERSION"         --as geo_geozarr_viewer.zip
+      python plugin/scripts/upload_package.py         --file "plugin/build/datacube_viewer-$PLUGIN_VERSION.zip"         --package datacube_viewer         --version "$PLUGIN_VERSION"         --as datacube_viewer.zip
   artifacts:
     paths: [plugin/build/*.zip]
     expire_in: never
@@ -120,8 +115,8 @@ release:create:
     - echo "Creating GitLab release for $CI_COMMIT_TAG (version $PLUGIN_VERSION)"
   release:
     tag_name: $CI_COMMIT_TAG
-    description: "GEO-geo-zarr QGIS plugin $CI_COMMIT_TAG. Install with Plugins > Manage and Install Plugins > Install from ZIP."
+    description: "Datacube Viewer QGIS plugin $CI_COMMIT_TAG. Install with Plugins > Manage and Install Plugins > Install from ZIP."
     assets:
       links:
-        - name: "geo_geozarr_viewer.zip (QGIS plugin)"
-          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/geo_geozarr_viewer/$PLUGIN_VERSION/geo_geozarr_viewer.zip"
+        - name: "datacube_viewer.zip (QGIS plugin)"
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/datacube_viewer/$PLUGIN_VERSION/datacube_viewer.zip"

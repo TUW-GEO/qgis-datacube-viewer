@@ -28,8 +28,8 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QSize
 from qgis.PyQt.QtGui import QColor
 
-from geo_geozarr_viewer.core import RefSpec
-from geo_geozarr_viewer.provider import LayerUri, create_layer, register_provider
+from datacube_viewer.core import RefSpec
+from datacube_viewer.provider import LayerUri, create_layer, register_provider
 
 DEFAULT_URI = "/path/to/store"
 #: Magenta: if it survives into the output, nothing was drawn there.

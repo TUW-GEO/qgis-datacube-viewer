@@ -11,7 +11,7 @@ Everything here is about QGIS lifecycle. The rules that matter:
   the first time someone tries to add a layer. The Plugin Manager cannot install
   PyPI packages, so this notice is the whole of the plugin's post-install setup and
   is treated as a feature rather than an error path. See
-  :mod:`geo_geozarr_viewer.gui.dependencies`.
+  :mod:`datacube_viewer.gui.dependencies`.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ LOG_TAG = PLUGIN_NAME
 #: Stable, unique key QGIS stores the toolbar's visibility and position under. It is
 #: never shown to the user, and changing it would silently reset their layout, so it
 #: does not track PLUGIN_NAME.
-TOOLBAR_OBJECT_NAME = "GeoGeoZarrToolbar"
+TOOLBAR_OBJECT_NAME = "DatacubeViewerToolbar"
 _ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
 
@@ -130,15 +130,15 @@ class GeoZarrViewerPlugin:
         if not self._registered:
             self._log(f"Failed to register the '{PROVIDER_KEY}' data provider.", Qgis.Critical)
 
-        add = QAction(_icon("open_cube.svg"), "GEO-Add GeoZarr Layer…", self.iface.mainWindow())
+        add = QAction(_icon("open_cube.svg"), "Add Datacube Layer…", self.iface.mainWindow())
         add.setToolTip("Load a GeoZarr datacube from an Icechunk repository or Zarr store")
         add.triggered.connect(self.show_load_dialog)
 
-        travel = QAction(_icon("history.svg"), "GEO-Time Travel…", self.iface.mainWindow())
+        travel = QAction(_icon("history.svg"), "Time Travel…", self.iface.mainWindow())
         travel.setToolTip("Switch the selected GeoZarr layer to a different Icechunk snapshot")
         travel.triggered.connect(self.show_snapshot_dialog)
 
-        setup = QAction("GEO-Install Python Dependencies…", self.iface.mainWindow())
+        setup = QAction("Install Python Dependencies…", self.iface.mainWindow())
         setup.setToolTip(
             "Show the command that installs zarr, icechunk, fsspec and s3fs for this platform"
         )
@@ -193,7 +193,7 @@ class GeoZarrViewerPlugin:
         # with the same checked state rather than as a second, divergent control.
         toggle = self._cube_dock.toggleViewAction()
         toggle.setIcon(_icon("cube_sliders.svg"))
-        toggle.setText("GEO-GeoZarr Cube Panel")
+        toggle.setText("Datacube Panel")
         toggle.setToolTip("Show the axis sliders for the selected GeoZarr layer")
         self.iface.addPluginToRasterMenu(PLUGIN_NAME, toggle)
         self._actions.append(toggle)
@@ -253,7 +253,7 @@ class GeoZarrViewerPlugin:
         self.iface.messageBar().pushWidget(widget, Qgis.Critical if missing else Qgis.Warning)
         self._log(
             f"Missing packages: {summary}. Raster → {PLUGIN_NAME} → "
-            "GEO-Install Python Dependencies… has the commands.",
+            "Install Python Dependencies… has the commands.",
             Qgis.Warning,
         )
 

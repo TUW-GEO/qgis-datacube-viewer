@@ -19,8 +19,8 @@ pytest.importorskip("qgis.core")
 from qgis.core import QgsApplication, QgsProject, QgsRectangle
 from qgis.PyQt.QtWidgets import QSlider
 
-from geo_geozarr_viewer.core import AxisInfo, VariableInfo
-from geo_geozarr_viewer.gui.axis_panel import (
+from datacube_viewer.core import AxisInfo, VariableInfo
+from datacube_viewer.gui.axis_panel import (
     DEBOUNCE_MS,
     DOCK_OBJECT_NAME,
     PANEL_TITLE,
@@ -30,7 +30,7 @@ from geo_geozarr_viewer.gui.axis_panel import (
     is_geozarr_layer,
     should_restretch,
 )
-from geo_geozarr_viewer.layeruri import (
+from datacube_viewer.layeruri import (
     INDEX_PROPERTY,
     RESTRETCH_PROPERTY,
     LayerUri,
@@ -38,8 +38,8 @@ from geo_geozarr_viewer.layeruri import (
     decode_uri,
     encode_indices,
 )
-from geo_geozarr_viewer.provider import create_layer
-from geo_geozarr_viewer.provider.statistics import (
+from datacube_viewer.provider import create_layer
+from datacube_viewer.provider.statistics import (
     LIMIT_CUMULATIVE_CUT,
     LIMIT_NOT_SET,
     LIMIT_STD_DEV,
@@ -154,7 +154,7 @@ def test_retargeting_away_does_not_apply_to_the_new_layer(qgis_app, layer, fixtu
 
 def test_the_dock_is_named_for_layout_persistence() -> None:
     """QGIS keys the dock's geometry off the object name; renaming it resets layouts."""
-    assert DOCK_OBJECT_NAME == "GeoGeoZarrCubeDock"
+    assert DOCK_OBJECT_NAME == "DatacubeViewerDock"
     assert PANEL_TITLE.startswith("GEO-")
 
 
@@ -446,8 +446,8 @@ def _load_as_the_plugin_does(widget, layer) -> None:
     stretch QGIS derived from slice 0 -- which other tests here depend on. These
     tests are about what the *loaded* layer looks like, so they opt in.
     """
-    from geo_geozarr_viewer.provider import axes_for_bands
-    from geo_geozarr_viewer.provider.statistics import cube_ranges, set_fixed_range
+    from datacube_viewer.provider import axes_for_bands
+    from datacube_viewer.provider.statistics import cube_ranges, set_fixed_range
 
     view = layer.dataProvider().context.view()
     axes = axes_for_bands(view.dataset, view.bands)
@@ -589,7 +589,7 @@ def test_the_readout_reports_the_range_actually_in_force(widget, layer) -> None:
     time axis is 2 long and slice 0 is unwritten, so there is no pair of slices here
     with different ranges to compare.
     """
-    from geo_geozarr_viewer.provider.statistics import current_stretch
+    from datacube_viewer.provider.statistics import current_stretch
 
     widget._restretch.setChecked(True)
     widget._rows[0].next.click()
@@ -614,8 +614,8 @@ def test_the_panel_names_the_setting_that_ignores_the_range(widget, layer) -> No
     """
     from qgis.core import QgsContrastEnhancement
 
-    from geo_geozarr_viewer.provider import axes_for_bands, create_layer
-    from geo_geozarr_viewer.provider.statistics import stretch_is_effective
+    from datacube_viewer.provider import axes_for_bands, create_layer
+    from datacube_viewer.provider.statistics import stretch_is_effective
 
     store = layer.dataProvider().context.uri.store_uri
     floaty = create_layer(
@@ -668,8 +668,8 @@ def test_the_button_returns_to_the_cube_range(widget, layer) -> None:
     the conv fixture's time axis is 2 long with slice 0 unwritten, so its cube range
     and its only populated slice's range are the same number.
     """
-    from geo_geozarr_viewer.provider import axes_for_bands
-    from geo_geozarr_viewer.provider.statistics import cube_ranges
+    from datacube_viewer.provider import axes_for_bands
+    from datacube_viewer.provider.statistics import cube_ranges
 
     view = layer.dataProvider().context.view()
     expected = cube_ranges(
@@ -699,7 +699,7 @@ def test_the_button_turns_off_per_slice_rescaling(widget, layer) -> None:
 
 def test_the_button_leaves_the_range_fixed(widget, layer) -> None:
     """A cube range QGIS might recompute is not a cube range for long."""
-    from geo_geozarr_viewer.provider.statistics import has_auto_limits
+    from datacube_viewer.provider.statistics import has_auto_limits
 
     widget._fit_cube.click()
     assert not has_auto_limits(layer)

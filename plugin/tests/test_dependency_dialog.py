@@ -15,8 +15,8 @@ pytest.importorskip("qgis.core")
 
 from qgis.PyQt.QtWidgets import QPlainTextEdit, QScrollArea
 
-from geo_geozarr_viewer.core import environment as env
-from geo_geozarr_viewer.gui import DependencyDialog
+from datacube_viewer.core import environment as env
+from datacube_viewer.gui import DependencyDialog
 
 FLAVOURS = [env.WINDOWS, env.MACOS, env.LINUX, env.CONDA, env.FLATPAK]
 
@@ -27,7 +27,7 @@ def dialog(qgis_app, request):
 
     def make(missing=("zarr>=3",), optional=(), remote=(), flavour=None, suppress=False):
         if flavour is not None:
-            import geo_geozarr_viewer.gui.dependencies as depmod
+            import datacube_viewer.gui.dependencies as depmod
 
             real = env.install_command
             request.addfinalizer(lambda: setattr(depmod, "install_command", real))
@@ -217,7 +217,7 @@ def test_windows_offers_to_show_the_shell_launcher(dialog, tmp_path) -> None:
     (root / "apps" / "Python312").mkdir(parents=True)
     (root / "bin").mkdir()
     (root / "OSGeo4W.bat").write_text("@echo off")
-    import geo_geozarr_viewer.gui.dependencies as depmod
+    import datacube_viewer.gui.dependencies as depmod
 
     real = depmod.install_command
     depmod.install_command = lambda pkgs: real(

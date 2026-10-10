@@ -52,7 +52,7 @@ _log = logging.getLogger(__name__)
 # a single thread is serialised by definition.
 #
 # The callers uphold this by doing I/O on workers and metadata description on the GUI
-# thread (see geo_geozarr_viewer.gui.load_dialog). The guard below is the safety net: if
+# thread (see datacube_viewer.gui.load_dialog). The guard below is the safety net: if
 # something does reach pyproj off-thread, it degrades to a shape check and marks the
 # result provisional instead of taking QGIS down.
 _MAIN_THREAD = threading.main_thread()

@@ -85,12 +85,12 @@ DEBOUNCE_MS = 180
 STRETCH_SAMPLE = 256
 
 #: Dock title. Shown in View → Panels, so it carries the plugin's prefix.
-PANEL_TITLE = "GEO-GeoZarr cube"
+PANEL_TITLE = "Datacube Viewer"
 
 #: Stable, unique key QGIS stores the dock's visibility, position and size under.
 #: Never shown to the user; changing it would silently reset their layout, so it
 #: does not track PANEL_TITLE. Same reasoning as ``plugin.TOOLBAR_OBJECT_NAME``.
-DOCK_OBJECT_NAME = "GeoGeoZarrCubeDock"
+DOCK_OBJECT_NAME = "DatacubeViewerDock"
 
 
 def is_geozarr_layer(layer: QgsMapLayer | None) -> bool:
@@ -562,7 +562,7 @@ class AxisScrubber(QWidget):
     def _remember(self, indices: Mapping[str, int]) -> None:
         """Record the slice on the layer so it survives a project save.
 
-        See :data:`geo_geozarr_viewer.layeruri.INDEX_PROPERTY` for why this cannot
+        See :data:`datacube_viewer.layeruri.INDEX_PROPERTY` for why this cannot
         just ride along in the layer's data source string.
         """
         self._layer.setCustomProperty(INDEX_PROPERTY, encode_indices(indices))

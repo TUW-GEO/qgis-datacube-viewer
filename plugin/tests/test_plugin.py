@@ -19,15 +19,15 @@ from qgis.core import QgsLayerTreeGroup, QgsProject, QgsRasterLayer
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 from qgis.PyQt.QtWidgets import QToolBar, QWidget
 
-from geo_geozarr_viewer import PLUGIN_NAME, classFactory
-from geo_geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri, per_variable
-from geo_geozarr_viewer.plugin import (
+from datacube_viewer import PLUGIN_NAME, classFactory
+from datacube_viewer.layeruri import PROVIDER_KEY, LayerUri, per_variable
+from datacube_viewer.plugin import (
     TOOLBAR_OBJECT_NAME,
     GeoZarrViewerPlugin,
     check_dependencies,
     remote_dependencies,
 )
-from geo_geozarr_viewer.provider import (
+from datacube_viewer.provider import (
     is_registered,
     registry_supports_unregister,
     unregister_provider,
@@ -141,12 +141,12 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
     assert is_registered()
     assert len(iface.raster_menu) == 4
     assert [action.text() for _, action in iface.raster_menu] == [
-        "GEO-Add GeoZarr Layer…",
-        "GEO-Time Travel…",
-        "GEO-Install Python Dependencies…",
+        "Add Datacube Layer…",
+        "Time Travel…",
+        "Install Python Dependencies…",
         # The dock's own toggleViewAction, reused rather than a second action with
         # its own checked state to keep in sync.
-        "GEO-GeoZarr Cube Panel",
+        "Datacube Panel",
     ]
     # The plugin owns a named toolbar rather than borrowing the shared Raster one,
     # so it stays distinguishable from the other GeoZarr plugins. Installing
@@ -155,9 +155,9 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
     assert iface.toolbars[0].windowTitle() == PLUGIN_NAME
     assert iface.toolbars[0].objectName() == TOOLBAR_OBJECT_NAME
     assert [a.text() for a in iface.toolbars[0].actions()] == [
-        "GEO-Add GeoZarr Layer…",
-        "GEO-Time Travel…",
-        "GEO-GeoZarr Cube Panel",
+        "Add Datacube Layer…",
+        "Time Travel…",
+        "Datacube Panel",
     ]
 
 
@@ -185,7 +185,7 @@ def test_the_cube_dock_follows_the_selected_layer(plugin, iface, store_uri: str)
     scrubber = plugin._cube_dock.scrubber()
     assert scrubber.layer() is None
 
-    from geo_geozarr_viewer.provider import create_layer
+    from datacube_viewer.provider import create_layer
 
     layer = create_layer(LayerUri(store_uri=store_uri, dataset="conv", bands=("red",)), "cube")
     assert layer.isValid()
@@ -241,7 +241,7 @@ def test_reload_cycle_leaves_a_working_provider(plugin, iface, store_uri) -> Non
 
 def test_registered_factory_resolves_the_class_lazily() -> None:
     """A captured class would make edits to raster_provider.py invisible on reload."""
-    import geo_geozarr_viewer.provider as provider_pkg
+    import datacube_viewer.provider as provider_pkg
 
     source = provider_pkg._create_provider.__code__.co_names
     assert "import_module" in source, "the factory must look the class up at call time"
@@ -378,7 +378,7 @@ def test_time_travel_ignores_a_non_geozarr_layer(plugin, iface) -> None:
 def test_remote_packages_are_reported_without_importing_them(monkeypatch) -> None:
     """find_spec, not import: importing s3fs pulls aiobotocore in for no reason."""
     monkeypatch.setattr(
-        "geo_geozarr_viewer.plugin.REMOTE_PACKAGES", ("json", "geozarr_no_such_package")
+        "datacube_viewer.plugin.REMOTE_PACKAGES", ("json", "geozarr_no_such_package")
     )
     assert remote_dependencies() == ["geozarr_no_such_package"]
     assert "geozarr_no_such_package" not in sys.modules
@@ -390,7 +390,7 @@ def test_missing_remote_packages_alone_do_not_nag(plugin, iface, monkeypatch) ->
     They are still listed by the instructions dialog, which is where a user who does
     hit an s3:// store will be sent.
     """
-    monkeypatch.setattr("geo_geozarr_viewer.plugin.remote_dependencies", lambda: ["fsspec", "s3fs"])
+    monkeypatch.setattr("datacube_viewer.plugin.remote_dependencies", lambda: ["fsspec", "s3fs"])
     plugin.initGui()
     assert iface.messageBar().widgets == []
 
@@ -406,8 +406,8 @@ def test_dependency_notice_offers_a_way_to_fix_it(plugin, iface, monkeypatch) ->
     This is the first thing a user sees after installing from the Plugin Manager, so
     it is worth a test even though provoking it means faking the check.
     """
-    monkeypatch.setattr("geo_geozarr_viewer.plugin.check_dependencies", lambda: ["zarr>=3"])
-    monkeypatch.setattr("geo_geozarr_viewer.plugin.optional_dependencies", lambda: [])
+    monkeypatch.setattr("datacube_viewer.plugin.check_dependencies", lambda: ["zarr>=3"])
+    monkeypatch.setattr("datacube_viewer.plugin.optional_dependencies", lambda: [])
     plugin.initGui()
 
     assert len(iface.messageBar().widgets) == 1, "the user must be told"
@@ -425,7 +425,7 @@ def test_dependency_notice_offers_a_way_to_fix_it(plugin, iface, monkeypatch) ->
 
 def test_the_instructions_name_a_shell_and_a_command(qgis_app) -> None:
     """The dialog is the whole answer to "how do I install this", so it must be filled in."""
-    from geo_geozarr_viewer.gui import DependencyDialog
+    from datacube_viewer.gui import DependencyDialog
 
     dialog = DependencyDialog(["zarr>=3 (found 2.18.3)"], ["icechunk (only needed for …)"])
     try:

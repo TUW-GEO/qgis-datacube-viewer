@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from geo_geozarr_viewer.core import (
+from datacube_viewer.core import (
     DatasetReader,
     ReadRequest,
     describe_store,
@@ -89,8 +89,8 @@ qgis_core = pytest.importorskip("qgis.core")
 
 
 def test_layer_loads_from_a_plain_zarr_store(qgis_app, plain_uri: str) -> None:
-    from geo_geozarr_viewer.layeruri import LayerUri
-    from geo_geozarr_viewer.provider import create_layer
+    from datacube_viewer.layeruri import LayerUri
+    from datacube_viewer.provider import create_layer
 
     layer = create_layer(
         LayerUri(
@@ -105,8 +105,8 @@ def test_layer_loads_from_a_plain_zarr_store(qgis_app, plain_uri: str) -> None:
 
 
 def test_uri_round_trips_without_a_snapshot(qgis_app, plain_uri: str) -> None:
-    from geo_geozarr_viewer.layeruri import PROVIDER_KEY, LayerUri
-    from geo_geozarr_viewer.provider import create_layer
+    from datacube_viewer.layeruri import PROVIDER_KEY, LayerUri
+    from datacube_viewer.provider import create_layer
 
     layer = create_layer(LayerUri(store_uri=plain_uri, dataset="conv", bands=("red",)))
     source = layer.dataProvider().dataSourceUri()
@@ -117,7 +117,7 @@ def test_uri_round_trips_without_a_snapshot(qgis_app, plain_uri: str) -> None:
 
 def test_dialog_connects_without_listing_refs(qgis_app, plain_uri: str) -> None:
     """The regression: Connect must not import icechunk for a plain Zarr store."""
-    from geo_geozarr_viewer.gui import GeoZarrLoadDialog
+    from datacube_viewer.gui import GeoZarrLoadDialog
     from tests.test_gui import pump
 
     dialog = GeoZarrLoadDialog()
@@ -138,7 +138,7 @@ def test_dialog_connects_without_listing_refs(qgis_app, plain_uri: str) -> None:
 
 
 def test_icechunk_is_not_a_hard_requirement() -> None:
-    from geo_geozarr_viewer.plugin import check_dependencies, optional_dependencies
+    from datacube_viewer.plugin import check_dependencies, optional_dependencies
 
     assert "icechunk" not in " ".join(check_dependencies())
     assert optional_dependencies() == [], "icechunk is installed here, so nothing to report"

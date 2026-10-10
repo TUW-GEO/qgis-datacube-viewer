@@ -9,13 +9,13 @@ macOS, where the interpreter to install into is buried inside the QGIS installat
 
 The one command it prints covers whatever the user ticks, one checkbox per kind of
 store (Zarr, NetCDF, Icechunk, Zarr on cloud storage; see
-:data:`~geo_geozarr_viewer.core.environment.FORMAT_CHOICES`). Everything not yet
+:data:`~datacube_viewer.core.environment.FORMAT_CHOICES`). Everything not yet
 importable starts ticked, so a fresh install is one paste rather than a return trip per
 package, and anything already installed is shown ticked and greyed out. Each checkbox
 says what it opens, because "install four packages" with no reason attached is what
 gets half-followed.
 
-Everything platform-specific is decided in :mod:`geo_geozarr_viewer.core.environment`.
+Everything platform-specific is decided in :mod:`datacube_viewer.core.environment`.
 This module is layout: three numbered steps, the command in a monospace box with a
 Copy button, and the detected interpreter shown so a mis-detection is visible rather
 than mysterious.

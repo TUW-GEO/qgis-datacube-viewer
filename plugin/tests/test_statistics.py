@@ -15,9 +15,9 @@ pytest.importorskip("qgis.core")
 
 from qgis.core import Qgis, QgsContrastEnhancement, QgsRasterMinMaxOrigin
 
-from geo_geozarr_viewer.layeruri import LayerUri
-from geo_geozarr_viewer.provider import axes_for_bands, create_layer
-from geo_geozarr_viewer.provider.statistics import (
+from datacube_viewer.layeruri import LayerUri
+from datacube_viewer.provider import axes_for_bands, create_layer
+from datacube_viewer.provider.statistics import (
     LIMIT_NOT_SET,
     apply_stretch,
     cube_ranges,
@@ -83,7 +83,7 @@ def test_a_constant_slice_is_reported_truthfully(layer) -> None:
 
 def test_a_flat_slice_yields_no_stretch(layer) -> None:
     """A min == max range would divide by zero in the renderer and paint it flat."""
-    from geo_geozarr_viewer.provider.statistics import slice_ranges
+    from datacube_viewer.provider.statistics import slice_ranges
 
     view = layer.dataProvider().context.view()
     assert slice_ranges(view.reader, view.bands, {"time": 0}) == (None,)

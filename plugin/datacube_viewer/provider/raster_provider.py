@@ -2,7 +2,7 @@
 
 The provider is deliberately thin. QGIS asks for "these pixels, in this projected
 rectangle, at this output size"; that maps one-to-one onto
-:class:`~geo_geozarr_viewer.core.reader.ReadRequest`, which already handles pyramid-level
+:class:`~datacube_viewer.core.reader.ReadRequest`, which already handles pyramid-level
 selection, the read budget and resampling. So the work here is entirely about the
 QGIS side of the boundary: correct virtual overrides, numpy → ``QgsRasterBlock``
 marshalling, nodata semantics, and never letting a Python exception escape into C++.

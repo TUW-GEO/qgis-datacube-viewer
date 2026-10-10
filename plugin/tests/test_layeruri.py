@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from geo_geozarr_viewer.core import RefSpec
-from geo_geozarr_viewer.layeruri import LayerUri, UriError, decode_uri
+from datacube_viewer.core import RefSpec
+from datacube_viewer.layeruri import LayerUri, UriError, decode_uri
 
 
 def test_round_trip_preserves_everything() -> None:

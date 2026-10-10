@@ -1,4 +1,4 @@
-# GEO-geo-zarr — a QGIS plugin for GeoZarr datacubes
+# Datacube Viewer — a QGIS plugin for GeoZarr datacubes
 
 > A renamed fork of [EODC's GeoZarr Viewer](https://github.com/eodcgmbh/qgis-geozarr)
 > (MIT). Renamed so it stays distinguishable from upstream and from Wietze
@@ -47,7 +47,7 @@ ship Python 3.12. Check with `import sys; print(sys.version)` in
 ### 1. The plugin
 
 **Plugins → Manage and Install Plugins → Install from ZIP**, and pick
-`geo_geozarr_viewer-<version>.zip` (`pixi run build` makes one). 
+`datacube_viewer-<version>.zip` (`pixi run build` makes one). 
 
 It is marked experimental, so tick **Settings → Show also experimental plugins** 
 if it does not show up in the list.
@@ -66,7 +66,7 @@ formats listed above:
 | `fsspec` + `s3fs` | Plain Zarr on `s3://`, `gs://` and `az://`. `http(s)://` needs neither — the plugin reads it directly. For `gs://` use `gcsfs` and for `az://` use `adlfs` in place of `s3fs`. |
 
 The plugin detects your environment and shows the command with your packages already
-filled in: **Raster → GEO-geo-zarr → GEO-Install Python Dependencies…**. For reference:
+filled in: **Raster → Datacube Viewer → Install Python Dependencies…**. For reference:
 
 | | Where to run it | Command |
 | --- | --- | --- |
@@ -96,9 +96,9 @@ Notes that catch people out:
 
 ## Using it
 
-**Raster → GEO-geo-zarr → GEO-Add GeoZarr Layer…**
+**Raster → Datacube Viewer → Add Datacube Layer…**
 
-**Raster → GEO-geo-zarr → GEO-Time Travel…** 
+**Raster → Datacube Viewer → Time Travel…** 
 
 ## Developing
 
@@ -106,6 +106,6 @@ Notes that catch people out:
 pixi run inspect      # describe a store with no QGIS involved — the fastest loop
 pixi run test         # test suite against a synthetic Icechunk fixture
 pixi run lint         # ruff check + format check
-pixi run build        # build/geo_geozarr_viewer-<version>.zip
+pixi run build        # build/datacube_viewer-<version>.zip
 pixi run deploy       # symlink into your QGIS profile for live reloading
 ```

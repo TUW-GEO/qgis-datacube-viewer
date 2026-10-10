@@ -22,7 +22,7 @@ categorical arrays.
 
 The y and x axes are located by *name*, not by position, so a store written with
 its axes permuted (``(y, x, time)``, ``(x, y)``, ...) is checked and rendered the
-same as a conventional one - see ``make_dummy_geozarr.py --dim-order``. Anything
+same as a conventional one - see ``make_dummy_data.py --dim-order``. Anything
 that moves between the two is a bug in the store or in this script.
 
 It does three things:

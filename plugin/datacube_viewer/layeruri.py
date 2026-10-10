@@ -29,8 +29,8 @@ from .core.reader import RESAMPLING_METHODS, LevelStrategy, Resampling
 #: third argument of ``QgsRasterLayer(uri, name, key)``. Upstream registers
 #: "geozarr", and the registry holds one provider per key for the whole session, so
 #: sharing it would hand every layer of both plugins to whichever loaded first.
-PROVIDER_KEY = "geo_geozarr"
-PROVIDER_DESCRIPTION = "GEO-geo-zarr: GeoZarr / Icechunk raster"
+PROVIDER_KEY = "datacube_viewer"
+PROVIDER_DESCRIPTION = "Datacube Viewer: GeoZarr / Icechunk raster"
 
 #: Layer custom property holding the reason a layer failed to load. Namespaced by
 #: the provider key for the same reason.

@@ -1,5 +1,5 @@
 """Qt widgets. Imports ``qgis.gui``; nothing outside this package may be imported
-from :mod:`geo_geozarr_viewer.core`.
+from :mod:`datacube_viewer.core`.
 """
 
 from __future__ import annotations

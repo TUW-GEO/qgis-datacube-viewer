@@ -40,7 +40,7 @@ class SnapshotDialog(QDialog):
 
     def __init__(self, layer: QgsRasterLayer, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setWindowTitle(f"GEO-Time travel — {layer.name()}")
+        self.setWindowTitle(f"Time Travel — {layer.name()}")
         self.setMinimumWidth(620)
 
         self._layer = layer

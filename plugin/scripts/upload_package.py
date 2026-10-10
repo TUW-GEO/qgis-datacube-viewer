@@ -17,8 +17,8 @@ job and expires with it, so nothing long-lived is involved.
 
 Usage::
 
-    python scripts/upload_package.py --file build/x.zip --package geo_geozarr_viewer \
-        --version 0.0.1 --as geo_geozarr_viewer.zip
+    python scripts/upload_package.py --file build/x.zip --package datacube_viewer \
+        --version 0.0.1 --as datacube_viewer.zip
 """
 
 from __future__ import annotations

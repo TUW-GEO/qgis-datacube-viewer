@@ -11,7 +11,7 @@ and fetch a byte range of one. That is what this module provides.
 
 Deliberate limitation: ``urllib`` opens a fresh connection per request, so there is no
 keep-alive. For Zarr that cost is amortised over chunks measured in megabytes, and the
-reader caches decoded blocks (see :mod:`geo_geozarr_viewer.core.reader`), so it is not
+reader caches decoded blocks (see :mod:`datacube_viewer.core.reader`), so it is not
 worth taking on a dependency — or hand-rolling a connection pool — to avoid it.
 
 Only ``http://`` and ``https://`` are ever opened; see :data:`ALLOWED_SCHEMES`.
@@ -26,7 +26,7 @@ import urllib.request
 
 #: Sent on every request. Some CDNs serve a different (or no) body to a client that
 #: does not identify itself.
-USER_AGENT = "qgis-geozarr-viewer"
+USER_AGENT = "datacube-viewer"
 
 #: Statuses that mean "this key is not in the store", as opposed to "the store is
 #: broken". 403 is included because object stores fronted by HTTP commonly return it

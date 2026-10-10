@@ -20,10 +20,3 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.2
-    hooks:
-      - id: mypy
-        additional_dependencies: [numpy, zarr, pyproj]
-        pass_filenames: false

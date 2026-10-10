@@ -10,7 +10,7 @@ makes "reload" a meaningful action.
 
 Which format a location holds is :func:`detect_kind`'s job, and :func:`open_store`
 hands back the same :class:`StoreHandle` for all of them: a root
-:class:`~geo_geozarr_viewer.core.nodes.GroupNode` plus a little provenance. Everything
+:class:`~datacube_viewer.core.nodes.GroupNode` plus a little provenance. Everything
 downstream works against that node tree and never learns which library produced it.
 """
 
@@ -285,7 +285,7 @@ def zarr_store_target(uri: str) -> Any:
     """What to hand ``zarr.open_group`` for a plain (non-Icechunk) store.
 
     Local paths go through as strings; ``http(s)://`` gets our own dependency-free
-    store (see :mod:`geo_geozarr_viewer.core.http_store`); the remaining cloud schemes are
+    store (see :mod:`datacube_viewer.core.http_store`); the remaining cloud schemes are
     left to Zarr, which means fsspec, so the missing piece is named up front instead
     of arriving as a bare ``ModuleNotFoundError`` from inside ``zarr``.
     """
@@ -484,7 +484,7 @@ def resolve_snapshot_id(repo: Any, ref: RefSpec) -> str:
 class StoreHandle:
     """A live, read-only view of one snapshot of one store.
 
-    Holds the root :class:`~geo_geozarr_viewer.core.nodes.GroupNode`, whichever format
+    Holds the root :class:`~datacube_viewer.core.nodes.GroupNode`, whichever format
     it came from. Safe to share between threads for *reading* — Zarr 3's sync API and
     Icechunk's readonly store are both thread-safe for concurrent gets, and the NetCDF
     adapter serialises access to its file itself.

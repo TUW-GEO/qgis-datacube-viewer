@@ -1,5 +1,5 @@
 [workspace]
-name = "qgis-geozarr"
+name = "datacube-viewer-plugin"
 channels = ["conda-forge"]
 # win-64 is here so the suite can be run on a Windows dev machine; CI is linux-64.
 platforms = ["linux-64", "win-64"]
