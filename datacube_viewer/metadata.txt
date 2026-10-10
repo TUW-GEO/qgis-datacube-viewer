@@ -16,7 +16,7 @@ description=Load and visualise GeoZarr datacubes from Icechunk, Zarr and NetCDF,
 ; refuses to run if this is anything other than 0.0.0. To release, tag the commit.
 version=0.0.0
 author=TUW-GEO
-email=colin.moldenhauer@tuwien.ac.at
+email=colin.moldenhauer@geo.tuwien.ac.at
 
 ; Required by plugins.qgis.org; an upload without repository and tracker is rejected.
 repository=https://github.com/TUW-GEO/qgis-datacube-viewer

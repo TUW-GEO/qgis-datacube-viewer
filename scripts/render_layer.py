@@ -31,7 +31,6 @@ from qgis.PyQt.QtGui import QColor
 from datacube_viewer.core import RefSpec
 from datacube_viewer.provider import LayerUri, create_layer, register_provider
 
-DEFAULT_URI = "/path/to/store"
 #: Magenta: if it survives into the output, nothing was drawn there.
 BACKGROUND = QColor(255, 0, 255)
 
@@ -48,7 +47,7 @@ def zoomed(extent: QgsRectangle, factor: float) -> QgsRectangle:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("uri", nargs="?", default=DEFAULT_URI)
+    ap.add_argument("uri", help="store path or URL")
     ap.add_argument("--dataset", default="")
     ap.add_argument("--ref", default="branch:main")
     ap.add_argument("--bands", default="")

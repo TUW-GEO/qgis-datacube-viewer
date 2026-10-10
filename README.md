@@ -167,7 +167,7 @@ The git tag is the version — `metadata.txt` carries the placeholder `0.0.0` an
 build injects the real value, so the number lives in exactly one place:
 
 ```bash
-git tag v0.0.2 && git push --follow-tags   # CI builds, publishes and makes a release
+git tag v0.0.2 && git push --follow-tags   # CI builds the zip and attaches it to a GitHub release
 ```
 
 `v*` is the plugin's namespace, since the plugin is what this repository releases.

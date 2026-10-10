@@ -1,0 +1,101 @@
+# CI for datacube-viewer: lint and test, build the QGIS plugin, and publish tagged
+# releases.
+#
+# The git tag is the single source of truth for the version: tag v0.0.1 ships as
+# 0.0.1. datacube_viewer/metadata.txt holds the placeholder 0.0.0 and
+# scripts/build_plugin.py injects the real value on the way into the .zip, so the
+# number is written down in exactly one place. `v*` is the plugin's namespace, because
+# the plugin is what this repository releases.
+#
+# The tests that need QGIS skip themselves in the test job; they need QGIS and
+# pytest-qgis from pixi.toml, and that conda environment takes minutes to solve. Run
+# them with `pixi run test`.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --group dev
+        env:
+          UV_PYTHON: "3.12"
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --group dev
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
+      - run: uv run pytest --junit-xml=report.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-${{ matrix.python-version }}
+          path: report.xml
+
+  # scripts/build_plugin.py is standard-library only: it validates metadata.txt,
+  # builds the archive and re-opens it to assert the single-top-level-directory layout
+  # QGIS requires, so this stays a fast check that a metadata edit has not made the
+  # plugin uninstallable. Tag pushes are handled by `release`, which stamps the real
+  # version; two archives differing only in version number would be a trap.
+  build:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # `git describe` is unavailable on a shallow checkout, so the sha is passed in.
+      # That keeps an untagged artifact traceable without it looking like a release.
+      - run: python scripts/build_plugin.py --version "0.0.0+${GITHUB_SHA::7}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: datacube_viewer-${{ github.ref_name }}
+          path: build/*.zip
+          retention-days: 28
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python scripts/build_plugin.py --clean --version "$version"
+          gh release create "$GITHUB_REF_NAME" "build/datacube_viewer-$version.zip" \
+            --title "Datacube Viewer $GITHUB_REF_NAME" \
+            --notes "Datacube Viewer QGIS plugin $GITHUB_REF_NAME. Install with Plugins > Manage and Install Plugins > Install from ZIP."

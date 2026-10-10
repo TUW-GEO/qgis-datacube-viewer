@@ -27,8 +27,6 @@ from datacube_viewer.core import (
     open_store,
 )
 
-DEFAULT_URI = "/path/to/store"
-
 
 def rgb_from(result, order) -> np.ndarray:
     planes = [result.data[i] for i in order]
@@ -47,7 +45,7 @@ def save_png(path: str, rgb: np.ndarray) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("uri", nargs="?", default=DEFAULT_URI)
+    ap.add_argument("uri", help="store path or URL")
     ap.add_argument("--dataset", default=None)
     ap.add_argument("--png", default=None, help="directory to write preview PNGs into")
     ap.add_argument("--size", type=int, default=384)

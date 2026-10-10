@@ -28,8 +28,8 @@ git diff plugin-upstream-0.2.1 -- datacube_viewer/
 | Its own named toolbar instead of `addRasterToolBarIcon()` | An icon on the shared Raster toolbar is indistinguishable from the other plugins'. |
 | **Version comes from the git tag**, not `metadata.txt` | See below. `metadata.txt` now holds the placeholder `0.0.0`. |
 | `__version__` removed from `datacube_viewer/__init__.py` | It said `0.1.0` while `metadata.txt` said `0.2.1`. One source of truth, and it is not a Python literal. |
-| `.gitlab-ci.yml` at the repository root | Development happens on GitLab; upstream has no lint/test CI at all. |
-| `.github/` and `[tool.qgis-plugin-ci]` deleted | EODC's path to plugins.qgis.org. GitLab never reads `.github/`, and its tag-equals-`metadata.txt` check can no longer pass now that the version comes from the tag. |
+| `.github/workflows/ci.yml` | Upstream has no lint/test CI at all. This one lints, tests, builds the zip and attaches it to a GitHub release on a `v*` tag. |
+| `.github/` and `[tool.qgis-plugin-ci]` deleted | EODC's path to plugins.qgis.org. Its tag-equals-`metadata.txt` check can no longer pass now that the version comes from the tag. Replaced by the workflow above, which does not upload to plugins.qgis.org. |
 | Phase-0 spike scripts deleted (`spike_provider.py`, `spike_render.png`) and `make_sample_store.py` | The spike asked whether a pure-Python provider can render at all; the plugin is the answer. `make_sample_store.py` subsets a 13 GB store we do not have, and `scripts/make_dummy_data.py` at the repository root covers the need. |
 
 ## Versioning
@@ -49,7 +49,7 @@ never looks like a release. Since the version is no longer visible in the tree, 
 build reads it back out of the finished archive and fails if it disagrees.
 
 A caveat that comes with this scheme: **a published version cannot be reused.** The
-package registry keys on name plus version, and a QGIS client that already installed
+release is keyed on name plus version, and a QGIS client that already installed
 `0.0.1` will not fetch a different `0.0.1`. Bump rather than retag.
 
 The copy is deliberate. Upstream is not expected to receive further commits, so

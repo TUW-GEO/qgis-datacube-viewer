@@ -28,8 +28,6 @@ from datacube_viewer.core import (
     open_store,
 )
 
-DEFAULT_URI = "/path/to/store"
-
 
 def parse_ref(text: str | None) -> RefSpec | None:
     if not text:
@@ -43,7 +41,7 @@ def parse_ref(text: str | None) -> RefSpec | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("uri", nargs="?", default=DEFAULT_URI)
+    ap.add_argument("uri", help="store path or URL")
     ap.add_argument("--ref", default=None, help="branch:main | tag:v1 | snapshot:ABC…")
     ap.add_argument("--read", action="store_true", help="also do a test read")
     ap.add_argument("--crs-override", default=None)
