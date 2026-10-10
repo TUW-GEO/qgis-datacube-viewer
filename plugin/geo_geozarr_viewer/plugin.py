@@ -130,7 +130,7 @@ class GeoZarrViewerPlugin:
         if not self._registered:
             self._log(f"Failed to register the '{PROVIDER_KEY}' data provider.", Qgis.Critical)
 
-        add = QAction(_icon("geozarr.svg"), "GEO-Add GeoZarr Layer…", self.iface.mainWindow())
+        add = QAction(_icon("open_cube.svg"), "GEO-Add GeoZarr Layer…", self.iface.mainWindow())
         add.setToolTip("Load a GeoZarr datacube from an Icechunk repository or Zarr store")
         add.triggered.connect(self.show_load_dialog)
 
@@ -192,7 +192,7 @@ class GeoZarrViewerPlugin:
         # The dock's own toggle, so it appears in View → Panels and in the toolbar
         # with the same checked state rather than as a second, divergent control.
         toggle = self._cube_dock.toggleViewAction()
-        toggle.setIcon(_icon("geozarr.svg"))
+        toggle.setIcon(_icon("cube_sliders.svg"))
         toggle.setText("GEO-GeoZarr Cube Panel")
         toggle.setToolTip("Show the axis sliders for the selected GeoZarr layer")
         self.iface.addPluginToRasterMenu(PLUGIN_NAME, toggle)

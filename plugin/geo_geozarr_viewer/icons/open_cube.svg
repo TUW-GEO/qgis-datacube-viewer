@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <title>Open a GeoZarr datacube</title>
+  <!-- A data cube: the front face is a raster of pixels, the top and right faces
+       are the further dimensions (time, band) receding behind it. -->
+  <g stroke-linejoin="round" stroke-width="1.1">
+    <path d="M3 9 9 3H21L15 9Z" fill="#cfe3f7" stroke="#1a4971"/>
+    <path d="M15 9 21 3V15L15 21Z" fill="#6aa6d8" stroke="#1a4971"/>
+  </g>
+  <!-- Front face: a 3x3 raster. -->
+  <g stroke="#1a4971" stroke-width="0.5">
+    <rect x="3" y="9" width="4" height="4" fill="#9ec5ea"/>
+    <rect x="7" y="9" width="4" height="4" fill="#3f8ed0"/>
+    <rect x="11" y="9" width="4" height="4" fill="#9ec5ea"/>
+    <rect x="3" y="13" width="4" height="4" fill="#3f8ed0"/>
+    <rect x="7" y="13" width="4" height="4" fill="#2b6cb0"/>
+    <rect x="11" y="13" width="4" height="4" fill="#3f8ed0"/>
+    <rect x="3" y="17" width="4" height="4" fill="#cfe3f7"/>
+    <rect x="7" y="17" width="4" height="4" fill="#9ec5ea"/>
+    <rect x="11" y="17" width="4" height="4" fill="#3f8ed0"/>
+  </g>
+  <rect x="3" y="9" width="12" height="12" fill="none" stroke="#1a4971" stroke-width="1.1" stroke-linejoin="round"/>
+</svg>

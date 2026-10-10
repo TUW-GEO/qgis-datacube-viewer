@@ -43,7 +43,7 @@ about=Adds a raster data provider for GeoZarr datacubes. Reads directly from Ice
 tags=raster,zarr,geozarr,icechunk,datacube,multiscale,pyramid,cog,earth observation
 
 category=Raster
-icon=icons/geozarr.svg
+icon=icons/open_cube.svg
 experimental=True
 deprecated=False
 server=False
