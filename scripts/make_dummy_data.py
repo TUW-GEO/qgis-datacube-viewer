@@ -6,9 +6,11 @@
 #     "pyproj>=3.6",
 #     "tifffile>=2024.1",
 #     "imagecodecs>=2024.1",
+#     "netCDF4>=1.7",
 # ]
 # ///
-"""Generate a small dummy GeoZarr store for testing Zarr visualization tooling.
+"""Generate a small dummy geospatial dataset as GeoZarr or NetCDF-4, for testing
+visualization tooling.
 
 The store models a small alpine area around Innsbruck (Austria) and contains:
 
@@ -58,17 +60,38 @@ metadata moves: the pixel at a given coordinate is identical in every layout.
 
 Usage::
 
-    uv run --script scripts/make_dummy_geozarr.py                     # -> dummy.zarr
-    uv run --script scripts/make_dummy_geozarr.py --source copernicus -o dem.zarr
-    uv run --script scripts/make_dummy_geozarr.py --zarr-format 2 --levels 1 -o flat_v2.zarr
-    uv run --script scripts/make_dummy_geozarr.py --dim-order shuffled -o shuffled.zarr
-    uv run --script scripts/make_dummy_geozarr.py --dim-order y,x,time -o time_last.zarr
-    uv run --script scripts/make_dummy_geozarr.py --sensors -o cube.zarr
+    uv run --script scripts/make_dummy_data.py                     # -> dummy.zarr
+    uv run --script scripts/make_dummy_data.py --source copernicus -o dem.zarr
+    uv run --script scripts/make_dummy_data.py --zarr-format 2 --levels 1 -o flat_v2.zarr
+    uv run --script scripts/make_dummy_data.py --dim-order shuffled -o shuffled.zarr
+    uv run --script scripts/make_dummy_data.py --dim-order y,x,time -o time_last.zarr
+    uv run --script scripts/make_dummy_data.py --sensors -o cube.zarr
+    uv run --script scripts/make_dummy_data.py --nest 3 -o nested.zarr
+    uv run --script scripts/make_dummy_data.py --nest campaign/alps/inn -o nested.zarr
+    uv run --script scripts/make_dummy_data.py -o dummy.nc            # NetCDF-4, from the suffix
+    uv run --script scripts/make_dummy_data.py --format netcdf --nest 3 --sensors
+    uv run --script scripts/make_dummy_data.py -o shared.nc --levels 1 --shared-coords
+
+``--format`` chooses ``zarr`` or ``netcdf``; left out, a ``.nc``/``.nc4``/``.cdf``
+output means NetCDF and anything else Zarr. Both formats get the same terrain,
+variables, levels, nesting and axis orders, so they can be compared pixel for pixel.
+NetCDF attributes are flat: structured metadata (``multiscales``, ``zarr_conventions``)
+is stored as JSON text, ``_CRS`` is omitted (``spatial_ref`` carries the CRS) and every
+group that holds data declares its own dimensions - unless ``--shared-coords`` is given,
+which declares the coordinates and ``spatial_ref`` once in the parent group and leaves the
+data groups with data variables only (how xarray and NCO write grouped files; georeferencing
+is then CF-only, with no ``proj:``/``spatial:`` attributes).
+
+``--nest`` buries the dataset (the multiscale pyramid, or the flat dataset with
+``--levels 1``) inside nested groups, e.g. ``--nest 3`` gives
+``survey/region/area/{0,1,2}``. The root keeps only the descriptive attributes; the
+``multiscales``/``proj:``/``spatial:`` metadata moves to the innermost group.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import urllib.request
 import warnings
@@ -495,6 +518,26 @@ def parse_dim_order(value: str) -> tuple[str, ...] | str:
 
 
 # --------------------------------------------------------------------------- #
+# Group nesting
+# --------------------------------------------------------------------------- #
+#: Default group names for ``--nest N``, outermost first; deeper than this falls
+#: back to ``group6``, ``group7``, ...
+NEST_NAMES = ("survey", "region", "area", "site", "station")
+
+
+def parse_nest(value: str) -> tuple[str, ...]:
+    """Resolve ``--nest`` to a tuple of group names: ``2`` or ``a/b``."""
+    text = value.strip().strip("/")
+    if text.isdigit():
+        depth = int(text)
+        return tuple(NEST_NAMES[i] if i < len(NEST_NAMES) else f"group{i + 1}" for i in range(depth))
+    names = tuple(n for n in text.split("/") if n)
+    if any(n in (".", "..") or "\\" in n for n in names):
+        raise argparse.ArgumentTypeError(f"{value!r} is not a valid group path")
+    return names
+
+
+# --------------------------------------------------------------------------- #
 # Writing
 # --------------------------------------------------------------------------- #
 def geo_attrs(grid: Grid, dims: Sequence[str] = SPATIAL_DIMS) -> dict:
@@ -562,14 +605,49 @@ class Fields:
         )
 
 
-class Writer:
-    def __init__(self, zarr_format: int, chunk: int, dim_order: DimOrder | None = None):
-        self.zarr_format = zarr_format
+#: Dimensions a group can declare, in the order NetCDF creates them.
+DIM_NAMES = ("y", "x", "time", "sensor")
+
+
+class Backend:
+    """What the dataset needs from a file format: groups, attributes, arrays.
+
+    The layout (nesting, pyramid levels, variables, metadata) is decided once in
+    :func:`write_dataset` and :func:`main`; a backend only says how to put it on
+    disk. Everything format independent - applying ``--dim-order`` and keeping a
+    record of the stored axis order - lives here, so both formats are permuted
+    identically.
+    """
+
+    def __init__(self, chunk: int, dim_order: DimOrder | None = None):
         self.chunk = chunk
         self.dim_order = dim_order or DimOrder()
         #: Stored axis order of every multi-dimensional array written, for reporting.
         self.stored_dims: dict[str, tuple[str, ...]] = {}
 
+    # -- format specific -------------------------------------------------- #
+    def open(self, path: Path):
+        """Create the store at ``path`` and return its root group."""
+        raise NotImplementedError
+
+    def create_group(self, parent, name: str):
+        raise NotImplementedError
+
+    def set_attrs(self, group, attrs: dict) -> None:
+        raise NotImplementedError
+
+    def define_dims(
+        self, group, grid: Grid, fields: Fields, names: Sequence[str] = DIM_NAMES
+    ) -> None:
+        """Declare the named dimensions (of ``DIM_NAMES``) of a group; NetCDF only."""
+
+    def _write(self, group, name, data, dims, attrs, fill_value, chunks) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        """Flush and finalise the store."""
+
+    # -- shared ----------------------------------------------------------- #
     def array(self, group, name, data, dims, attrs, fill_value=None, chunks=None):
         data = np.asarray(data)
         dims = tuple(dims)
@@ -585,6 +663,31 @@ class Writer:
             reorder_spatial_attrs(attrs, dims, data.shape)
         if len(dims) > 1:
             self.stored_dims[name] = dims
+        if chunks is None:
+            chunks = tuple(
+                min(s, self.chunk) if d in ("x", "y") else 1
+                for s, d in zip(data.shape, dims, strict=True)
+            )
+        self._write(group, name, data, dims, attrs, fill_value, chunks)
+
+
+class ZarrBackend(Backend):
+    def __init__(self, chunk: int, dim_order: DimOrder | None = None, zarr_format: int = 3):
+        super().__init__(chunk, dim_order)
+        self.zarr_format = zarr_format
+        self.path: Path | None = None
+
+    def open(self, path):
+        self.path = path
+        return zarr.open_group(path, mode="w", zarr_format=self.zarr_format)
+
+    def create_group(self, parent, name):
+        return parent.create_group(name)
+
+    def set_attrs(self, group, attrs):
+        group.attrs.update(attrs)
+
+    def _write(self, group, name, data, dims, attrs, fill_value, chunks):
         # Zstd instead of the v2 default Blosc, which not every GDAL build can decode
         kwargs = {}
         if self.zarr_format == 3:
@@ -593,11 +696,6 @@ class Writer:
         else:
             attrs["_ARRAY_DIMENSIONS"] = list(dims)
             kwargs["compressors"] = numcodecs.Zstd()
-        if chunks is None:
-            chunks = tuple(
-                min(s, self.chunk) if d in ("x", "y") else 1
-                for s, d in zip(data.shape, dims, strict=True)
-            )
         # Store text as variable-length UTF-8 (vlen-utf8 in both Zarr formats) rather
         # than as the fixed-width numpy dtype, which is what xarray and the Zarr
         # string data type agree on.
@@ -612,43 +710,145 @@ class Writer:
             **kwargs,
         )
         arr[...] = data
-        return arr
 
-    def dataset(self, group, grid: Grid, fields: Fields):
-        elevation, temperature, land_cover = (
-            fields.elevation,
-            fields.temperature,
-            fields.land_cover,
-        )
-        time, sensors = fields.time, fields.sensors
-        crs = grid.crs
-        cf = crs.to_cf()
-        wkt = crs.to_wkt()
-        cf.update({"spatial_ref": wkt, "crs_wkt": wkt, "GeoTransform": grid.gdal_geotransform})
-        self.array(group, "spatial_ref", np.array(0, dtype="int32"), (), cf, chunks=())
+    def close(self):
+        with warnings.catch_warnings():
+            # Consolidated metadata is not (yet) in the Zarr v3 spec, but xarray and GDAL use it
+            warnings.filterwarnings("ignore", message="Consolidated metadata")
+            zarr.consolidate_metadata(self.path, zarr_format=self.zarr_format)
 
-        geographic = crs.is_geographic
-        x_attrs = (
-            {"standard_name": "longitude", "long_name": "longitude", "units": "degrees_east"}
-            if geographic
-            else {
-                "standard_name": "projection_x_coordinate",
-                "long_name": "x coordinate of projection",
-                "units": "m",
-            }
-        )
-        y_attrs = (
-            {"standard_name": "latitude", "long_name": "latitude", "units": "degrees_north"}
-            if geographic
-            else {
-                "standard_name": "projection_y_coordinate",
-                "long_name": "y coordinate of projection",
-                "units": "m",
-            }
-        )
-        self.array(group, "x", grid.x, ("x",), {**x_attrs, "axis": "X"}, chunks=(grid.nx,))
-        self.array(group, "y", grid.y, ("y",), {**y_attrs, "axis": "Y"}, chunks=(grid.ny,))
-        self.array(
+
+def netcdf_attr(value):
+    """Make an attribute value storable by NetCDF, whose attributes are flat.
+
+    Lists of text become space-separated (like ``flag_meanings``); anything
+    structured - the convention registrations, ``multiscales`` - becomes JSON.
+    """
+    if isinstance(value, dict) or (
+        isinstance(value, list) and any(isinstance(v, (dict, list)) for v in value)
+    ):
+        return json.dumps(value)
+    if isinstance(value, list) and any(isinstance(v, str) for v in value):
+        return " ".join(value)
+    if isinstance(value, bool):
+        return int(value)
+    return value
+
+
+class NetcdfBackend(Backend):
+    #: ``_CRS`` is a nested object NetCDF cannot hold (``spatial_ref`` carries the
+    #: CRS); ``_FillValue`` has to be given when the variable is created.
+    SKIPPED_ATTRS = ("_CRS", "_FillValue")
+
+    def __init__(self, chunk: int, dim_order: DimOrder | None = None):
+        super().__init__(chunk, dim_order)
+        self.dataset = None
+
+    def open(self, path):
+        import netCDF4
+
+        self.dataset = netCDF4.Dataset(path, "w", format="NETCDF4")
+        return self.dataset
+
+    def create_group(self, parent, name):
+        return parent.createGroup(name)
+
+    def set_attrs(self, group, attrs):
+        for key, value in attrs.items():
+            group.setncattr(key, netcdf_attr(value))
+
+    def define_dims(self, group, grid, fields, names=DIM_NAMES):
+        # NetCDF dimensions belong to a group, so every level declares its own - unless
+        # --shared-coords puts them in a parent, which child groups then inherit.
+        sizes = {"y": grid.ny, "x": grid.nx, "time": len(fields.time)}
+        if fields.sensors:
+            sizes["sensor"] = len(fields.sensors)
+        for name in DIM_NAMES:
+            if name in names and name in sizes:
+                group.createDimension(name, sizes[name])
+
+    def _write(self, group, name, data, dims, attrs, fill_value, chunks):
+        is_text = data.dtype.kind in "US"
+        kwargs = {}
+        if not is_text and data.ndim:
+            kwargs["zlib"] = True
+            kwargs["chunksizes"] = chunks
+        if fill_value is not None:
+            kwargs["fill_value"] = fill_value
+        var = group.createVariable(name, str if is_text else data.dtype, dims, **kwargs)
+        for key, value in attrs.items():
+            if key not in self.SKIPPED_ATTRS:
+                var.setncattr(key, netcdf_attr(value))
+        with warnings.catch_warnings():
+            # netCDF4's vlen-string writer still resizes arrays in place (NumPy 2.5)
+            warnings.filterwarnings(
+                "ignore", message="Setting the shape", category=DeprecationWarning
+            )
+            var[...] = data.astype(object) if is_text else data
+
+    def close(self):
+        self.dataset.close()
+
+
+def write_dataset(writer: Backend, group, grid: Grid, fields: Fields) -> None:
+    """Write one resolution level - coordinates and data variables - into ``group``."""
+    writer.define_dims(group, grid, fields)
+    write_coordinates(writer, group, grid, fields)
+    write_variables(writer, group, grid, fields)
+
+
+COORDINATES = ("spatial_ref", "x", "y", "time", "sensor")
+
+
+def write_coordinates(
+    writer: Backend,
+    group,
+    grid: Grid,
+    fields: Fields,
+    names: Sequence[str] = COORDINATES,
+    *,
+    geotransform: bool = True,
+) -> None:
+    """Write the coordinate variables and the CRS carrier named in ``names``.
+
+    ``geotransform=False`` leaves the GDAL ``GeoTransform`` off ``spatial_ref``: it
+    describes one grid, so it is wrong on a CRS variable shared by pyramid levels.
+    """
+    time, sensors = fields.time, fields.sensors
+    crs = grid.crs
+    cf = crs.to_cf()
+    wkt = crs.to_wkt()
+    cf.update({"spatial_ref": wkt, "crs_wkt": wkt})
+    if geotransform:
+        cf["GeoTransform"] = grid.gdal_geotransform
+    if "spatial_ref" in names:
+        writer.array(group, "spatial_ref", np.array(0, dtype="int32"), (), cf, chunks=())
+
+    geographic = crs.is_geographic
+    x_attrs = (
+        {"standard_name": "longitude", "long_name": "longitude", "units": "degrees_east"}
+        if geographic
+        else {
+            "standard_name": "projection_x_coordinate",
+            "long_name": "x coordinate of projection",
+            "units": "m",
+        }
+    )
+    y_attrs = (
+        {"standard_name": "latitude", "long_name": "latitude", "units": "degrees_north"}
+        if geographic
+        else {
+            "standard_name": "projection_y_coordinate",
+            "long_name": "y coordinate of projection",
+            "units": "m",
+        }
+    )
+    if "x" in names:
+        writer.array(group, "x", grid.x, ("x",), {**x_attrs, "axis": "X"}, chunks=(grid.nx,))
+    if "y" in names:
+        writer.array(group, "y", grid.y, ("y",), {**y_attrs, "axis": "Y"}, chunks=(grid.ny,))
+    if "time" in names:
+        writer.array(
             group,
             "time",
             time,
@@ -662,91 +862,134 @@ class Writer:
             },
             chunks=(len(time),),
         )
-        if sensors:
-            self.array(
-                group,
-                "sensor",
-                np.asarray(sensors),
-                ("sensor",),
-                {
-                    "long_name": "Satellite sensor",
-                    "description": (
-                        "Microwave soil moisture sensors; each carries its own "
-                        "footprint, bias and noise"
-                    ),
-                },
-                chunks=(len(sensors),),
-            )
+    if sensors and "sensor" in names:
+        writer.array(
+            group,
+            "sensor",
+            np.asarray(sensors),
+            ("sensor",),
+            {
+                "long_name": "Satellite sensor",
+                "description": (
+                    "Microwave soil moisture sensors; each carries its own "
+                    "footprint, bias and noise"
+                ),
+            },
+            chunks=(len(sensors),),
+        )
 
-        common = {"grid_mapping": "spatial_ref", "_CRS": {"wkt": wkt}, **geo_attrs(grid)}
-        self.array(
+
+def write_variables(
+    writer: Backend, group, grid: Grid, fields: Fields, *, georef_attrs: bool = True
+) -> None:
+    """Write the data variables of one level into ``group``.
+
+    ``georef_attrs=False`` gives them CF georeferencing only (``grid_mapping``), no
+    ``proj:``/``spatial:`` attributes: the CRS and grid must then come from the
+    coordinate variables, which is what ``--shared-coords`` exists to exercise.
+    """
+    elevation, temperature, land_cover = (
+        fields.elevation,
+        fields.temperature,
+        fields.land_cover,
+    )
+    wkt = grid.crs.to_wkt()
+    common = {"grid_mapping": "spatial_ref"}
+    if georef_attrs:
+        common.update({"_CRS": {"wkt": wkt}, **geo_attrs(grid)})
+    writer.array(
+        group,
+        "elevation",
+        elevation,
+        ("y", "x"),
+        {
+            **common,
+            "standard_name": "surface_altitude",
+            "long_name": "Terrain elevation",
+            "units": "m",
+            "valid_min": float(np.nanmin(elevation)),
+            "valid_max": float(np.nanmax(elevation)),
+        },
+        fill_value=float("nan"),
+    )
+    writer.array(
+        group,
+        "temperature",
+        temperature,
+        ("time", "y", "x"),
+        {
+            **common,
+            "standard_name": "air_temperature",
+            "long_name": "Monthly mean 2 m air temperature (synthetic)",
+            "units": "degC",
+            "coordinates": "time y x",
+        },
+        fill_value=float("nan"),
+    )
+    writer.array(
+        group,
+        "land_cover",
+        land_cover,
+        ("y", "x"),
+        {
+            **common,
+            "long_name": "Land cover class (derived from elevation and slope)",
+            "flag_values": list(LAND_COVER_CLASSES)[1:],
+            "flag_meanings": " ".join(list(LAND_COVER_CLASSES.values())[1:]),
+            "flag_colors": [LAND_COVER_COLORS[k] for k in list(LAND_COVER_CLASSES)[1:]],
+            "_FillValue": 0,
+        },
+        fill_value=0,
+    )
+    if fields.soil_moisture is not None:
+        writer.array(
             group,
-            "elevation",
-            elevation,
-            ("y", "x"),
+            "soil_moisture",
+            fields.soil_moisture,
+            ("sensor", "time", "y", "x"),
             {
                 **common,
-                "standard_name": "surface_altitude",
-                "long_name": "Terrain elevation",
-                "units": "m",
-                "valid_min": float(np.nanmin(elevation)),
-                "valid_max": float(np.nanmax(elevation)),
+                "standard_name": "volume_fraction_of_condensed_water_in_soil",
+                "long_name": "Volumetric soil moisture per sensor (synthetic)",
+                "units": "1",
+                "valid_min": 0.0,
+                "valid_max": 0.6,
+                "coordinates": "sensor time y x",
             },
             fill_value=float("nan"),
         )
-        self.array(
-            group,
-            "temperature",
-            temperature,
-            ("time", "y", "x"),
-            {
-                **common,
-                "standard_name": "air_temperature",
-                "long_name": "Monthly mean 2 m air temperature (synthetic)",
-                "units": "degC",
-                "coordinates": "time y x",
-            },
-            fill_value=float("nan"),
-        )
-        self.array(
-            group,
-            "land_cover",
-            land_cover,
-            ("y", "x"),
-            {
-                **common,
-                "long_name": "Land cover class (derived from elevation and slope)",
-                "flag_values": list(LAND_COVER_CLASSES)[1:],
-                "flag_meanings": " ".join(list(LAND_COVER_CLASSES.values())[1:]),
-                "flag_colors": [LAND_COVER_COLORS[k] for k in list(LAND_COVER_CLASSES)[1:]],
-                "_FillValue": 0,
-            },
-            fill_value=0,
-        )
-        if fields.soil_moisture is not None:
-            self.array(
-                group,
-                "soil_moisture",
-                fields.soil_moisture,
-                ("sensor", "time", "y", "x"),
-                {
-                    **common,
-                    "standard_name": "volume_fraction_of_condensed_water_in_soil",
-                    "long_name": "Volumetric soil moisture per sensor (synthetic)",
-                    "units": "1",
-                    "valid_min": 0.0,
-                    "valid_max": 0.6,
-                    "coordinates": "sensor time y x",
-                },
-                fill_value=float("nan"),
-            )
+
+
+FORMATS = ("zarr", "netcdf")
+NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf")
+
+
+def resolve_format(requested: str | None, output: Path | None) -> str:
+    """``--format`` if given, else guessed from the suffix (``.nc`` is NetCDF)."""
+    if requested:
+        return requested
+    if output is not None and output.suffix.lower() in NETCDF_SUFFIXES:
+        return "netcdf"
+    return "zarr"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("-o", "--output", type=Path, default=Path("dummy.zarr"))
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="output path (default: dummy.zarr, or dummy.nc for --format netcdf)",
+    )
+    parser.add_argument(
+        "--format",
+        choices=FORMATS,
+        default=None,
+        help="output format (default: from the output suffix; .nc means netcdf, else zarr)",
+    )
     parser.add_argument("--source", choices=["synthetic", "copernicus"], default="synthetic")
     parser.add_argument("--size", type=int, default=256, help="pixels per side at full resolution")
     parser.add_argument(
@@ -776,11 +1019,48 @@ def main() -> None:
             f"--sensors uses {','.join(DEFAULT_SENSORS)}"
         ),
     )
-    parser.add_argument("--zarr-format", type=int, choices=[2, 3], default=3)
+    parser.add_argument(
+        "--nest",
+        type=parse_nest,
+        default=(),
+        metavar="DEPTH|a/b/c",
+        help=(
+            "bury the dataset inside nested groups: an integer depth (names "
+            f"{'/'.join(NEST_NAMES[:3])}/...) or an explicit slash-separated path"
+        ),
+    )
+    parser.add_argument(
+        "--zarr-format",
+        type=int,
+        choices=[2, 3],
+        default=None,
+        help="Zarr format version (zarr only; default 3)",
+    )
+    parser.add_argument(
+        "--shared-coords",
+        action="store_true",
+        help=(
+            "netcdf only: declare coordinates (x, y, time, sensor) and the CRS variable "
+            "once, in the parent of the group holding the data, which inherits them "
+            "(how xarray and NCO write grouped files). Data groups then carry CF "
+            "georeferencing only, no proj:/spatial: attributes. With --levels 1 the data "
+            "goes into a child group named 'data'; with more levels each level keeps its "
+            "own x/y (the sizes differ) and shares time, sensor and the CRS"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cache-dir", type=Path, default=Path(__file__).parent / ".cache")
-    parser.add_argument("--overwrite", action="store_true", help="replace an existing output store")
+    parser.add_argument("--overwrite", action="store_true", help="replace an existing output")
     args = parser.parse_args()
+
+    fmt = resolve_format(args.format, args.output)
+    if args.output is None:
+        args.output = Path("dummy.nc" if fmt == "netcdf" else "dummy.zarr")
+    if fmt == "netcdf" and args.zarr_format is not None:
+        parser.error("--zarr-format only applies to the zarr format")
+    if args.shared_coords and fmt != "netcdf":
+        parser.error("--shared-coords only applies to the netcdf format")
+    zarr_format = args.zarr_format or 3
 
     if args.size % 2 ** (args.levels - 1):
         parser.error(
@@ -789,7 +1069,10 @@ def main() -> None:
     if args.output.exists():
         if not args.overwrite:
             parser.error(f"{args.output} exists; pass --overwrite to replace it")
-        shutil.rmtree(args.output)
+        if args.output.is_dir():
+            shutil.rmtree(args.output)
+        else:
+            args.output.unlink()
 
     if args.source == "synthetic":
         elevation, grid = synthetic_dem(args.size, args.seed)
@@ -812,9 +1095,12 @@ def main() -> None:
         ),
     )
 
-    root = zarr.open_group(args.output, mode="w", zarr_format=args.zarr_format)
     dim_order = DimOrder(args.dim_order, args.seed)
-    writer = Writer(args.zarr_format, args.chunk, dim_order)
+    if fmt == "netcdf":
+        writer: Backend = NetcdfBackend(args.chunk, dim_order)
+    else:
+        writer = ZarrBackend(args.chunk, dim_order, zarr_format)
+    root = writer.open(args.output)
     spatial_dims = dim_order.group_spatial_dims()
     root_attrs = {
         "Conventions": "CF-1.10",
@@ -822,52 +1108,93 @@ def main() -> None:
         "source": source,
         # Only mentioned when it is not the conventional order, so that a default
         # run still produces byte-identical output to earlier versions of this script.
-        "history": "Created by make_dummy_geozarr.py"
+        "history": "Created by make_dummy_data.py"
         + (
             ""
             if args.dim_order == DIM_ORDER_PRESETS["canonical"]
             else f" (dim_order={dim_order.label})"
         ),
-        "zarr_conventions": [CONVENTION_PROJ, CONVENTION_SPATIAL],
-        **geo_attrs(grid, spatial_dims),
     }
+    # The dataset (flat, or the multiscales pyramid) lives in the innermost nested
+    # group; its geospatial attributes belong to that group, not to the file root.
+    leaf = root
+    for name in args.nest:
+        leaf = writer.create_group(leaf, name)
+    shared = args.shared_coords
+    if shared:
+        # CF only: the plugin has to find the grid and CRS in the inherited coordinates.
+        leaf_attrs: dict = {"zarr_conventions": []}
+    else:
+        leaf_attrs = {
+            "zarr_conventions": [CONVENTION_PROJ, CONVENTION_SPATIAL],
+            **geo_attrs(grid, spatial_dims),
+        }
 
     if args.levels == 1:
-        writer.dataset(root, grid, fields)
+        if shared:
+            writer.define_dims(leaf, grid, fields)
+            write_coordinates(writer, leaf, grid, fields)
+            data = writer.create_group(leaf, "data")
+            write_variables(writer, data, grid, fields, georef_attrs=False)
+        else:
+            write_dataset(writer, leaf, grid, fields)
     else:
+        if shared:
+            writer.define_dims(leaf, grid, fields, names=("time", "sensor"))
+            write_coordinates(
+                writer,
+                leaf,
+                grid,
+                fields,
+                names=("spatial_ref", "time", "sensor"),
+                geotransform=False,
+            )
         layout = []
         for level in range(args.levels):
             f = 2**level
             g = grid.coarsen(f)
-            level_attrs = geo_attrs(g, spatial_dims)
+            level_attrs = {} if shared else geo_attrs(g, spatial_dims)
             entry = {
                 "asset": str(level),
                 "transform": {"scale": [float(f), float(f)], "translation": [0.0, 0.0]},
-                "spatial:transform": g.transform,
-                "spatial:shape": level_attrs["spatial:shape"],
             }
+            if not shared:
+                entry["spatial:transform"] = g.transform
+                entry["spatial:shape"] = level_attrs["spatial:shape"]
             if level > 0:
                 entry["derived_from"] = str(level - 1)
                 entry["transform"] = {"scale": [2.0, 2.0], "translation": [0.0, 0.0]}
                 entry["resampling_method"] = "average"
             layout.append(entry)
 
-            sub = root.create_group(str(level), attributes=level_attrs)
-            writer.dataset(sub, g, fields.coarsen(f))
-        root_attrs["zarr_conventions"].insert(0, CONVENTION_MULTISCALES)
-        root_attrs["multiscales"] = {"layout": layout, "resampling_method": "average"}
+            sub = writer.create_group(leaf, str(level))
+            writer.set_attrs(sub, level_attrs)
+            if shared:
+                writer.define_dims(sub, g, fields, names=("y", "x"))
+                write_coordinates(writer, sub, g, fields, names=("x", "y"))
+                write_variables(writer, sub, g, fields.coarsen(f), georef_attrs=False)
+            else:
+                write_dataset(writer, sub, g, fields.coarsen(f))
+        leaf_attrs["zarr_conventions"].insert(0, CONVENTION_MULTISCALES)
+        leaf_attrs["multiscales"] = {"layout": layout, "resampling_method": "average"}
 
-    root.attrs.update(root_attrs)
-    with warnings.catch_warnings():
-        # Consolidated metadata is not (yet) in the Zarr v3 spec, but xarray and GDAL use it
-        warnings.filterwarnings("ignore", message="Consolidated metadata")
-        zarr.consolidate_metadata(args.output, zarr_format=args.zarr_format)
+    if not leaf_attrs["zarr_conventions"]:
+        del leaf_attrs["zarr_conventions"]  # --shared-coords, flat: nothing to register
+    writer.set_attrs(root, root_attrs)
+    writer.set_attrs(leaf, leaf_attrs)  # the root itself unless --nest buried the dataset
+    writer.close()
 
-    size_kb = sum(p.stat().st_size for p in args.output.rglob("*") if p.is_file()) / 1024
+    if args.output.is_dir():
+        size = sum(p.stat().st_size for p in args.output.rglob("*") if p.is_file())
+    else:
+        size = args.output.stat().st_size
+    kind = f"zarr v{zarr_format}" if fmt == "zarr" else "NetCDF-4"
     print(
-        f"Wrote {args.output} (zarr v{args.zarr_format}, {args.levels} level(s), "
-        f"{grid.crs.to_string()}, {size_kb:.0f} KiB)"
+        f"Wrote {args.output} ({kind}, {args.levels} level(s), "
+        f"{grid.crs.to_string()}, {size / 1024:.0f} KiB)"
     )
+    if args.nest:
+        print(f"  nested under: /{'/'.join(args.nest)}")
     print(f"  bbox: {grid.bbox}")
     print(f"  elevation: {np.nanmin(elevation):.0f} .. {np.nanmax(elevation):.0f} m")
     print(f"  dim order: {dim_order.label}")

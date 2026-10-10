@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import zarr
 
-from make_dummy_geozarr import (
+from make_dummy_data import (
     CANONICAL_DIMS,
     DEFAULT_SENSORS,
     DIM_ORDER_PRESETS,
@@ -22,18 +22,22 @@ from make_dummy_geozarr import (
     DimOrder,
     main,
     parse_dim_order,
+    parse_nest,
 )
 
 
-def write_store(path, *extra, **kwargs):
-    """Run the generator's CLI into ``path`` and return the opened root group."""
-    argv = ["make_dummy_geozarr.py", "-o", str(path), "--size", "16", *extra]
+def write_store(path, *extra, _raw=False, **kwargs):
+    """Run the generator's CLI into ``path`` and return the opened root group.
+
+    ``_raw`` skips opening the result, for output (NetCDF) that is not a Zarr store.
+    """
+    argv = ["make_dummy_data.py", "-o", str(path), "--size", "16", *extra]
     argv += [str(part) for key, value in kwargs.items() for part in (f"--{key}", value)]
     # The generator parses sys.argv; restore it so a failure here cannot confuse pytest.
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(sys, "argv", argv)
         main()
-    return zarr.open_group(str(path))
+    return None if _raw else zarr.open_group(str(path))
 
 
 def stored(group, name):
@@ -166,3 +170,65 @@ def test_pyramid_levels_agree_on_the_axis_order(tmp_path):
     for name in ("elevation", "temperature", "soil_moisture"):
         orders = {stored(root[level], name)[0] for level in ("0", "1", "2")}
         assert len(orders) == 1
+
+
+# ------------------------------------------------------------------- nesting, NetCDF
+def test_nest_buries_the_dataset_and_its_metadata(tmp_path):
+    root = write_store(tmp_path / "t.zarr", "--levels", "2", "--size", "32", nest="a/b")
+
+    assert "multiscales" not in root.attrs
+    leaf = root["a/b"]
+    assert "multiscales" in leaf.attrs
+    assert "elevation" in dict(leaf["0"].arrays())
+
+
+def test_nest_depth_uses_default_names():
+    assert parse_nest("2") == ("survey", "region")
+    assert parse_nest("x/y/") == ("x", "y")
+    assert parse_nest("0") == ()
+
+
+def test_netcdf_matches_zarr_pixel_for_pixel(tmp_path):
+    netCDF4 = pytest.importorskip("netCDF4")
+    args = ("--levels", "2", "--size", "32", "--sensors")
+    ref = write_store(tmp_path / "t.zarr", *args, nest="a/b", **{"dim-order": "shuffled"})
+    write_store(tmp_path / "t.nc", *args, nest="a/b", **{"dim-order": "shuffled"}, _raw=True)
+
+    with netCDF4.Dataset(tmp_path / "t.nc") as nc:
+        for level in ("0", "1"):
+            for name in ("elevation", "land_cover", "temperature", "soil_moisture"):
+                zdims, zdata = stored(ref["a/b"][level], name)
+                var = nc["a/b"][level][name]
+                assert tuple(var.dimensions) == zdims
+                data = np.ma.filled(var[:], np.nan if zdata.dtype.kind == "f" else 0)
+                assert np.array_equal(data, zdata, equal_nan=zdata.dtype.kind == "f")
+        assert list(nc["a/b"].groups) == ["0", "1"]
+
+
+def test_shared_coords_declares_coordinates_once_in_the_parent(tmp_path):
+    netCDF4 = pytest.importorskip("netCDF4")
+    write_store(tmp_path / "flat.nc", "--levels", "1", "--shared-coords", _raw=True)
+    write_store(tmp_path / "pyr.nc", "--levels", "2", "--shared-coords", _raw=True)
+
+    with netCDF4.Dataset(tmp_path / "flat.nc") as nc:
+        assert {"x", "y", "time", "spatial_ref"} <= set(nc.variables)
+        data = nc["data"]
+        assert not data.dimensions and set(data.variables) == {
+            "elevation",
+            "temperature",
+            "land_cover",
+        }
+        # CF only: the grid and CRS must come from the inherited coordinates.
+        assert not any(a.startswith(("proj:", "spatial:")) for a in nc.ncattrs() + data.ncattrs())
+        assert not any(a.startswith("spatial:") for a in data["elevation"].ncattrs())
+
+    with netCDF4.Dataset(tmp_path / "pyr.nc") as nc:
+        assert set(nc.variables) == {"spatial_ref", "time"}
+        assert "GeoTransform" not in nc["spatial_ref"].ncattrs()  # one grid, many levels
+        sizes = [nc[level].dimensions["x"].size for level in ("0", "1")]
+        assert sizes == [16, 8]  # each level keeps its own x/y
+
+
+def test_shared_coords_is_netcdf_only(tmp_path):
+    with pytest.raises(SystemExit):
+        write_store(tmp_path / "t.zarr", "--shared-coords")
