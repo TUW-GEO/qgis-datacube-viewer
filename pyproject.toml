@@ -33,13 +33,18 @@ Repository = "https://github.com/TUW-GEO/qgis-datacube-viewer"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-timeout",
+    # The plugin suite reads real Icechunk and NetCDF stores. Tests that need QGIS
+    # skip themselves here; `pixi run test` runs them against a real QGIS.
+    "icechunk>=1.0",
+    "netCDF4>=1.7",
     "ruff>=0.6",
     "pre-commit>=3.8",
 ]
 
 [tool.uv]
-# Dev tooling for scripts/ and tests/, not an installable package; the plugin
-# (plugin/) ships on its own.
+# Dev tooling for scripts/ and tests/, not an installable package. The QGIS plugin
+# is built into a zip by scripts/build_plugin.py instead.
 package = false
 
 # --------------------------------------------------------------------------- #
@@ -47,30 +52,47 @@ package = false
 # --------------------------------------------------------------------------- #
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+# The plugin runs inside QGIS, and QGIS 3.34 on some distros still ships Python 3.9.
+# The standalone scripts under scripts/ are PEP 723 and need 3.12, but they use no
+# syntax newer than 3.9 that ruff would reject.
+target-version = "py39"
+exclude = ["build", ".pixi", "*.pyc"]
 
 [tool.ruff.lint]
-select = [
-    "E", "W",   # pycodestyle
-    "F",        # pyflakes
-    "I",        # isort
-    "B",        # bugbear
-    "BLE",      # blind except
-    "N",        # pep8-naming
-    "UP",       # pyupgrade
-    "SIM",      # flake8-simplify
-    "RUF",      # ruff-specific
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    # Qt overrides are camelCase by contract, and `l`/`I` are not used as names here.
+    "N802",
+    # Long lines inside docstrings and WKT literals carry meaning; the formatter
+    # handles code width and E501 would only force ugly wrapping of prose.
+    "E501",
+    # `except Exception` is deliberate anywhere a Python exception would cross into
+    # a C++ virtual call, which is a crash rather than a traceback.
+    "BLE001",
+    # En dashes, x and arrows are intentional in user-facing strings and prose.
+    "RUF001",
+    "RUF002",
+    "RUF003",
 ]
-ignore = ["E501"]  # line length is handled by the formatter
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into private attributes on purpose: the dialog's widgets are its
+# interface for testing, and exposing them publicly would be worse.
+"tests/*" = ["SLF001", "B011"]
+# Import-after-setenv is required: QT_QPA_PLATFORM must be set before qgis loads.
+"scripts/*" = ["E402"]
+"tests/conftest.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 # scripts/ is on sys.path in tests, not an installed package.
-known-first-party = ["make_dummy_data"]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["B011"]
+known-first-party = ["datacube_viewer", "make_dummy_data", "tests"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+filterwarnings = [
+    "ignore::DeprecationWarning:zarr.*",
+    "ignore:.*UnstableSpecificationWarning.*",
+]
+timeout = 300

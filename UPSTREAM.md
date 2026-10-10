@@ -1,6 +1,6 @@
 # Where this came from
 
-This directory is a verbatim copy of the public QGIS plugin
+The plugin began as a verbatim copy of the public QGIS plugin
 [`eodcgmbh/qgis-geozarr`](https://github.com/eodcgmbh/qgis-geozarr), taken at:
 
 ```
@@ -17,7 +17,7 @@ That commit, `f01754e`, is the pristine import and is tagged `plugin-upstream-0.
 Everything we have changed since is visible as:
 
 ```bash
-git diff plugin-upstream-0.2.1 -- plugin/
+git diff plugin-upstream-0.2.1 -- datacube_viewer/
 ```
 
 ## Deviations from upstream
@@ -53,30 +53,23 @@ package registry keys on name plus version, and a QGIS client that already insta
 `0.0.1` will not fetch a different `0.0.1`. Bump rather than retag.
 
 The copy is deliberate. Upstream is not expected to receive further commits, so
-there is no submodule, subtree or remote wired up here — these are just files we
+there is no submodule, subtree or remote wired up here -- these are just files we
 own now, and they are edited in place like any other code in this repository.
 
-Nothing was renamed or rewritten *on the way in* — the import was byte-for-byte, and
-the changes listed above came afterwards as ordinary commits. Every path in the
-plugin's own tooling is relative to *this* directory (`REPO =
-Path(__file__).parent.parent` in `scripts/build_plugin.py`), so the tree works
-unmodified inside a subfolder. The
-plugin keeps its own `pyproject.toml`, `pixi.toml`, `.gitignore` and `tests/`, which
-is what stops it colliding with the outer project's tooling:
-
-| File | Why it stays separate |
-| --- | --- |
-| `pyproject.toml` | Has no `[project]` table on purpose, and needs ruff `target-version = "py39"` plus `N802`/`BLE001`/`RUF001` ignored — all of which contradict the root config. Ruff resolves config per-file to the nearest ancestor, so both work at once. |
-| `.gitignore` | Git honours nested ignore files, so `build/` and `.pixi/` are covered without touching the root one. |
-| `tests/` | Needs QGIS and `pytest-qgis`. The root `pyproject.toml` pins `testpaths = ["tests"]`, so the fast outer suite stays fast. |
+The import was byte-for-byte into a `plugin/` subfolder, and the changes listed above
+came afterwards as ordinary commits. Since then the plugin was moved to the top level,
+as upstream has it, and merged with the surrounding project: one `pyproject.toml`
+(ruff, pytest), one `scripts/` and one `tests/`. `pixi.toml` remains the environment
+that has QGIS in it, for the tests that need it.
 
 If upstream ever does publish something worth having, the cheap route is to diff
 against a fresh download rather than to reconstruct a git relationship:
 
 ```bash
 gh repo clone eodcgmbh/qgis-geozarr /tmp/upstream -- --depth 1
-diff -ru --strip-trailing-cr /tmp/upstream/datacube_viewer plugin/datacube_viewer
+diff -ru --strip-trailing-cr /tmp/upstream/geo_geozarr_viewer datacube_viewer
 ```
 
-`--strip-trailing-cr` matters: the root `.gitattributes` normalises to LF, and a
-fresh clone on Windows will have CRLF.
+The upstream folder is still called `geo_geozarr_viewer`. `--strip-trailing-cr`
+matters: the `.gitattributes` normalises to LF, and a fresh clone on Windows will have
+CRLF.

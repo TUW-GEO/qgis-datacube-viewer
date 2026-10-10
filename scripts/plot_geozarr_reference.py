@@ -215,7 +215,7 @@ def resolve_crs(attrs: dict, where: str, report: Report) -> CRS | None:
         if key in attrs:
             try:
                 crs = CRS.from_user_input(attrs[key])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 report.add("FAIL", where, f"{key} not parseable by PROJ: {e}")
                 return None
             report.add("PASS", where, f"CRS from {key}: {crs.to_string()} ({crs.name})")
@@ -386,7 +386,7 @@ def check_gdal(
             try:
                 with rasterio.open(uri) as src:
                     g_crs, g_tr = src.crs, list(src.transform)[:6]
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 report.add("FAIL", where, f"GDAL cannot open: {e}")
                 continue
             if crs is not None:
@@ -560,7 +560,7 @@ def main() -> int:
     print(f"== {store}")
     try:
         root = zarr.open_group(store, mode="r")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         report.add("FAIL", "root", f"cannot open as Zarr group: {e}")
         return 1
 

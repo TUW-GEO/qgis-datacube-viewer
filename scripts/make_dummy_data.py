@@ -530,7 +530,9 @@ def parse_nest(value: str) -> tuple[str, ...]:
     text = value.strip().strip("/")
     if text.isdigit():
         depth = int(text)
-        return tuple(NEST_NAMES[i] if i < len(NEST_NAMES) else f"group{i + 1}" for i in range(depth))
+        return tuple(
+            NEST_NAMES[i] if i < len(NEST_NAMES) else f"group{i + 1}" for i in range(depth)
+        )
     names = tuple(n for n in text.split("/") if n)
     if any(n in (".", "..") or "\\" in n for n in names):
         raise argparse.ArgumentTypeError(f"{value!r} is not a valid group path")

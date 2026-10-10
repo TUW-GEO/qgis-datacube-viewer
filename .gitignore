@@ -44,3 +44,9 @@ qgis_plugin/**/_vendor/
 *.zarr.zip
 data/
 *_reference/
+
+# pixi
+.pixi/
+
+# Throwaway QGIS profile that pytest-qgis creates in the working directory
+.qgis-settings/

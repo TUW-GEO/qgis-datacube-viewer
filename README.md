@@ -1,58 +1,165 @@
 # Datacube Viewer
 
-A QGIS plugin for viewing [GeoZarr](https://github.com/zarr-conventions) datacubes
-(Icechunk, Zarr, NetCDF), plus QGIS-free scripts for generating test data and
-checking what a store really contains.
+> A QGIS plugin, forked from [EODC's GeoZarr Viewer](https://github.com/eodcgmbh/qgis-geozarr)
+> (MIT); see [UPSTREAM.md](UPSTREAM.md) for what changed. Renamed so it stays
+> distinguishable from upstream and from Wietze Suijker's similarly named plugin when
+> several are installed at once.
 
-## Layout
+Loads GeoZarr datacubes into QGIS as raster layers with multiscale
+pyramids. It works with [Icechunk](https://icechunk.io) repositories, regular Zarr
+v3 stores and NetCDF files.
+
+## Supported formats
+
+| Format | Where | Versions (branch / tag / snapshot) | Needs |
+| --- | --- | --- | --- |
+| **Icechunk** repository | local path, `s3://`, `gs://`, `az://`, `r2://`, `http(s)://` | yes | `zarr`, `icechunk` |
+| **Zarr** store (v3, and v2 with `_ARRAY_DIMENSIONS`) | local directory, `http(s)://` (needs consolidated metadata), `s3://`, `gs://`, `az://` | no | `zarr`; `fsspec` + a filesystem package for the cloud schemes |
+| **NetCDF-4 / HDF5** and classic **NetCDF-3** file (`.nc`, `.nc4`, `.cdf`) | local file; OPeNDAP URL ending in `.nc` (untested) | no | `netCDF4` |
+
+The format is detected from the location: a regular file is NetCDF, a directory is
+Zarr or Icechunk. The data model is the same in all three (groups, named dimensions,
+arrays, attributes), so georeferencing, multiscale pyramids, CRS resolution and the
+time/band sliders behave identically; the plugin reads them through a small
+format-neutral layer (`core/nodes.py`), and a new format is one adapter against it.
+
+NetCDF specifics:
+
+- Groups are real NetCDF-4 groups. A group sees the coordinate variables and the CRS
+  variable (`spatial_ref`, a grid mapping) of its parent groups, so one set of
+  coordinates can be declared once at the top and shared by several data groups, as
+  xarray and NCO write them. A group's own variables take precedence, and a coordinate
+  is not inherited when a nearer group declares a different dimension of the same name.
+- NetCDF attributes are flat, so structured metadata (`multiscales`, `zarr_conventions`)
+  is read from JSON text attributes.
+- Values are read as stored; `_FillValue`, `scale_factor` and `add_offset` are applied
+  by the plugin, as for Zarr.
+- Only one thread reads a given file at a time (HDF5 is not thread-safe).
+- While a file is open in QGIS, other programs cannot write to it on Windows.
+- A plain `https://` link to a `.nc` file cannot be read in place; download it.
+
+## Installing
+
+**Requires QGIS 3.40 LTR or newer.** `zarr` 3 needs Python ≥ 3.11
+and `icechunk` needs ≥ 3.12, and 3.40 LTR is the first release whose standard builds
+ship Python 3.12. Check with `import sys; print(sys.version)` in
+**Plugins → Python Console**.
+
+### 1. The plugin
+
+**Plugins → Manage and Install Plugins → Install from ZIP**, and pick
+`datacube_viewer-<version>.zip` (`pixi run build` makes one).
+
+It is marked experimental, so tick **Settings → Show also experimental plugins**
+if it does not show up in the list.
+
+### 2. The Python packages
+
+The Plugin Manager unzips plugins; it never runs pip. So this step is manual. No single
+package is mandatory, but you need at least one of `zarr` or `netCDF4` — each adds the
+formats listed above:
+
+| Package | What it buys you |
+| --- | --- |
+| `zarr>=3` | Zarr stores, and Icechunk (which is built on it). |
+| `icechunk` | Icechunk repositories, and their branches, tags and snapshots. |
+| `netCDF4` | NetCDF files. |
+| `fsspec` + `s3fs` | Plain Zarr on `s3://`, `gs://` and `az://`. `http(s)://` needs neither — the plugin reads it directly. For `gs://` use `gcsfs` and for `az://` use `adlfs` in place of `s3fs`. |
+
+The plugin detects your environment and shows the command with your packages already
+filled in: **Raster → Datacube Viewer → Install Python Dependencies…**. For reference:
+
+| | Where to run it | Command |
+| --- | --- | --- |
+| **Windows** | **OSGeo4W Shell** (Start menu → the QGIS folder). *Not* `cmd` or PowerShell — they have a different Python on `PATH`. | `python -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
+| **macOS** | **Terminal** (Applications → Utilities) | `/Applications/QGIS.app/Contents/MacOS/bin/python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
+| **Linux** (system QGIS) | any terminal | `python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
+| **conda / pixi** | a terminal with the env activated | `conda install -c conda-forge "zarr>=3" netcdf4 fsspec s3fs` then `python -m pip install icechunk` |
+
+Drop what you do not need — each package adds one kind of store; you need at least one of `zarr` or `netCDF4`.
+
+Then **restart QGIS** — packages are imported once per session, so re-enabling the
+plugin is not enough. Confirm in the Python Console with
+
+```python
+import sys, importlib.util as u; print({m: u.find_spec(m) is not None for m in ('zarr', 'icechunk', 'netCDF4')}, sys.executable)
+```
+
+Notes that catch people out:
+
+- **A bare `python3` on macOS is the wrong Python.** QGIS.app bundles its own; the
+  absolute path is required. Use `QGIS-LTR.app` for the LTR build.
+- **Debian, Ubuntu and Fedora refuse the plain command** (PEP 668:
+  `error: externally-managed-environment`). Add `--break-system-packages` — it only
+  affects your own `~/.local` — or install QGIS from conda-forge instead.
+- **Flatpak QGIS is sandboxed** and has no supported way to add Python packages. Use a
+  distribution package or conda-forge.
+
+## Using it
+
+**Raster → Datacube Viewer → Add Datacube Layer…**
+
+**Raster → Datacube Viewer → Time Travel…**
+
+## Developing
+
+Layout:
 
 ```
-plugin/                   the QGIS plugin — see plugin/README.md and plugin/UPSTREAM.md
-scripts/                  standalone PEP 723 scripts (dummy data, reference renderer, HTTP server)
+datacube_viewer/          the QGIS plugin package (what the zip contains)
+  core/                   format readers and store logic -- no QGIS imports
+  gui/, provider/         Qt dialogs and the raster provider
+scripts/                  build/deploy/inspect tooling, plus standalone PEP 723
+                          scripts (dummy data, reference renderer, HTTP server)
 tests/                    pytest suite
-docs/                     documentation
+pixi.toml                 environment with QGIS in it, for the tests that need it
+UPSTREAM.md               where the plugin came from, and what we changed
 ```
 
-`plugin/` is a verbatim copy of [`eodcgmbh/qgis-geozarr`](https://github.com/eodcgmbh/qgis-geozarr)
-(MIT) at commit `68eb5b1`, which we now own and edit in place — no submodule,
-subtree or remote. [plugin/UPSTREAM.md](plugin/UPSTREAM.md) records the provenance
-and why the plugin keeps its own `pyproject.toml` and `tests/`.
+The scripts that check data (`scripts/plot_geozarr_reference.py`) read a store with
+plain `zarr`, with no GDAL, no xarray and no QGIS, so when the plugin shows nothing,
+or something odd, they say whether the data or the plugin is at fault.
 
-Everything outside `plugin/` is the QGIS-free half: when the plugin shows nothing,
-or something odd, `scripts/plot_geozarr_reference.py` reads the same store with
-plain `zarr` — no GDAL, no xarray, no QGIS — and says whether the data or the
-plugin is at fault. Neither half imports the other.
+Two environments, for two jobs. [uv](https://docs.astral.sh/uv/) runs everything that
+does not need QGIS: the scripts and the core tests (tests that need QGIS skip
+themselves). [pixi](https://pixi.sh) provides a QGIS from conda-forge for the rest.
 
-> The `qgis-plugin` branch is **superseded** and kept only for history. It was a
-> skeleton for a plugin that upstream had already built in far more depth, and its
-> central idea — vendoring `geozarr` into the plugin zip — is the opposite of the
-> approach upstream settled on (zarr and icechunk have compiled dependencies, so
-> the plugin guides the user through installing them instead).
+```bash
+uv sync --all-extras --group dev   # create .venv and install everything
+uv run pre-commit install          # enable the lint hooks on commit
+uv run pytest                      # tests, without QGIS
+uv run ruff check . && uv run ruff format .
 
-## Quick start: the plugin in QGIS
+pixi run test                      # the full suite, including the Qt tests
+pixi run build                     # build/datacube_viewer-<version>.zip
+pixi run deploy                    # symlink into your QGIS profile
+pixi run inspect                   # describe a store with no QGIS involved
+```
+
+### The plugin in QGIS
 
 QGIS 3.44 LTR is installed and its bundled Python 3.12 **already has** `zarr` 3.4,
 `icechunk` 2.3, `fsspec` and `s3fs`, so there is no pip step. `build_plugin.py` and
 `deploy_dev.py` are standard-library only — neither needs pixi or the project venv:
 
 ```bash
-python plugin/scripts/deploy_dev.py            # symlink into the QGIS profile
-python plugin/scripts/deploy_dev.py --copy     # if symlinks are unavailable
-python plugin/scripts/build_plugin.py          # -> plugin/build/datacube_viewer-<version>.zip
+python scripts/deploy_dev.py            # symlink into the QGIS profile
+python scripts/deploy_dev.py --copy     # if symlinks are unavailable
+python scripts/build_plugin.py          # -> build/datacube_viewer-<version>.zip
 ```
 
 With the symlink in place and the **Plugin Reloader** plugin (already installed),
-editing a file under `plugin/datacube_viewer/` and pressing reload picks the change
-up without restarting QGIS. Then: **Raster → GeoZarr Viewer → Add GeoZarr Layer…**
+editing a file under `datacube_viewer/` and pressing reload picks the change
+up without restarting QGIS. Then: **Raster → Datacube Viewer → Add Datacube Layer…**
 
 Note that a second, unrelated GeoZarr plugin by Wietze Suijker (`qgis_geozarr`,
 GPL-2.0) is also installed in the default profile and shows up under a similar
 name. Disable it in the Plugin Manager if the two get confusing, and keep its code
 at arm's length — its license is not MIT.
 
-Running the plugin's own test suite needs QGIS plus `pytest-qgis` via pixi, and
-`plugin/pixi.toml` declares `platforms = ["linux-64"]` only, so that part runs in
-WSL rather than natively on Windows.
+The tests that construct Qt widgets or the raster provider need QGIS plus
+`pytest-qgis`, which `pixi run test` provides (`pixi.toml` lists `linux-64` and
+`win-64`).
 
 ### Releasing the plugin
 
@@ -66,24 +173,7 @@ git tag v0.0.2 && git push --follow-tags   # CI builds, publishes and makes a re
 `v*` is the plugin's namespace, since the plugin is what this repository releases.
 Untagged builds self-identify as `0.0.1.dev3+gabc1234` (or `+dirty`), so an
 installable zip never passes for a release. A published version cannot be reused —
-bump rather than retag. Details in [plugin/UPSTREAM.md](plugin/UPSTREAM.md).
-
-## Development setup
-
-Python 3.12+ is required. The project uses [uv](https://docs.astral.sh/uv/) for
-environments and locking:
-
-```bash
-uv sync --all-extras --group dev   # create .venv and install everything
-uv run pre-commit install          # enable the lint hooks on commit
-```
-
-Common tasks:
-
-```bash
-uv run pytest                      # tests
-uv run ruff check . && uv run ruff format .
-```
+bump rather than retag. Details in [UPSTREAM.md](UPSTREAM.md).
 
 ## Diagnostics
 

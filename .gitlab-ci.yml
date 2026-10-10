@@ -1,4 +1,4 @@
-# CI for datacube-viewer: lint and test the library, and package the QGIS plugin.
+# CI for datacube-viewer: lint and test, and package the QGIS plugin.
 
 stages: [lint, test, build, release]
 
@@ -39,14 +39,14 @@ test:
     reports:
       junit: report.xml
 
-# plugin/scripts/build_plugin.py is standard-library only: it validates
+# scripts/build_plugin.py is standard-library only: it validates
 # metadata.txt, builds the archive and re-opens it to assert the single-top-level-
 # directory layout QGIS requires. No environment, so this stays a fast check that a
 # metadata edit has not made the plugin uninstallable.
 #
-# The plugin's own pytest suite is not run here: it needs QGIS and pytest-qgis from
-# plugin/pixi.toml, and that conda environment takes minutes to solve. Run it with
-# `pixi run test` in plugin/.
+# The tests that need QGIS skip themselves in the test job above; they need QGIS and
+# pytest-qgis from pixi.toml, and that conda environment takes minutes to solve. Run
+# them with `pixi run test`.
 build:plugin:
   stage: build
   # Tag pipelines are handled by release:plugin, which stamps the real version; two
@@ -59,18 +59,18 @@ build:plugin:
     # No git in python:3.12-slim, so `git describe` cannot run -- the sha is passed
     # in instead, which keeps an untagged artifact traceable without it ever looking
     # like a release.
-    - python plugin/scripts/build_plugin.py --version "0.0.0+$CI_COMMIT_SHORT_SHA"
-    - ls -lh plugin/build
+    - python scripts/build_plugin.py --version "0.0.0+$CI_COMMIT_SHORT_SHA"
+    - ls -lh build
   artifacts:
     name: "datacube_viewer-$CI_COMMIT_REF_SLUG"
-    paths: [plugin/build/*.zip]
+    paths: [build/*.zip]
     expire_in: 4 weeks
 
 # --------------------------------------------------------------------------- #
 # Tagged plugin releases
 #
 # The git tag is the single source of truth for the version: tag v0.0.1 ships as
-# 0.0.1. plugin/datacube_viewer/metadata.txt holds the placeholder 0.0.0 and
+# 0.0.1. datacube_viewer/metadata.txt holds the placeholder 0.0.0 and
 # build_plugin.py injects the real value on the way into the .zip, so the number is
 # written down in exactly one place.
 #
@@ -91,16 +91,16 @@ release:plugin:
   script:
     - export PLUGIN_VERSION="${CI_COMMIT_TAG#v}"
     - echo "PLUGIN_VERSION=$PLUGIN_VERSION" >> release.env
-    - python plugin/scripts/build_plugin.py --clean --version "$PLUGIN_VERSION"
+    - python scripts/build_plugin.py --clean --version "$PLUGIN_VERSION"
     # Uploaded with the standard library, not curl: python:3.12-slim has no curl,
     # no wget and no git. The alternatives were an apt-get on every release or a
     # second job in a second image to make one HTTP request. --as fixes the name in
     # the registry so the release asset URL is predictable; the version is already
     # in the registry path.
     - |
-      python plugin/scripts/upload_package.py         --file "plugin/build/datacube_viewer-$PLUGIN_VERSION.zip"         --package datacube_viewer         --version "$PLUGIN_VERSION"         --as datacube_viewer.zip
+      python scripts/upload_package.py         --file "build/datacube_viewer-$PLUGIN_VERSION.zip"         --package datacube_viewer         --version "$PLUGIN_VERSION"         --as datacube_viewer.zip
   artifacts:
-    paths: [plugin/build/*.zip]
+    paths: [build/*.zip]
     expire_in: never
     reports:
       dotenv: release.env
