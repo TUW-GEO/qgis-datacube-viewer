@@ -9,7 +9,7 @@ name=Datacube Viewer
 ; Windows/macOS builds ship Python 3.12.
 qgisMinimumVersion=3.40
 qgisMaximumVersion=3.99
-description=Load and visualise datacubes from GeoZarr, Zarr, NetCDF and Icechunk, including multiscale pyramids.
+description=Load and visualise datacubes from GeoZarr, Zarr, NetCDF and Icechunk, with multiscale pyramids and sliders for time and other axes.
 ; PLACEHOLDER. The version comes from the git tag (vX.Y.Z) and scripts/build_plugin.py
 ; injects it here on the way into the .zip. Do not hand-edit a real number in: it
 ; would be overwritten, and this file would then misreport what shipped. The build
