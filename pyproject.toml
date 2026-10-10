@@ -1,10 +1,16 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
 [project]
-name = "datacube-viewer"
-version = "0.0.0"
-description = "QGIS plugin and dev tooling for viewing Icechunk, Zarr and NetCDF datacubes"
+name = "qgis-datacube-viewer"
+# From the git tag, like the plugin zip: v0.2.0 builds 0.2.0. See [tool.hatch.version].
+dynamic = ["version"]
+description = "QGIS raster provider for Icechunk, Zarr and NetCDF datacubes, as a plugin and a Python package"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Colin Moldenhauer", email = "colin.moldenhauer@geo.tuwien.ac.at" }]
 # tags= from datacube_viewer/metadata.txt, same order, plus the last two. Keep in step.
 keywords = [
@@ -29,16 +35,23 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.24",
-    "zarr>=3.0",
+    # CF grid mappings resolve through pyproj (core/crs.py). Every QGIS build ships
+    # it, so installing into QGIS's Python leaves the bundled copy alone.
     "pyproj>=3.6",
 ]
 
 [project.optional-dependencies]
-# Extras needed only by scripts/make_dummy_data.py --source copernicus
-dem = [
-    "tifffile>=2024.1",
-    "imagecodecs>=2024.1",
-]
+# One extra per row of the plugin's Install Python Dependencies dialog
+# (FORMAT_CHOICES in datacube_viewer/core/environment.py), so pip and the dialog never
+# disagree about what opens what. tests/test_environment.py keeps them in step.
+zarr = ["zarr>=3"]
+netcdf = ["netCDF4>=1.7"]
+# Both are useless without zarr, so asking for either brings it (NEEDS_ZARR).
+icechunk = ["qgis-datacube-viewer[zarr]", "icechunk>=1.0"]
+# Plain Zarr on s3://. As in the dialog, gs:// and az:// want gcsfs and adlfs in
+# place of s3fs, which are left to the user.
+remote = ["qgis-datacube-viewer[zarr]", "fsspec>=2023.10", "s3fs"]
+all = ["qgis-datacube-viewer[zarr,netcdf,icechunk,remote]"]
 
 [project.urls]
 Homepage = "https://github.com/TUW-GEO/qgis-datacube-viewer"
@@ -54,12 +67,32 @@ dev = [
     "netCDF4>=1.7",
     "ruff>=0.6",
     "pre-commit>=3.8",
+    { include-group = "data" },
+]
+# Generating test data: scripts/make_dummy_data.py (--source copernicus reads a GeoTIFF)
+# run in the project environment. The script also declares these inline (PEP 723) for
+# `uv run --script`.
+data = [
+    "tifffile>=2024.1",
+    "imagecodecs>=2024.1",
 ]
 
-[tool.uv]
-# Dev tooling for scripts/ and tests/, not an installable package. The QGIS plugin
-# is built into a zip by scripts/build_plugin.py instead.
-package = false
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+# Only v* tags are releases, as in scripts/build_plugin.py. Left to its default,
+# setuptools-scm would also take plugin-upstream-0.2.1 for version 0.2.1.
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v[0-9]*"]
+
+[tool.hatch.build.targets.wheel]
+# The plugin directory is also the Python package: the wheel and the Plugin Manager's
+# zip (scripts/build_plugin.py) ship the same datacube_viewer/. It stays at the repo
+# root rather than under src/, where deploy_dev.py and the plugin tooling expect it.
+packages = ["datacube_viewer"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/datacube_viewer"]
 
 # --------------------------------------------------------------------------- #
 # Tooling

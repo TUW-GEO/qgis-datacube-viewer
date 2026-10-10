@@ -9,16 +9,23 @@ as arguments, and these tests fake all three.
 
 from __future__ import annotations
 
+import re
 import sys
+from pathlib import Path
 
 import pytest
+import tomllib
 
 from datacube_viewer.core.environment import (
+    ALL_PACKAGES,
     CONDA,
     FLATPAK,
+    FORMAT_CHOICES,
     LINUX,
     MACOS,
+    NEEDS_ZARR,
     WINDOWS,
+    ZARR_PACKAGE,
     detect_flavour,
     install_command,
     osgeo4w_launcher,
@@ -171,3 +178,56 @@ def test_no_launcher_when_there_is_no_osgeo4w(tmp_path):
     assert (
         install_command(("zarr>=3",), LINUX, sys.prefix, sys.executable).terminal_launcher is None
     )
+
+
+# ------------------------------------------------------------------ pip extras
+#: The pyproject extra that stands for each row of the install dialog.
+EXTRA_FOR_CHOICE = {
+    "Zarr stores": "zarr",
+    "NetCDF files": "netcdf",
+    "Icechunk repositories, with branches, tags and snapshots": "icechunk",
+    "Zarr on s3://, gs:// and az://": "remote",
+}
+
+
+def _name(requirement: str) -> str:
+    """The normalised distribution name of a requirement: ``netCDF4>=1.7`` -> ``netcdf4``."""
+    return re.split(r"[\s\[<>=!~;]", requirement, maxsplit=1)[0].lower().replace("_", "-")
+
+
+def _extras() -> dict[str, set[str]]:
+    """Each extra's package names, with references to other extras expanded."""
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
+    declared = project["optional-dependencies"]
+    self_ref = re.compile(rf"{re.escape(project['name'])}\[(?P<extras>[^\]]+)\]")
+
+    def expand(extra: str) -> set[str]:
+        names: set[str] = set()
+        for requirement in declared[extra]:
+            match = self_ref.fullmatch(requirement)
+            if match:
+                for inner in match["extras"].split(","):
+                    names |= expand(inner.strip())
+            else:
+                names.add(_name(requirement))
+        return names
+
+    return {extra: expand(extra) for extra in declared}
+
+
+def test_every_dialog_choice_has_an_extra():
+    assert set(EXTRA_FOR_CHOICE) == {label for label, _ in FORMAT_CHOICES}
+
+
+@pytest.mark.parametrize(("label", "packages"), FORMAT_CHOICES)
+def test_extra_installs_what_the_dialog_asks_for(label, packages):
+    """``pip install qgis-datacube-viewer[x]`` and the dialog's checkbox must agree."""
+    expected = {_name(p) for p in packages}
+    if set(packages) & set(NEEDS_ZARR):
+        expected.add(_name(ZARR_PACKAGE))
+    assert _extras()[EXTRA_FOR_CHOICE[label]] == expected
+
+
+def test_all_extra_is_everything_the_dialog_offers():
+    assert _extras()["all"] == {_name(p) for p in ALL_PACKAGES}
