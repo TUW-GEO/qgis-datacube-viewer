@@ -45,7 +45,7 @@ class HttpError(OSError):
 
 
 #: The only schemes these helpers will open. ``urllib`` also handles ``file:``,
-#: ``ftp:`` and ``data:``, and a store URL reaches here straight from the Add GeoZarr
+#: ``ftp:`` and ``data:``, and a store URL reaches here straight from the Add Datacube
 #: Layer dialog — so without this, entering ``file:///etc/shadow`` would turn "read a
 #: remote store" into a local file read whose bytes surface in error text.
 ALLOWED_SCHEMES = frozenset({"http", "https"})

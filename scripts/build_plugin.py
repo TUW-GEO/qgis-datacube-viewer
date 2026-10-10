@@ -66,7 +66,7 @@ UNKNOWN_VERSION = "0.0.0+unknown"
 
 #: Environment form of --version, for CI images that have no git (python:3.12-slim
 #: does not), where the tag arrives as a variable instead.
-VERSION_ENV = "GEOZARR_PLUGIN_VERSION"
+VERSION_ENV = "DATACUBE_VIEWER_PLUGIN_VERSION"
 
 #: Repo-root files copied into the archive. plugins.qgis.org requires a
 #: GPL-compatible license to be *in the package*, not merely named in a README,
@@ -135,7 +135,7 @@ def resolve_version(explicit: str | None = None) -> str:
     """Where the packaged version comes from, in priority order.
 
     1. ``--version``, which is how CI passes the tag it was triggered by.
-    2. ``$GEOZARR_PLUGIN_VERSION``, the same thing for environments that cannot
+    2. ``$DATACUBE_VIEWER_PLUGIN_VERSION``, the same thing for environments that cannot
        pass arguments.
     3. ``git describe``, which is what makes a local build self-identifying.
     4. :data:`UNKNOWN_VERSION`, so a build from a tarball still produces something

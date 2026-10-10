@@ -1,4 +1,4 @@
-"""``QgsRasterDataProvider`` over a GeoZarr pyramid in an Icechunk repository.
+"""``QgsRasterDataProvider`` over a datacube pyramid in an Icechunk repo, Zarr store or NetCDF file.
 
 The provider is deliberately thin. QGIS asks for "these pixels, in this projected
 rectangle, at this output size"; that maps one-to-one onto
@@ -43,7 +43,7 @@ from qgis.core import (
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QRect
 
-from ..core import BBox, GeoZarrError, RefSpec, describe_crs
+from ..core import BBox, DatacubeError, RefSpec, describe_crs
 from ..core.reader import ReadRequest
 from ..layeruri import PROVIDER_KEY, LayerUri, decode_uri
 from .context import LayerContext, LayerView
@@ -138,8 +138,8 @@ def clone_count() -> int:
 
 
 # ----------------------------------------------------------------------- provider
-class GeoZarrRasterProvider(QgsRasterDataProvider):
-    """Serves blocks from one dataset of one GeoZarr/Icechunk snapshot."""
+class DatacubeRasterProvider(QgsRasterDataProvider):
+    """Serves blocks from one dataset of one store (or Icechunk snapshot)."""
 
     def __init__(
         self,
@@ -174,7 +174,7 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
         try:
             self._parsed = decode_uri(uri)
             self._context = LayerContext(self._parsed)
-        except GeoZarrError as exc:
+        except DatacubeError as exc:
             self._fail("Cannot open store", exc.detailed)
         except Exception as exc:
             self._fail("Cannot open store", f"{type(exc).__name__}: {exc}")
@@ -188,7 +188,7 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
         return PROVIDER_KEY
 
     def description(self) -> str:
-        return "GeoZarr multiscale raster from an Icechunk repository"
+        return "Multiscale raster from an Icechunk repository, Zarr store or NetCDF file"
 
     def isValid(self) -> bool:
         return self._context is not None
@@ -201,8 +201,8 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
             return self._context.uri.encode()
         return self._source
 
-    def clone(self) -> GeoZarrRasterProvider:
-        copy = GeoZarrRasterProvider(self._source, context=self._context)
+    def clone(self) -> DatacubeRasterProvider:
+        copy = DatacubeRasterProvider(self._source, context=self._context)
         _keep_alive(copy)
         return copy
 
@@ -211,7 +211,7 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
             return False
         try:
             self._context.reload()
-        except GeoZarrError as exc:
+        except DatacubeError as exc:
             self._fail("Reload failed", exc.detailed)
             return False
         self._stats.clear()
@@ -441,7 +441,7 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
 
         try:
             result = view.reader.read(request)
-        except GeoZarrError as exc:
+        except DatacubeError as exc:
             self._fail("Read failed", exc.detailed)
             return self._empty_block(qtype, width, height)
         except Exception as exc:
@@ -596,7 +596,7 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
             return False
         try:
             changed = self._context.set_ref(ref)
-        except GeoZarrError as exc:
+        except DatacubeError as exc:
             self._fail("Snapshot switch failed", exc.detailed)
             return False
         if changed:
@@ -679,7 +679,7 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
         before = self.indices()
         try:
             self._context.set_indices({**before, **{k: int(v) for k, v in indices.items()}})
-        except GeoZarrError as exc:
+        except DatacubeError as exc:
             self._fail("Could not change slice", exc.detailed)
             return False
         after = self.indices()
@@ -747,6 +747,6 @@ class GeoZarrRasterProvider(QgsRasterDataProvider):
         )
 
         return (
-            "<h2>GeoZarr</h2><table>" + "".join(rows) + "</table>"
+            "<h2>Datacube</h2><table>" + "".join(rows) + "</table>"
             "<h3>Pyramid</h3><table>" + "".join(levels) + "</table>" + cache
         )

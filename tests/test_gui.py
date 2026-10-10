@@ -21,7 +21,7 @@ from qgis.PyQt.QtCore import Qt, QThreadPool
 
 from datacube_viewer.core import RefSpec, describe_store, open_store
 from datacube_viewer.core.reader import DatasetReader
-from datacube_viewer.gui import GeoZarrLoadDialog, render_thumbnail, to_image
+from datacube_viewer.gui import DatacubeLoadDialog, render_thumbnail, to_image
 from datacube_viewer.gui.load_dialog import _SETTINGS_RECENT
 from datacube_viewer.gui.worker import StoreWorker
 from tests.fixture_store import FixtureInfo
@@ -50,7 +50,7 @@ def has_preview(dialog) -> bool:
 
 @pytest.fixture
 def dialog(qgis_app, store_uri: str):
-    widget = GeoZarrLoadDialog()
+    widget = DatacubeLoadDialog()
     yield widget
     widget.close()
     # Drain the pool before the widget's C++ half goes away. A job still running
@@ -310,7 +310,7 @@ def test_dialog_never_describes_a_store_off_the_main_thread(qgis_app, store_uri,
 
     monkeypatch.setattr(module, "describe_store", spy)
 
-    dialog = GeoZarrLoadDialog()
+    dialog = DatacubeLoadDialog()
     try:
         dialog._uri_combo.setCurrentText(store_uri)
         dialog._on_connect()

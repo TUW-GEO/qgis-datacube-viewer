@@ -57,7 +57,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from ..core import AxisInfo, DatasetInfo, GeoZarrError
+from ..core import AxisInfo, DatacubeError, DatasetInfo
 from ..layeruri import (
     INDEX_PROPERTY,
     PROVIDER_KEY,
@@ -93,7 +93,7 @@ PANEL_TITLE = "Datacube Viewer"
 DOCK_OBJECT_NAME = "DatacubeViewerDock"
 
 
-def is_geozarr_layer(layer: QgsMapLayer | None) -> bool:
+def is_datacube_layer(layer: QgsMapLayer | None) -> bool:
     """Whether this is one of our raster layers, with a provider we can talk to.
 
     The ``setIndices`` check is not paranoia about the provider's identity — it is
@@ -319,12 +319,12 @@ class AxisScrubber(QWidget):
             self._body.deleteLater()
             self._body = None
 
-        self._layer = layer if is_geozarr_layer(layer) else None
+        self._layer = layer if is_datacube_layer(layer) else None
         self._provider = self._layer.dataProvider() if self._layer is not None else None
 
         if self._layer is None:
-            self._heading.setText("<i>No GeoZarr layer selected.</i>")
-            self._status.setText("Select a GeoZarr layer in the Layers panel to scrub its axes.")
+            self._heading.setText("<i>No datacube layer selected.</i>")
+            self._status.setText("Select a datacube layer in the Layers panel to scrub its axes.")
             self._restretch.setVisible(False)
             self._fit_cube.setVisible(False)
             return
@@ -406,7 +406,7 @@ class AxisScrubber(QWidget):
         try:
             if not fit_to_cube(self._layer):
                 complaint = "Could not read enough of the cube to rescale."
-        except GeoZarrError as exc:
+        except DatacubeError as exc:
             complaint = f"Could not rescale colours: {exc.detailed}"
         finally:
             QApplication.restoreOverrideCursor()
@@ -431,7 +431,7 @@ class AxisScrubber(QWidget):
         view = context.view()
         try:
             ranges = slice_ranges(view.reader, view.bands, view.indices, origin)
-        except GeoZarrError as exc:
+        except DatacubeError as exc:
             # A failed stretch must not lose the slice change that triggered it.
             return f"Could not rescale colours: {exc.detailed}"
         if not any(r is not None for r in ranges):
@@ -573,7 +573,7 @@ class AxisScrubber(QWidget):
             self._apply_now()
 
 
-class GeoZarrCubeDock(QgsDockWidget):
+class DatacubeDock(QgsDockWidget):
     """The dock: an :class:`AxisScrubber` that follows the selected layer.
 
     ``QgsDockWidget`` rather than a plain ``QDockWidget`` so QGIS treats it as one

@@ -1,4 +1,4 @@
-"""Datacube Viewer — a QGIS plugin for GeoZarr/Icechunk datacubes.
+"""Datacube Viewer — a QGIS plugin for Icechunk, Zarr and NetCDF datacubes.
 
 The package root stays import-light on purpose. ``datacube_viewer.core`` must be
 importable in a plain Python interpreter (that is what makes the data-access layer
@@ -34,6 +34,6 @@ __all__ = ["PLUGIN_NAME", "classFactory"]
 
 def classFactory(iface):
     """Entry point QGIS calls to instantiate the plugin."""
-    from .plugin import GeoZarrViewerPlugin
+    from .plugin import DatacubeViewerPlugin
 
-    return GeoZarrViewerPlugin(iface)
+    return DatacubeViewerPlugin(iface)

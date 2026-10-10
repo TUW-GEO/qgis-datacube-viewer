@@ -1,14 +1,14 @@
 """Exception hierarchy for the data-access layer.
 
 Everything raised deliberately by :mod:`datacube_viewer.core` derives from
-:class:`GeoZarrError` so the GUI can catch one type and show the message verbatim.
+:class:`DatacubeError` so the GUI can catch one type and show the message verbatim.
 Messages are written to be shown to a user, not just logged.
 """
 
 from __future__ import annotations
 
 
-class GeoZarrError(Exception):
+class DatacubeError(Exception):
     """Base class for all errors raised by the data-access layer."""
 
     #: Optional longer explanation / remediation hint shown under the message.
@@ -34,11 +34,11 @@ class GeoZarrError(Exception):
         return f"{self.message}\n{self.hint}" if self.hint else self.message
 
 
-class MissingDependencyError(GeoZarrError):
+class MissingDependencyError(DatacubeError):
     """``zarr`` or ``icechunk`` is not importable from the QGIS interpreter."""
 
 
-class StoreOpenError(GeoZarrError):
+class StoreOpenError(DatacubeError):
     """The store URI could not be opened as an Icechunk repo or a Zarr group."""
 
 
@@ -46,7 +46,7 @@ class RefNotFoundError(StoreOpenError):
     """The requested branch, tag or snapshot does not exist in the repository."""
 
 
-class MetadataError(GeoZarrError):
+class MetadataError(DatacubeError):
     """The store opened, but its geospatial metadata is missing or inconsistent."""
 
 
@@ -68,5 +68,5 @@ class CrsResolutionError(MetadataError):
     """No CRS could be determined and no override was supplied."""
 
 
-class ReadError(GeoZarrError):
+class ReadError(DatacubeError):
     """A chunk read failed or returned something unusable."""

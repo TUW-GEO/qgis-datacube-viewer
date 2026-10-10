@@ -23,7 +23,7 @@ from datacube_viewer import PLUGIN_NAME, classFactory
 from datacube_viewer.layeruri import PROVIDER_KEY, LayerUri, per_variable
 from datacube_viewer.plugin import (
     TOOLBAR_OBJECT_NAME,
-    GeoZarrViewerPlugin,
+    DatacubeViewerPlugin,
     check_dependencies,
     remote_dependencies,
 )
@@ -122,14 +122,14 @@ def iface(qgis_app):
 
 @pytest.fixture
 def plugin(iface):
-    instance = GeoZarrViewerPlugin(iface)
+    instance = DatacubeViewerPlugin(iface)
     yield instance
     instance.unload()
     unregister_provider()
 
 
 def test_class_factory_returns_the_plugin(iface) -> None:
-    assert isinstance(classFactory(iface), GeoZarrViewerPlugin)
+    assert isinstance(classFactory(iface), DatacubeViewerPlugin)
 
 
 def test_dependencies_are_present_in_this_environment() -> None:
@@ -365,23 +365,27 @@ def test_time_travel_without_a_selection_says_so(plugin, iface) -> None:
     plugin.initGui()
     iface.active = None
     plugin.show_snapshot_dialog()
-    assert any("Select a GeoZarr raster layer" in message for _, message, _ in iface._bar.messages)
+    assert any(
+        "Select a Datacube Viewer raster layer" in message for _, message, _ in iface._bar.messages
+    )
 
 
-def test_time_travel_ignores_a_non_geozarr_layer(plugin, iface) -> None:
+def test_time_travel_ignores_a_non_datacube_layer(plugin, iface) -> None:
     plugin.initGui()
     iface.active = QgsRasterLayer("", "empty", "gdal")
     plugin.show_snapshot_dialog()
-    assert any("Select a GeoZarr raster layer" in message for _, message, _ in iface._bar.messages)
+    assert any(
+        "Select a Datacube Viewer raster layer" in message for _, message, _ in iface._bar.messages
+    )
 
 
 def test_remote_packages_are_reported_without_importing_them(monkeypatch) -> None:
     """find_spec, not import: importing s3fs pulls aiobotocore in for no reason."""
     monkeypatch.setattr(
-        "datacube_viewer.plugin.REMOTE_PACKAGES", ("json", "geozarr_no_such_package")
+        "datacube_viewer.plugin.REMOTE_PACKAGES", ("json", "datacube_no_such_package")
     )
-    assert remote_dependencies() == ["geozarr_no_such_package"]
-    assert "geozarr_no_such_package" not in sys.modules
+    assert remote_dependencies() == ["datacube_no_such_package"]
+    assert "datacube_no_such_package" not in sys.modules
 
 
 def test_missing_remote_packages_alone_do_not_nag(plugin, iface, monkeypatch) -> None:

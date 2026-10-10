@@ -2,7 +2,7 @@
 
 Icechunk's whole point is that history is cheap, so switching snapshot should feel
 like moving a slider, not like removing and re-adding a layer. The provider supports
-this in place (see :meth:`GeoZarrRasterProvider.setRef`), and this dialog is the UI
+this in place (see :meth:`DatacubeRasterProvider.setRef`), and this dialog is the UI
 for it: pick a snapshot, the same layer repaints against it, styling and layer order
 untouched.
 
@@ -31,7 +31,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from ..core import RefSpec, RepositoryRefs, SnapshotInfo, list_refs
-from ..provider import GeoZarrRasterProvider
+from ..provider import DatacubeRasterProvider
 from .worker import StoreWorker
 
 
@@ -44,7 +44,7 @@ class SnapshotDialog(QDialog):
         self.setMinimumWidth(620)
 
         self._layer = layer
-        self._provider: GeoZarrRasterProvider = layer.dataProvider()
+        self._provider: DatacubeRasterProvider = layer.dataProvider()
         self._refs: RepositoryRefs | None = None
         #: Oldest first, matching the slider.
         self._timeline: list[SnapshotInfo] = []
@@ -104,7 +104,7 @@ class SnapshotDialog(QDialog):
     def _reload(self) -> None:
         context = getattr(self._provider, "context", None)
         if context is None:
-            self._status.setText("This layer is not a GeoZarr layer.")
+            self._status.setText("This layer is not a Datacube Viewer layer.")
             return
         store_uri = context.uri.store_uri
         self._worker.submit(lambda: list_refs(store_uri))

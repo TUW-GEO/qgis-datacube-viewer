@@ -36,7 +36,7 @@ from .context import (
     default_indices,
     pick_dataset,
 )
-from .raster_provider import GeoZarrRasterProvider, clone_count, qgis_data_type
+from .raster_provider import DatacubeRasterProvider, clone_count, qgis_data_type
 from .statistics import (
     apply_stretch,
     cube_ranges,
@@ -50,7 +50,7 @@ __all__ = [
     "LEVEL_STRATEGIES",
     "PROVIDER_DESCRIPTION",
     "PROVIDER_KEY",
-    "GeoZarrRasterProvider",
+    "DatacubeRasterProvider",
     "LayerContext",
     "LayerUri",
     "LayerView",
@@ -82,7 +82,7 @@ __all__ = [
 _metadata: QgsProviderMetadata | None = None
 
 
-def _create_provider(uri: str, options: Any, flags: Any = None) -> GeoZarrRasterProvider:
+def _create_provider(uri: str, options: Any, flags: Any = None) -> DatacubeRasterProvider:
     """Factory handed to the registry.
 
     The provider class is resolved through ``sys.modules`` on every call instead of
@@ -93,7 +93,7 @@ def _create_provider(uri: str, options: Any, flags: Any = None) -> GeoZarrRaster
     to ``raster_provider.py`` would appear to have no effect.
     """
     module = importlib.import_module(f"{__package__}.raster_provider")
-    return module.GeoZarrRasterProvider(uri, options, flags)
+    return module.DatacubeRasterProvider(uri, options, flags)
 
 
 def is_registered() -> bool:
@@ -110,7 +110,7 @@ def registry_supports_unregister() -> bool:
 
 
 def register_provider() -> bool:
-    """Register the ``geo_geozarr`` provider. Idempotent.
+    """Register the ``datacube_viewer`` provider. Idempotent.
 
     Uses the function-pointer form of ``QgsProviderMetadata`` rather than
     subclassing: that is the form the Phase 0 spike verified end-to-end, and

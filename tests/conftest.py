@@ -29,7 +29,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from tests.fixture_store import FixtureInfo, build_fixture_store
 
 #: Point at the real 13 GB store to run the marked integration tests.
-REAL_STORE_ENV = "GEOZARR_TEST_STORE"
+REAL_STORE_ENV = "DATACUBE_VIEWER_TEST_STORE"
 
 
 @pytest.fixture(scope="session")

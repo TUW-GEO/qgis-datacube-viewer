@@ -194,7 +194,7 @@ def test_keys_are_escaped_but_separators_are_kept() -> None:
 
 # --------------------------------------------------------------------- URL schemes
 #
-# A store URL reaches httpio straight from the Add GeoZarr Layer dialog, and urllib is
+# A store URL reaches httpio straight from the Add Datacube Layer dialog, and urllib is
 # happy to open file:, ftp: and data: as well as http(s):. Reading a local file because
 # someone was talked into pasting file:///… is not a read this module should be able to
 # perform at all, so the allowlist is asserted rather than assumed.

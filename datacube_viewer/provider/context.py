@@ -22,9 +22,9 @@ from dataclasses import dataclass, replace
 from ..core import (
     AxisInfo,
     CrsInfo,
+    DatacubeError,
     DatasetInfo,
     DatasetReader,
-    GeoZarrError,
     NoDatasetsError,
     NoSuchVariableError,
     RefSpec,
@@ -284,7 +284,7 @@ class LayerContext:
             previous = (self._uri, self._handle, self._store, self._dataset, self._reader)
             try:
                 self._load(target)
-            except GeoZarrError:
+            except DatacubeError:
                 # Leave the layer on its old snapshot rather than turning it invalid.
                 (self._uri, self._handle, self._store, self._dataset, self._reader) = previous
                 raise

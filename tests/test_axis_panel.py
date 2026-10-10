@@ -27,10 +27,11 @@ from datacube_viewer.gui.axis_panel import (
     AxisScrubber,
     axes_for_bands,
     axis_chunk_length,
-    is_geozarr_layer,
+    is_datacube_layer,
     should_restretch,
 )
 from datacube_viewer.layeruri import (
+    ERROR_PROPERTY,
     INDEX_PROPERTY,
     RESTRETCH_PROPERTY,
     LayerUri,
@@ -66,10 +67,10 @@ def pump(predicate, timeout: float = 10.0) -> bool:
 
 @pytest.fixture
 def layer(qgis_app, fixture_info: FixtureInfo):
-    """A GeoZarr layer on the fixture's conventional dataset, which has a time axis."""
+    """A Datacube Viewer layer on the fixture's conventional dataset, which has a time axis."""
     uri = LayerUri(store_uri=fixture_info.path, dataset="conv", bands=("red",))
     made = create_layer(uri, "cube")
-    assert made.isValid(), made.customProperty("geo_geozarr/error", "")
+    assert made.isValid(), made.customProperty(ERROR_PROPERTY, "")
     yield made
     del made
 
@@ -87,14 +88,14 @@ def widget(layer):
 
 # --------------------------------------------------------------------- plumbing
 def test_layer_is_recognised(layer) -> None:
-    assert is_geozarr_layer(layer)
+    assert is_datacube_layer(layer)
 
 
 def test_a_plain_layer_is_not_recognised(qgis_app) -> None:
     from qgis.core import QgsRasterLayer
 
-    assert not is_geozarr_layer(QgsRasterLayer("", "empty", "gdal"))
-    assert not is_geozarr_layer(None)
+    assert not is_datacube_layer(QgsRasterLayer("", "empty", "gdal"))
+    assert not is_datacube_layer(None)
 
 
 def test_an_unpointed_scrubber_says_so(qgis_app) -> None:
@@ -103,7 +104,7 @@ def test_an_unpointed_scrubber_says_so(qgis_app) -> None:
     try:
         assert scrubber.layer() is None
         assert scrubber._rows == []
-        assert "Select a GeoZarr layer" in scrubber._status.text()
+        assert "Select a datacube layer" in scrubber._status.text()
     finally:
         scrubber.deleteLater()
 
@@ -252,7 +253,7 @@ def test_sliders_start_where_the_provider_is(widget, layer) -> None:
 def test_a_dataset_without_axes_gets_an_explanation(qgis_app, fixture_info: FixtureInfo) -> None:
     """The NGFF fixture group is 2-D, so there is nothing to scrub."""
     flat = create_layer(LayerUri(store_uri=fixture_info.path, dataset="ngff"), "flat")
-    assert flat.isValid(), flat.customProperty("geo_geozarr/error", "")
+    assert flat.isValid(), flat.customProperty(ERROR_PROPERTY, "")
     page = AxisScrubber()
     page.set_layer(flat)
     try:
@@ -414,7 +415,7 @@ def test_a_project_restores_the_scrubbed_slice(qgis_app, fixture_info: FixtureIn
     assert reopened.dataProvider().indices() == {"time": 0}  # the saved URI's value
     reopened.setCustomProperty(INDEX_PROPERTY, recorded)
 
-    # What GeoZarrViewerPlugin._on_layer_added does.
+    # What DatacubeViewerPlugin._on_layer_added does.
     assert reopened.dataProvider().setIndices(decode_indices(recorded))
     assert reopened.dataProvider().indices() == {"time": 1}
 

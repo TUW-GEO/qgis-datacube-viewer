@@ -30,7 +30,7 @@ from .core.reader import RESAMPLING_METHODS, LevelStrategy, Resampling
 #: "geozarr", and the registry holds one provider per key for the whole session, so
 #: sharing it would hand every layer of both plugins to whichever loaded first.
 PROVIDER_KEY = "datacube_viewer"
-PROVIDER_DESCRIPTION = "Datacube Viewer: GeoZarr / Icechunk raster"
+PROVIDER_DESCRIPTION = "Datacube Viewer: Icechunk / Zarr / NetCDF raster"
 
 #: Layer custom property holding the reason a layer failed to load. Namespaced by
 #: the provider key for the same reason.
@@ -40,12 +40,12 @@ ERROR_PROPERTY = f"{PROVIDER_KEY}/error"
 #: syntax as the ``index=`` URI component.
 #:
 #: This exists because moving a slider cannot update the string QGIS saves.
-#: :meth:`GeoZarrRasterProvider.dataSourceUri` reports live state, but
+#: :meth:`DatacubeRasterProvider.dataSourceUri` reports live state, but
 #: ``QgsMapLayer`` writes ``<datasource>`` from its own cached copy, which only
 #: ``setDataSource()`` refreshes — and that rebuilds the provider from scratch,
 #: dropping the open store handle and the block cache. Custom properties *are*
 #: persisted, so the scrubber writes here and the plugin re-applies it when the
-#: project is read. See ``GeoZarrViewerPlugin._on_layer_added``.
+#: project is read. See ``DatacubeViewerPlugin._on_layer_added``.
 INDEX_PROPERTY = f"{PROVIDER_KEY}/indices"
 
 #: Layer custom property overriding whether the stretch follows the slice.
@@ -69,7 +69,7 @@ def _encode(value: str) -> str:
 
 @dataclass(frozen=True)
 class LayerUri:
-    """Parsed form of a ``geo_geozarr`` layer source."""
+    """Parsed form of a ``datacube_viewer`` layer source."""
 
     store_uri: str
     dataset: str = ""
@@ -144,7 +144,7 @@ class LayerUri:
 def per_variable(uri: LayerUri) -> tuple[LayerUri, ...]:
     """Split a multi-variable selection into one single-band URI per variable.
 
-    A multi-band ``geo_geozarr`` layer is an R/G/B composite: QGIS stretches each
+    A multi-band ``datacube_viewer`` layer is an R/G/B composite: QGIS stretches each
     band independently and paints them as colour channels. That is right for
     red/green/blue reflectance and wrong for everything else — a store holding
     temperature, precipitation and humidity drawn as a composite is a colourful lie,
@@ -206,10 +206,10 @@ def _parse_bool(text: str) -> bool:
 
 
 def decode_uri(uri: str) -> LayerUri:
-    """Parse a ``geo_geozarr`` layer source.
+    """Parse a ``datacube_viewer`` layer source.
 
     A bare path with no ``=`` is accepted as shorthand for ``url=<path>``, which
-    makes ``QgsRasterLayer("/data/store", "x", "geo_geozarr")`` work from the console.
+    makes ``QgsRasterLayer("/data/store", "x", "datacube_viewer")`` work from the console.
     """
     text = (uri or "").strip()
     if not text:

@@ -15,7 +15,7 @@ pytest.importorskip("qgis.core")
 
 from qgis.core import Qgis, QgsContrastEnhancement, QgsRasterMinMaxOrigin
 
-from datacube_viewer.layeruri import LayerUri
+from datacube_viewer.layeruri import ERROR_PROPERTY, LayerUri
 from datacube_viewer.provider import axes_for_bands, create_layer
 from datacube_viewer.provider.statistics import (
     LIMIT_NOT_SET,
@@ -42,7 +42,7 @@ def layer(qgis_app, fixture_info: FixtureInfo):
     made = create_layer(
         LayerUri(store_uri=fixture_info.path, dataset="conv", bands=("red",)), "cube"
     )
-    assert made.isValid(), made.customProperty("geo_geozarr/error", "")
+    assert made.isValid(), made.customProperty(ERROR_PROPERTY, "")
     yield made
     del made
 
@@ -205,7 +205,7 @@ def float_layer(qgis_app, fixture_info: FixtureInfo):
     made = create_layer(
         LayerUri(store_uri=fixture_info.path, dataset="geo", bands=("temperature",)), "floaty"
     )
-    assert made.isValid(), made.customProperty("geo_geozarr/error", "")
+    assert made.isValid(), made.customProperty(ERROR_PROPERTY, "")
     return made
 
 

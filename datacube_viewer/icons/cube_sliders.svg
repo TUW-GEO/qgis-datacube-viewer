@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-  <title>GeoZarr cube axis sliders</title>
+  <title>Datacube axis sliders</title>
   <!-- Same cube as open_cube.svg, but the front face is emptied and carries a
        slider: the dimensions are what you now scrub through. -->
   <g stroke-linejoin="round" stroke-width="1.1">

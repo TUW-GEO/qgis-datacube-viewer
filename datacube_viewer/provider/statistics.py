@@ -39,7 +39,7 @@ from qgis.core import (
     QgsRasterMinMaxOrigin,
 )
 
-from ..core import AxisInfo, DatasetReader, GeoZarrError
+from ..core import AxisInfo, DatacubeError, DatasetReader
 from .context import axes_for_bands
 
 #: Overview size for a statistics sample. A stretch is a display decision, not a
@@ -309,7 +309,7 @@ def apply_stretch(layer: QgsRasterLayer, ranges: Sequence[tuple[float, float] | 
 def _apply_ranges(layer: QgsRasterLayer, ranges: Sequence[tuple[float, float] | None]) -> bool:
     """Push per-band ranges onto the layer's renderer. True if anything changed.
 
-    Covers the three renderers a GeoZarr layer actually gets: single-band grey (the
+    Covers the three renderers a datacube layer actually gets: single-band grey (the
     default for one variable), single-band pseudocolor (what anyone looking at
     temperature switches to), and multiband colour (the composite opt-out). The
     layer's ``minMaxOrigin`` is deliberately left untouched, so a derived stretch
@@ -508,7 +508,7 @@ def cube_ranges(
         for position, band in enumerate(bands):
             try:
                 values = _sample(reader, band, visit, sample)
-            except GeoZarrError:
+            except DatacubeError:
                 continue  # one unreadable slice must not sink the whole stretch
             if values.size == 0:
                 continue

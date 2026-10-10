@@ -1,6 +1,6 @@
-"""The "Add GeoZarr layer" dialog.
+"""The "Add datacube layer" dialog.
 
-Structure: every widget change funnels into :meth:`GeoZarrLoadDialog._refresh`,
+Structure: every widget change funnels into :meth:`DatacubeLoadDialog._refresh`,
 which rebuilds a :class:`~datacube_viewer.layeruri.LayerUri` from the current widget
 state, runs it through :mod:`datacube_viewer.selection`, and repaints the message
 area and the Load button. There is no other path by which the dialog's opinion of
@@ -48,8 +48,8 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from ..core import (
+    DatacubeError,
     DatasetInfo,
-    GeoZarrError,
     RefSpec,
     RepositoryRefs,
     StoreInfo,
@@ -119,7 +119,7 @@ class _AxisPicker(QWidget):
             self._spin.setValue(index)
 
 
-class GeoZarrLoadDialog(QDialog):
+class DatacubeLoadDialog(QDialog):
     """Pick a store, a snapshot, a dataset and a band selection; emit a layer URI."""
 
     #: Emitted when the user clicks Add, with one LayerUri per layer to create —
@@ -706,7 +706,7 @@ class GeoZarrLoadDialog(QDialog):
     def _on_handle_ready(self, handle: Any) -> None:
         try:
             store = describe_store(handle, crs_override=self._crs_override_text())
-        except GeoZarrError as exc:
+        except DatacubeError as exc:
             self._on_worker_failed(exc.detailed, "")
             return
         self._handle = handle

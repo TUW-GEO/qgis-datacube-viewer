@@ -1,7 +1,7 @@
 [project]
 name = "datacube-viewer"
 version = "0.0.0"
-description = "QGIS plugin and dev tooling for viewing GeoZarr datacubes"
+description = "QGIS plugin and dev tooling for viewing Icechunk, Zarr and NetCDF datacubes"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }

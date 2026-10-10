@@ -48,7 +48,7 @@ class _Job(QRunnable):
         try:
             result = self._fn()
         except Exception as exc:
-            # GeoZarrError carries a remediation hint that str() deliberately omits.
+            # DatacubeError carries a remediation hint that str() deliberately omits.
             message = getattr(exc, "detailed", "") or str(exc) or type(exc).__name__
             self._signals.failed.emit((self._token, message, traceback.format_exc()))
             return

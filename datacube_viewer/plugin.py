@@ -27,7 +27,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QPushButton
 
 from . import PLUGIN_NAME
-from .core import REMOTE_PACKAGES, SUPPRESS_KEY, GeoZarrError
+from .core import REMOTE_PACKAGES, SUPPRESS_KEY, DatacubeError
 from .layeruri import ERROR_PROPERTY, INDEX_PROPERTY, PROVIDER_KEY, LayerUri
 
 #: Tab name in the QGIS log panel. Same as the display name so that a message is
@@ -109,7 +109,7 @@ def remote_dependencies() -> list[str]:
     return missing
 
 
-class GeoZarrViewerPlugin:
+class DatacubeViewerPlugin:
     """The object QGIS keeps for the lifetime of the plugin."""
 
     def __init__(self, iface):
@@ -131,11 +131,11 @@ class GeoZarrViewerPlugin:
             self._log(f"Failed to register the '{PROVIDER_KEY}' data provider.", Qgis.Critical)
 
         add = QAction(_icon("open_cube.svg"), "Add Datacube Layer…", self.iface.mainWindow())
-        add.setToolTip("Load a GeoZarr datacube from an Icechunk repository or Zarr store")
+        add.setToolTip("Load a datacube from an Icechunk repository, Zarr store or NetCDF file")
         add.triggered.connect(self.show_load_dialog)
 
         travel = QAction(_icon("history.svg"), "Time Travel…", self.iface.mainWindow())
-        travel.setToolTip("Switch the selected GeoZarr layer to a different Icechunk snapshot")
+        travel.setToolTip("Switch the selected datacube layer to a different Icechunk snapshot")
         travel.triggered.connect(self.show_snapshot_dialog)
 
         setup = QAction("Install Python Dependencies…", self.iface.mainWindow())
@@ -183,9 +183,9 @@ class GeoZarrViewerPlugin:
         visibility from DOCK_OBJECT_NAME after this, so someone who left it open
         keeps it open.
         """
-        from .gui import GeoZarrCubeDock
+        from .gui import DatacubeDock
 
-        self._cube_dock = GeoZarrCubeDock(self.iface, self.iface.mainWindow())
+        self._cube_dock = DatacubeDock(self.iface, self.iface.mainWindow())
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self._cube_dock)
         self._cube_dock.hide()
 
@@ -194,7 +194,7 @@ class GeoZarrViewerPlugin:
         toggle = self._cube_dock.toggleViewAction()
         toggle.setIcon(_icon("cube_sliders.svg"))
         toggle.setText("Datacube Panel")
-        toggle.setToolTip("Show the axis sliders for the selected GeoZarr layer")
+        toggle.setToolTip("Show the axis sliders for the selected datacube layer")
         self.iface.addPluginToRasterMenu(PLUGIN_NAME, toggle)
         self._actions.append(toggle)
         if self._toolbar is not None:
@@ -204,7 +204,7 @@ class GeoZarrViewerPlugin:
         """Re-apply a slice recorded in a project file, if there is one."""
         from .layeruri import UriError, decode_indices
 
-        if not self._is_geozarr_layer(layer):
+        if not self._is_datacube_layer(layer):
             return
         recorded = layer.customProperty(INDEX_PROPERTY, "")
         if not recorded:
@@ -305,7 +305,7 @@ class GeoZarrViewerPlugin:
             from .provider import unregister_provider
 
             # QGIS 3.x has no way to unregister a data provider, so this usually
-            # returns False and the 'geo_geozarr' key stays in the registry for the rest
+            # returns False and the provider key stays in the registry for the rest
             # of the session. Existing layers therefore keep working after the plugin
             # is disabled, and re-enabling it is a no-op. Reloading still picks up
             # code changes because the registered factory resolves the provider class
@@ -321,10 +321,10 @@ class GeoZarrViewerPlugin:
             self.show_dependency_dialog()
             return
 
-        from .gui import GeoZarrLoadDialog
+        from .gui import DatacubeLoadDialog
 
         if self._load_dialog is None:
-            self._load_dialog = GeoZarrLoadDialog(self.iface.mainWindow())
+            self._load_dialog = DatacubeLoadDialog(self.iface.mainWindow())
             self._load_dialog.layersRequested.connect(self.add_layers)
             self._load_dialog.finished.connect(self._on_dialog_closed)
         self._load_dialog.show()
@@ -400,7 +400,7 @@ class GeoZarrViewerPlugin:
 
         try:
             fitted = fit_to_cube(layer)
-        except GeoZarrError as exc:
+        except DatacubeError as exc:
             self._log(f"Could not sample {layer.name()} for a stretch: {exc.detailed}", Qgis.Info)
             return
         except Exception as exc:
@@ -460,10 +460,10 @@ class GeoZarrViewerPlugin:
 
     def show_snapshot_dialog(self) -> None:
         layer = self.iface.activeLayer()
-        if not self._is_geozarr_layer(layer):
+        if not self._is_datacube_layer(layer):
             self.iface.messageBar().pushMessage(
                 PLUGIN_NAME,
-                "Select a GeoZarr raster layer first.",
+                "Select a Datacube Viewer raster layer first.",
                 level=Qgis.Info,
                 duration=6,
             )
@@ -476,7 +476,7 @@ class GeoZarrViewerPlugin:
 
     # ------------------------------------------------------------- helpers
     @staticmethod
-    def _is_geozarr_layer(layer) -> bool:
+    def _is_datacube_layer(layer) -> bool:
         return (
             isinstance(layer, QgsRasterLayer)
             and layer.isValid()

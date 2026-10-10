@@ -117,10 +117,10 @@ def test_uri_round_trips_without_a_snapshot(qgis_app, plain_uri: str) -> None:
 
 def test_dialog_connects_without_listing_refs(qgis_app, plain_uri: str) -> None:
     """The regression: Connect must not import icechunk for a plain Zarr store."""
-    from datacube_viewer.gui import GeoZarrLoadDialog
+    from datacube_viewer.gui import DatacubeLoadDialog
     from tests.test_gui import pump
 
-    dialog = GeoZarrLoadDialog()
+    dialog = DatacubeLoadDialog()
     try:
         dialog._uri_combo.setCurrentText(plain_uri)
         dialog._on_connect()

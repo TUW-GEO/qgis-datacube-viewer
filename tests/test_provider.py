@@ -35,7 +35,7 @@ from datacube_viewer.core import (
 )
 from datacube_viewer.layeruri import ERROR_PROPERTY, PROVIDER_KEY, LayerUri
 from datacube_viewer.provider import (
-    GeoZarrRasterProvider,
+    DatacubeRasterProvider,
     clone_count,
     create_layer,
     is_registered,
@@ -441,7 +441,7 @@ def test_missing_store_yields_an_invalid_layer_not_an_exception(tmp_path) -> Non
 
 
 def test_provider_constructed_with_junk_is_invalid_but_alive() -> None:
-    provider = GeoZarrRasterProvider("this is not a uri")
+    provider = DatacubeRasterProvider("this is not a uri")
     assert not provider.isValid()
     assert provider.lastError()
     # Every virtual must still answer rather than abort the process.

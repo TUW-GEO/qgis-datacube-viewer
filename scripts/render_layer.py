@@ -1,4 +1,4 @@
-"""Render a GeoZarr layer through the real QGIS renderer, headlessly.
+"""Render a datacube layer through the real QGIS renderer, headlessly.
 
     pixi run python scripts/render_layer.py [URI] [--dataset utm32] [--zoom 1 0.1 0.01]
 

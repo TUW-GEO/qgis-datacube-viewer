@@ -25,7 +25,7 @@ from .environment import (
 )
 from .errors import (
     CrsResolutionError,
-    GeoZarrError,
+    DatacubeError,
     MetadataError,
     MissingDependencyError,
     NoDatasetsError,
@@ -76,9 +76,9 @@ __all__ = [
     "CrsBundle",
     "CrsInfo",
     "CrsResolutionError",
+    "DatacubeError",
     "DatasetInfo",
     "DatasetReader",
-    "GeoZarrError",
     "InstallCommand",
     "LevelInfo",
     "MetadataError",
