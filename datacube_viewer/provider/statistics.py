@@ -256,7 +256,7 @@ def slice_ranges(
     out: list[tuple[float, float] | None] = []
     for position in range(len(bands)):
         plane = result.data[position]
-        values = plane[result.mask] if result.mask.any() else plane.reshape(-1)
+        values = plane[result.mask]
         values = values[np.isfinite(values)]
         if values.size == 0:
             out.append(None)  # a wholly unwritten slice has no range to show
@@ -398,7 +398,7 @@ def _sample(
     """Valid pixels of one band at one slice, as a flat float64 array."""
     result = reader.read_overview((band,), max_size=sample, indices=dict(indices))
     plane = result.data[0]
-    values = plane[result.mask] if result.mask.any() else plane.reshape(-1)
+    values = plane[result.mask]
     return _finite(values.astype("float64", copy=False))
 
 

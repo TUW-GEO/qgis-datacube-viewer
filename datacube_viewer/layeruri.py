@@ -18,6 +18,7 @@ Two rules shape the design:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from urllib.parse import quote, unquote
@@ -86,6 +87,10 @@ class LayerUri:
     level_strategy: LevelStrategy = "auto"
     level_name: str | None = None
     crs_override: str | None = None
+    #: Stored values to treat as nodata, replacing the store's own ``_FillValue``.
+    #: ``None`` (key absent) follows the store, ``()`` (``nodata=``) masks nothing.
+    #: See :func:`.core.model.resolve_nodata`.
+    nodata: tuple[float, ...] | None = None
     #: Force a store kind instead of sniffing it ("icechunk" or "zarr").
     kind: str | None = None
 
@@ -126,6 +131,8 @@ class LayerUri:
             parts.append(f"level={_encode(self.level_name)}")
         if self.crs_override:
             parts.append(f"crs={_encode(self.crs_override)}")
+        if self.nodata is not None:
+            parts.append(f"nodata={_encode(encode_nodata(self.nodata))}")
         if self.kind:
             parts.append(f"kind={self.kind}")
         return "&".join(parts)
@@ -184,6 +191,28 @@ def _parse_indices(text: str) -> dict[str, int]:
                 f"Index for {name.strip()!r} must be an integer, got {value!r}."
             ) from exc
     return out
+
+
+def encode_nodata(values: tuple[float, ...]) -> str:
+    """Serialise nodata values as a comma list, whole numbers without a ``.0``."""
+    return ",".join(str(int(v)) if float(v).is_integer() else repr(float(v)) for v in values)
+
+
+def _parse_nodata(text: str) -> tuple[float, ...]:
+    out: list[float] = []
+    for chunk in text.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            value = float(chunk)
+        except ValueError as exc:
+            raise UriError(f"Nodata must be a number, got {chunk!r}.") from exc
+        if not math.isfinite(value):
+            # NaN needs no entry: non-finite pixels are already left out of statistics.
+            raise UriError(f"Nodata must be a finite number, got {chunk!r}.")
+        out.append(value)
+    return tuple(out)
 
 
 def encode_indices(indices: Mapping[str, int]) -> str:
@@ -256,5 +285,6 @@ def decode_uri(uri: str) -> LayerUri:
         level_strategy=strategy,  # type: ignore[arg-type]
         level_name=fields.get("level") or None,
         crs_override=fields.get("crs") or None,
+        nodata=_parse_nodata(fields["nodata"]) if "nodata" in fields else None,
         kind=(fields.get("kind") or None),
     )

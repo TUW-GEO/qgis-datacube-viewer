@@ -5,6 +5,8 @@ These need a ``QgsApplication``, which ``pytest-qgis`` starts for the session.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -206,6 +208,31 @@ def test_block_row_zero_is_north(layer) -> None:
     block = provider.block(1, layer.extent(), 100, 100)
     got = _block_to_array(block, 100, 100, np.uint8)
     np.testing.assert_array_equal(got, _pattern(100, 100, 101 + 3 * 17))
+
+
+def test_nodata_override_marks_matching_pixels_in_the_block(conv_uri) -> None:
+    expected = _pattern(100, 100, 101 + 3 * 17)
+    value = int(expected[0, 0])
+    masked = create_layer(replace(conv_uri, nodata=(float(value),)), "m")
+    provider = masked.dataProvider()
+    assert provider.sourceHasNoDataValue(1)
+    assert provider.sourceNoDataValue(1) == value
+
+    block = provider.block(1, masked.extent(), 100, 100)
+    flagged = np.array([block.isNoData(i) for i in range(100 * 100)]).reshape(100, 100)
+    np.testing.assert_array_equal(flagged, expected == value)
+
+
+def test_empty_nodata_override_switches_off_the_declared_value(store_uri) -> None:
+    declared = create_layer(LayerUri(store_uri=store_uri, dataset="plain", bands=("dn",)))
+    off = create_layer(LayerUri(store_uri=store_uri, dataset="plain", bands=("dn",), nodata=()))
+    assert declared.dataProvider().sourceNoDataValue(1) == -9999
+    assert not off.dataProvider().sourceHasNoDataValue(1)
+
+
+def test_nodata_override_survives_the_source_uri(conv_uri) -> None:
+    masked = create_layer(replace(conv_uri, nodata=(7.0,)), "m")
+    assert "nodata=7" in masked.dataProvider().dataSourceUri()
 
 
 def test_block_outside_the_extent_is_all_nodata(layer) -> None:

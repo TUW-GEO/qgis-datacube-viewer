@@ -68,6 +68,8 @@ class LayerView:
     level_name: str | None
     snapshot_id: str | None
     ref: RefSpec
+    #: The layer's nodata override (``LayerUri.nodata``); the reader applies it.
+    nodata: tuple[float, ...] | None = None
 
     def band_index(self, band_no: int) -> str:
         """Map a 1-based QGIS band number to a variable name."""
@@ -202,7 +204,7 @@ class LayerContext:
         self._handle = handle
         self._store = store
         self._dataset = dataset
-        self._reader = DatasetReader(handle, dataset, self._config)
+        self._reader = DatasetReader(handle, dataset, self._config, uri.nodata)
         self._bands = choose_bands(dataset, uri.bands)
         self._indices = default_indices(dataset, uri.indices)
         # Write back what was actually resolved, so encode() round-trips the real
@@ -236,6 +238,7 @@ class LayerContext:
                 level_name=self._uri.level_name,
                 snapshot_id=self._handle.snapshot_id,
                 ref=self._uri.ref,
+                nodata=self._uri.nodata,
             )
 
     # -- accessors --------------------------------------------------------

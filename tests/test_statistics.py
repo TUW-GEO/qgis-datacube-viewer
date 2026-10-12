@@ -66,6 +66,36 @@ def test_statistics_follow_the_slice(layer) -> None:
     )
 
 
+def test_nodata_override_leaves_the_value_out_of_statistics_and_stretch(
+    layer, fixture_info: FixtureInfo
+) -> None:
+    """The override reaches ``bandStatistics`` and ``fit_to_cube``, not just ``block``."""
+    def masked_layer(value: float):
+        made = create_layer(
+            LayerUri(
+                store_uri=fixture_info.path, dataset="conv", bands=("red",), nodata=(value,)
+            ),
+            "masked",
+        )
+        made.dataProvider().setIndices({"time": 1})
+        return made
+
+    layer.dataProvider().setIndices({"time": 1})
+    baseline = _stats(layer)
+    stats = _stats(masked_layer(baseline.minimumValue))
+    assert stats.minimumValue > baseline.minimumValue
+    assert stats.maximumValue == baseline.maximumValue
+
+    # The stretch also walks time=0, which is all zeros and so sets the cube minimum.
+    assert cube_ranges_for(layer)[0][0] == 0.0
+    assert cube_ranges_for(masked_layer(0.0))[0][0] > 0.0
+
+
+def cube_ranges_for(layer):
+    view = layer.dataProvider().context.view()
+    return cube_ranges(view.reader, view.bands, axes_for_bands(view.dataset, view.bands), view.indices)
+
+
 def test_a_constant_slice_is_reported_truthfully(layer) -> None:
     """conv time=0 is unwritten, but it reads back as real zeros, not as nodata.
 

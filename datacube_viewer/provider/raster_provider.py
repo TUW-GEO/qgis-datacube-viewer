@@ -44,6 +44,7 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QRect
 
 from ..core import BBox, DatacubeError, RefSpec, describe_crs
+from ..core.model import resolve_nodata
 from ..core.reader import ReadRequest
 from ..layeruri import PROVIDER_KEY, LayerUri, decode_uri
 from .context import LayerContext, LayerView
@@ -117,6 +118,18 @@ _clones: list[QgsRasterDataProvider] = []
 #: Doubling keeps the sweep amortised O(1) per clone; a fixed threshold would make
 #: it O(n) per clone once a lot of clones are genuinely live at once.
 _purge_at = 64
+
+
+def _fits(value: float, dtype: np.dtype) -> bool:
+    """Whether ``value`` is representable in ``dtype``.
+
+    Stamping a nodata value that is not (-9999 into uint8) would wrap it onto a
+    real pixel value, which QGIS would then hide everywhere.
+    """
+    if dtype.kind in "iu":
+        limits = np.iinfo(dtype)
+        return float(value).is_integer() and limits.min <= value <= limits.max
+    return True
 
 
 def _keep_alive(obj: QgsRasterDataProvider) -> None:
@@ -345,24 +358,24 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
         return _COLOR_INTERP.get(name, Qgis.RasterColorInterpretation.Undefined)
 
     # -- nodata -----------------------------------------------------------
+    def _nodata_values(self, view: LayerView, bandNo: int) -> tuple[float, ...]:
+        """The stored values masked for a band: the layer's override, else the store's."""
+        try:
+            declared = self._variable(view, bandNo).nodata
+        except (IndexError, KeyError):
+            declared = None
+        return resolve_nodata(declared, view.nodata)
+
     def sourceHasNoDataValue(self, bandNo: int) -> bool:
         view = self._view()
-        if view is None:
-            return False
-        try:
-            return self._variable(view, bandNo).nodata is not None
-        except (IndexError, KeyError):
-            return False
+        return view is not None and bool(self._nodata_values(view, bandNo))
 
     def sourceNoDataValue(self, bandNo: int) -> float:
+        # QGIS takes one value per band to stamp into invalid pixels. The reader's
+        # mask already covers every resolved value, so the first stands for them all.
         view = self._view()
-        if view is None:
-            return float("nan")
-        try:
-            value = self._variable(view, bandNo).nodata
-        except (IndexError, KeyError):
-            return float("nan")
-        return float("nan") if value is None else float(value)
+        values = self._nodata_values(view, bandNo) if view is not None else ()
+        return float(values[0]) if values else float("nan")
 
     def useSourceNoDataValue(self, bandNo: int) -> bool:
         return self.sourceHasNoDataValue(bandNo)
@@ -471,7 +484,7 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
         if data.dtype != emit_dtype:
             data = data.astype(emit_dtype)
 
-        has_nodata = not np.isnan(nodata)
+        has_nodata = not np.isnan(nodata) and _fits(nodata, emit_dtype)
         if has_nodata:
             # A real nodata value is the cheapest mask QGIS understands: stamp it
             # into the invalid pixels and let the block's nodata value do the work.

@@ -27,6 +27,31 @@ def test_round_trip_preserves_everything() -> None:
     assert decoded == original
 
 
+@pytest.mark.parametrize("nodata", [None, (), (-9999.0,), (0.0, -1.5, 255.0)])
+def test_nodata_round_trips(nodata) -> None:
+    decoded = decode_uri(LayerUri(store_uri="/data/store", nodata=nodata).encode())
+    assert decoded.nodata == nodata
+
+
+def test_absent_nodata_key_follows_the_store() -> None:
+    assert decode_uri("url=/data/store").nodata is None
+    assert "nodata" not in LayerUri(store_uri="/data/store").encode()
+
+
+def test_empty_nodata_key_means_mask_nothing() -> None:
+    assert decode_uri("url=/data/store&nodata=").nodata == ()
+
+
+def test_whole_number_nodata_is_written_without_a_decimal() -> None:
+    assert "nodata=-9999&" in LayerUri(store_uri="/s", nodata=(-9999.0,)).encode() + "&"
+
+
+@pytest.mark.parametrize("bad", ["abc", "nan", "inf", "1,x"])
+def test_bad_nodata_is_rejected(bad) -> None:
+    with pytest.raises(UriError, match="[Nn]odata"):
+        decode_uri(f"url=/data/store&nodata={bad}")
+
+
 def test_bare_path_is_accepted_as_shorthand() -> None:
     parsed = decode_uri("/data/store")
     assert parsed.store_uri == "/data/store"

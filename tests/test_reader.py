@@ -307,6 +307,62 @@ def test_declared_nodata_is_masked(handle, store) -> None:
     assert result.data.min() >= 0
 
 
+def _read_dn(handle, store, nodata):
+    plain = store.dataset("plain")
+    reader = DatasetReader(handle, plain, nodata=nodata)
+    return reader.read(
+        ReadRequest(bounds=plain.bbox, width=48, height=48, variables=("dn",), strategy="base")
+    )
+
+
+def test_nodata_override_masks_exactly_those_values(handle, store) -> None:
+    baseline = _read_dn(handle, store, None)
+    low, high = int(baseline.data.min()), int(baseline.data.max())
+
+    result = _read_dn(handle, store, (float(low), float(high)))
+
+    np.testing.assert_array_equal(result.mask, ~np.isin(baseline.data[0], (low, high)))
+    assert not result.mask.all()
+
+
+def test_nodata_override_replaces_the_declared_value(handle, store) -> None:
+    """``dn`` declares -9999; an override must not keep masking that as well."""
+    from datacube_viewer.core.model import resolve_nodata
+
+    assert resolve_nodata(-9999.0, None) == (-9999.0,)
+    assert resolve_nodata(-9999.0, (5.0,)) == (5.0,)
+    assert resolve_nodata(-9999.0, ()) == ()
+    assert resolve_nodata(None, None) == ()
+
+
+def test_empty_nodata_override_masks_nothing(handle, store) -> None:
+    assert _read_dn(handle, store, ()).mask.all()
+
+
+def test_nodata_outside_the_dtype_matches_nothing(handle, store) -> None:
+    """-9999 cast to uint8 wraps to 241; that must not hide real pixels."""
+    dataset = store.dataset("conv")
+    reader = DatasetReader(handle, dataset, nodata=(-9999.0, 0.5))
+    result = reader.read(
+        ReadRequest(
+            bounds=dataset.bbox,
+            width=100,
+            height=100,
+            variables=("red",),
+            indices=DATA_T,
+            resampling="nearest",
+            strategy="base",
+        )
+    )
+    assert result.mask.all()
+
+
+def test_reader_rebind_keeps_the_nodata_override(handle, store) -> None:
+    reader = DatasetReader(handle, store.dataset("plain"), nodata=(1.0,))
+    assert reader.rebind(handle).nodata == (1.0,)
+    assert reader.with_dataset(store.dataset("conv")).nodata == (1.0,)
+
+
 def test_multiple_variables_stack_in_request_order(conv, store) -> None:
     result = conv.read(
         ReadRequest(

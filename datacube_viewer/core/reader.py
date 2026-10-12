@@ -29,7 +29,7 @@ import numpy as np
 
 from .errors import ReadError
 from .geometry import Affine, BBox, Window, window_from_bounds
-from .model import DatasetInfo, LevelInfo, VariableInfo, select_level
+from .model import DatasetInfo, LevelInfo, VariableInfo, resolve_nodata, select_level
 from .store import StoreHandle
 
 Resampling = Literal["nearest", "average", "bilinear"]
@@ -165,10 +165,13 @@ class DatasetReader:
         handle: StoreHandle,
         dataset: DatasetInfo,
         config: ReaderConfig | None = None,
+        nodata: tuple[float, ...] | None = None,
     ):
         self.handle = handle
         self.dataset = dataset
         self.config = config or ReaderConfig()
+        #: Layer-level nodata override; see :func:`.model.resolve_nodata`.
+        self.nodata = nodata
         self._cache = _BlockCache(self.config.cache_bytes)
         self._arrays: dict[str, Any] = {}
         self._array_lock = threading.RLock()
@@ -352,8 +355,8 @@ class DatasetReader:
 
         mask = sampler.coverage.copy()
         for band_index, variable in enumerate(request.variables):
-            nodata = self.variable_info(variable, level).nodata
-            if nodata is not None:
+            declared = self.variable_info(variable, level).nodata
+            for nodata in resolve_nodata(declared, self.nodata):
                 mask &= ~_isclose_to(data[band_index], nodata)
 
         return ReadResult(
@@ -393,11 +396,11 @@ class DatasetReader:
         )
 
     def with_dataset(self, dataset: DatasetInfo) -> DatasetReader:
-        return DatasetReader(self.handle, dataset, self.config)
+        return DatasetReader(self.handle, dataset, self.config, self.nodata)
 
     def rebind(self, handle: StoreHandle, dataset: DatasetInfo | None = None) -> DatasetReader:
         """A reader on a different snapshot — used for time travel."""
-        return DatasetReader(handle, dataset or self.dataset, self.config)
+        return DatasetReader(handle, dataset or self.dataset, self.config, self.nodata)
 
 
 def _spatial_axes(info: VariableInfo) -> tuple[int, int] | None:
@@ -407,7 +410,14 @@ def _spatial_axes(info: VariableInfo) -> tuple[int, int] | None:
 
 
 def _isclose_to(data: np.ndarray, value: float) -> np.ndarray:
-    if data.dtype.kind in "iub":
+    if data.dtype.kind in "iu":
+        # A value the type cannot hold matches nothing; casting it would wrap
+        # (-9999 into uint8 is 241) and mask real pixels.
+        limits = np.iinfo(data.dtype)
+        if not np.isfinite(value) or value != int(value) or not limits.min <= value <= limits.max:
+            return np.zeros(data.shape, dtype=bool)
+        return data == np.asarray(value).astype(data.dtype)
+    if data.dtype.kind == "b":
         return data == np.asarray(value).astype(data.dtype)
     return np.isclose(data, value, rtol=0.0, atol=1e-9, equal_nan=True)
 

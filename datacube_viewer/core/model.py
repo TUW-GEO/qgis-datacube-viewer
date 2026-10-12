@@ -184,6 +184,23 @@ class VariableInfo:
 
 
 # --------------------------------------------------------------------------- axes
+def resolve_nodata(
+    declared: float | None, override: tuple[float, ...] | None
+) -> tuple[float, ...]:
+    """The stored values to treat as nodata for one variable.
+
+    ``override`` is the layer's own setting (``LayerUri.nodata``) and *replaces*
+    what the store declares, rather than adding to it: ``None`` defers to the
+    store's attribute (``VariableInfo.nodata``), values mask exactly those, and
+    ``()`` masks nothing, which is how a user switches off a declared value they
+    do not trust. Values are in stored units, i.e. before ``scale_factor`` and
+    ``add_offset``, like ``_FillValue`` itself.
+    """
+    if override is not None:
+        return override
+    return () if declared is None else (declared,)
+
+
 @dataclass(frozen=True)
 class AxisInfo:
     """A non-spatial dimension (time, band, depth, …) that must be reduced to one index."""
