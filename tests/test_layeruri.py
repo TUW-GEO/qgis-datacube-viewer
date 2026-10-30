@@ -48,7 +48,7 @@ def test_whole_number_nodata_is_written_without_a_decimal() -> None:
 
 @pytest.mark.parametrize("bad", ["abc", "nan", "inf", "1,x"])
 def test_bad_nodata_is_rejected(bad) -> None:
-    with pytest.raises(UriError, match="[Nn]odata"):
+    with pytest.raises(UriError, match=r"[Nn]odata"):
         decode_uri(f"url=/data/store&nodata={bad}")
 
 

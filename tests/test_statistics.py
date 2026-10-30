@@ -70,11 +70,10 @@ def test_nodata_override_leaves_the_value_out_of_statistics_and_stretch(
     layer, fixture_info: FixtureInfo
 ) -> None:
     """The override reaches ``bandStatistics`` and ``fit_to_cube``, not just ``block``."""
+
     def masked_layer(value: float):
         made = create_layer(
-            LayerUri(
-                store_uri=fixture_info.path, dataset="conv", bands=("red",), nodata=(value,)
-            ),
+            LayerUri(store_uri=fixture_info.path, dataset="conv", bands=("red",), nodata=(value,)),
             "masked",
         )
         made.dataProvider().setIndices({"time": 1})
@@ -93,7 +92,9 @@ def test_nodata_override_leaves_the_value_out_of_statistics_and_stretch(
 
 def cube_ranges_for(layer):
     view = layer.dataProvider().context.view()
-    return cube_ranges(view.reader, view.bands, axes_for_bands(view.dataset, view.bands), view.indices)
+    return cube_ranges(
+        view.reader, view.bands, axes_for_bands(view.dataset, view.bands), view.indices
+    )
 
 
 def test_a_constant_slice_is_reported_truthfully(layer) -> None:

@@ -184,9 +184,7 @@ class VariableInfo:
 
 
 # --------------------------------------------------------------------------- axes
-def resolve_nodata(
-    declared: float | None, override: tuple[float, ...] | None
-) -> tuple[float, ...]:
+def resolve_nodata(declared: float | None, override: tuple[float, ...] | None) -> tuple[float, ...]:
     """The stored values to treat as nodata for one variable.
 
     ``override`` is the layer's own setting (``LayerUri.nodata``) and *replaces*
