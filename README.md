@@ -4,6 +4,15 @@ Loads GeoZarr datacubes into QGIS as raster layers with multiscale
 pyramids. It works with [Icechunk](https://icechunk.io) repositories, regular Zarr
 v3 stores and NetCDF files.
 
+![Dragging the time slider redraws the layer](docs/img/time-slider.gif)
+
+Sliders in a dock panel step through the non-spatial axes of the cube (time, sensor,
+...) and redraw the layer as you drag.
+
+| Pick a store, a version and the variables | Scrub through the axes |
+| --- | --- |
+| ![The Add Datacube Layer dialog, with a preview](docs/img/load-dialog.png) | ![The axis sliders for the sensor and time axes](docs/img/sliders.png) |
+
 ## Supported formats
 
 | Format | Where | Versions (branch / tag / snapshot) | Needs |
