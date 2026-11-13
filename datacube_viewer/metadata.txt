@@ -62,35 +62,17 @@ server=False
 ; supportsQt6=True
 
 hasProcessingProvider=no
-changelog=0.2.1
-    - Only http:// and https:// URLs are opened when reading a store over HTTP.
-      urllib will also open file:, ftp: and data:, and a store URL comes straight
-      from the Add GeoZarr Layer dialog, so a pasted file:/// URL could previously
-      turn a remote read into a local file read. Redirects are re-checked per hop,
-      because urllib's own redirect handler permits ftp:.
-    - The resampler's index-grid invariant raises instead of asserting: asserts are
-      stripped under python -O, which some QGIS packagings set, and the failure then
-      surfaced as an opaque numpy TypeError.
-    - CRS-description and ref-listing failures are logged at debug level rather than
-      silently swallowed, so a store that resolves its CRS wrongly leaves a trail.
-    - InstallCommand.shell is now InstallCommand.terminal. No behaviour change: the
-      field holds a terminal's name for display, and this module never spawns a
-      process, but security scanners read any shell= keyword as subprocess use.
-  0.2.0
-    - Post-install setup is now explained in the plugin: a message-bar notice with a
-      "Show me how" button, and Raster > GeoZarr Viewer > Install Python
-      Dependencies..., both opening instructions built for the detected platform
-      (OSGeo4W Shell on Windows, the bundled python3 inside QGIS.app on macOS,
-      conda-forge under conda/pixi, --break-system-packages where PEP 668 applies).
-      The command names the interpreter it targets, so a wrong guess is visible.
-    - metadata: EODC is the author, with the repository and tracker links that
-      plugins.qgis.org requires for upload.
-  0.1.1
-    - Fix a hard crash (access violation in proj_create) when opening the Add
-      GeoZarr Layer dialog: PROJ is now only ever entered from the main thread.
-    - icechunk is optional; plain Zarr v3 stores load without it.
-    - qgisMinimumVersion raised to 3.40, which is the first release shipping the
-      Python 3.12 that zarr 3 and icechunk require.
-  0.1.0
-    - First release: geozarr raster provider, multiscale pyramid selection,
-      Icechunk branch/tag/snapshot loading and in-place time travel.
+changelog=0.2.0
+    - Install now: Raster > Datacube Viewer > Install Python Dependencies...
+      installs zarr, netCDF4, icechunk, fsspec and s3fs itself, without
+      changing any package QGIS already uses (conda in a conda environment).
+    - The slider sidebar opens on the new layer when layers are added from the
+      dialog. Turn this off under Settings > Options > Datacube Viewer.
+    - Icechunk branches, tags and snapshots in the slider sidebar, kept in step
+      with Time Travel.
+    - Add / Apply / Close in the Add Datacube Layer dialog: Add closes it,
+      Apply keeps it open.
+    - A layer can override the store's nodata value through its layer URI.
+    - New toolbar icons.
+    - Fix: the axis sliders no longer swap order between loads of the same store.
+  Earlier versions: see the GitHub releases.
