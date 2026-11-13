@@ -32,6 +32,7 @@ from qgis.PyQt.QtWidgets import (
 
 from ..core import RefSpec, RepositoryRefs, SnapshotInfo, list_refs
 from ..provider import DatacubeRasterProvider
+from .version_panel import switch_ref
 from .worker import StoreWorker
 
 
@@ -178,17 +179,12 @@ class SnapshotDialog(QDialog):
     def _apply(self, ref: RefSpec) -> None:
         """Switch the layer's snapshot and repaint.
 
-        ``setRef`` returns False both when nothing changed and when the switch
-        failed, so the error text is what distinguishes them.
+        Through :func:`switch_ref`, the same path the slider dock uses, so the dock's
+        axis and version sliders follow a switch made here.
         """
-        changed = self._provider.setRef(ref)
-        error = self._provider.lastError()
+        _, error = switch_ref(self._layer, ref)
         if error:
             self._status.setText(f"Could not switch: {error}")
-            return
-        if changed:
-            self._layer.dataProvider().reloadData()
-            self._layer.triggerRepaint()
 
     def _describe(self, row: int) -> None:
         if not 0 <= row < len(self._timeline):

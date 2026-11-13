@@ -42,7 +42,7 @@ from collections.abc import Mapping, Sequence
 
 from qgis.core import QgsMapLayer, QgsRasterLayer, QgsSettings
 from qgis.gui import QgsDockWidget
-from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtCore import Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -73,6 +73,7 @@ from ..provider.statistics import (
     slice_ranges,
     stretch_is_effective,
 )
+from .version_panel import REF_SWITCHES, VersionPanel
 
 #: Quiet period before a drag turns into a read. Long enough that a sweep across an
 #: axis is one read, short enough to feel like a direct response to the handle.
@@ -606,26 +607,51 @@ class AxisScrubber(QWidget):
 
 
 class DatacubeDock(QgsDockWidget):
-    """The dock: an :class:`AxisScrubber` that follows the selected layer.
+    """The dock: an :class:`AxisScrubber` that follows the selected layer, and, for
+    an Icechunk layer, a :class:`~datacube_viewer.gui.version_panel.VersionPanel`.
 
     ``QgsDockWidget`` rather than a plain ``QDockWidget`` so QGIS treats it as one
     of its own panels — listed in View → Panels, and with its geometry restored
     across sessions from :data:`DOCK_OBJECT_NAME`.
     """
 
+    #: "Full history…" was clicked: open the Time Travel dialog for the layer.
+    historyRequested = pyqtSignal()
+
     def __init__(self, iface, parent: QWidget | None = None):
         super().__init__(PANEL_TITLE, parent)
         self.setObjectName(DOCK_OBJECT_NAME)
         self._iface = iface
 
-        self._scrubber = AxisScrubber(self)
-        self.setWidget(self._scrubber)
+        body = QWidget(self)
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._scrubber = AxisScrubber(body)
+        self._versions = VersionPanel(body)
+        self._versions.historyRequested.connect(self.historyRequested)
+        layout.addWidget(self._scrubber)
+        layout.addWidget(self._versions)
+        layout.addStretch(1)
+        self.setWidget(body)
+
+        # A snapshot switch, from the version group or from the Time Travel
+        # dialog, can change the axes; the sliders are rebuilt either way.
+        self._ref_switches = REF_SWITCHES
+        self._ref_switches.switched.connect(self._on_ref_switched)
 
         iface.currentLayerChanged.connect(self._on_current_layer_changed)
         self._on_current_layer_changed(iface.activeLayer())
 
     def scrubber(self) -> AxisScrubber:
         return self._scrubber
+
+    def versions(self) -> VersionPanel:
+        """The Icechunk version group, hidden for a layer without versions."""
+        return self._versions
+
+    def _on_ref_switched(self, layer) -> None:
+        if layer is not None and layer is self._scrubber.layer():
+            self._scrubber.set_layer(layer)
 
     def reveal(self, layers: Sequence[QgsMapLayer]) -> bool:
         """Show the dock on the first of ``layers`` that has an axis to scrub.
@@ -654,6 +680,7 @@ class DatacubeDock(QgsDockWidget):
         # that was never released would be silently dropped by the switch.
         self._scrubber.flush()
         self._scrubber.set_layer(layer)
+        self._versions.set_layer(layer)
 
     def teardown(self) -> None:
         """Drop the signal connection. Called from the plugin's ``unload``.
@@ -663,6 +690,9 @@ class DatacubeDock(QgsDockWidget):
         emission — where there is no traceback to find it by.
         """
         self._scrubber.flush()
+        self._versions.teardown()
         # never connected, or already torn down
         with contextlib.suppress(TypeError, RuntimeError):
             self._iface.currentLayerChanged.disconnect(self._on_current_layer_changed)
+        with contextlib.suppress(TypeError, RuntimeError):
+            self._ref_switches.switched.disconnect(self._on_ref_switched)

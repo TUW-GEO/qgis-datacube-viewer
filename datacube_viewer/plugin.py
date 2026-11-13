@@ -198,6 +198,7 @@ class DatacubeViewerPlugin:
         from .gui import DatacubeDock
 
         self._cube_dock = DatacubeDock(self.iface, self.iface.mainWindow())
+        self._cube_dock.historyRequested.connect(self.show_snapshot_dialog)
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self._cube_dock)
         self._cube_dock.hide()
 

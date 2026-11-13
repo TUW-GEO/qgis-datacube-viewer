@@ -24,10 +24,12 @@ from .load_dialog import DatacubeLoadDialog
 from .options import DatacubeOptionsFactory, DatacubeOptionsPage
 from .preview import PreviewResult, render_thumbnail, to_image
 from .snapshot_dialog import SnapshotDialog
+from .version_panel import REF_SWITCHES, VersionPanel, is_versioned_layer, switch_ref
 from .worker import StoreWorker
 
 __all__ = [
     "AUTO_OPEN_KEY",
+    "REF_SWITCHES",
     "AxisScrubber",
     "DatacubeDock",
     "DatacubeLoadDialog",
@@ -37,16 +39,19 @@ __all__ = [
     "PreviewResult",
     "SnapshotDialog",
     "StoreWorker",
+    "VersionPanel",
     "apply_stretch",
     "axes_for_bands",
     "axis_chunk_length",
     "has_auto_limits",
     "has_axes_to_scrub",
     "is_datacube_layer",
+    "is_versioned_layer",
     "opens_automatically",
     "render_thumbnail",
     "set_opens_automatically",
     "should_restretch",
     "slice_ranges",
+    "switch_ref",
     "to_image",
 ]
