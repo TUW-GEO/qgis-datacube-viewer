@@ -277,6 +277,35 @@ def test_time_axis_is_decoded_to_dates(store) -> None:
     assert time.labels == ("2024-01-01", "2025-01-01")
 
 
+@pytest.mark.parametrize(
+    "listed", [("temperature", "soil_moisture"), ("soil_moisture", "temperature")]
+)
+def test_axis_order_does_not_depend_on_listing_order(listed) -> None:
+    """Icechunk lists members in hash order; the sliders must not swap between loads."""
+    from types import SimpleNamespace
+
+    from datacube_viewer.core import VariableInfo
+    from datacube_viewer.core.inspect import _axes_for
+
+    def var(name: str, dims: tuple[str, ...]) -> VariableInfo:
+        shape = {"sensor": 3, "time": 12, "y": 8, "x": 8}
+        return VariableInfo(
+            name=name,
+            path=name,
+            dtype="float32",
+            shape=tuple(shape[d] for d in dims),
+            dims=dims,
+            chunks=tuple(shape[d] for d in dims),
+        )
+
+    every = {
+        "temperature": var("temperature", ("time", "y", "x")),
+        "soil_moisture": var("soil_moisture", ("sensor", "time", "y", "x")),
+    }
+    axes = _axes_for(SimpleNamespace(coords={}), {name: every[name] for name in listed})
+    assert [axis.name for axis in axes] == ["sensor", "time"]
+
+
 def test_datasets_without_extra_dimensions_have_no_axes(store) -> None:
     assert store.dataset("ngff").axes == ()
 

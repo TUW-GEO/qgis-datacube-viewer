@@ -536,10 +536,17 @@ def _json_safe(value: Any) -> Any:
 
 # ------------------------------------------------------------------ axis discovery
 def _axes_for(scan: _LevelScan, variables: Mapping[str, VariableInfo]) -> tuple[AxisInfo, ...]:
-    """Non-spatial dimensions shared by the data variables, with decoded labels."""
+    """Non-spatial dimensions shared by the data variables, with decoded labels.
+
+    Ordered as in the variable with the most dimensions, then by name, rather than
+    by whichever variable the store lists first. Icechunk lists group members in
+    hash order and a local directory in filesystem order, so "first listed" made a
+    ``(time, y, x)`` variable decide the order on one load and a
+    ``(sensor, time, y, x)`` one on the next, and the sliders swapped places.
+    """
     order: list[str] = []
     sizes: dict[str, int] = {}
-    for var in variables.values():
+    for var in sorted(variables.values(), key=lambda v: (-len(v.dims), v.name)):
         axes = _spatial_axes(var.dims, var.shape)
         spatial = set(axes) if axes else set()
         for i, dim in enumerate(var.dims):
