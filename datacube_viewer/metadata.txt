@@ -37,9 +37,13 @@ about=Load GeoZarr datacubes, plain Zarr stores, NetCDF files and Icechunk repos
     for Zarr stores and/or "netCDF4" for NetCDF files, and QGIS's Plugin Manager does
     not install Python packages. After installing, open Raster > Datacube Viewer >
     Install Python Dependencies... - it detects your operating system and QGIS
-    build and shows the exact command to run, where to run it, and the interpreter it
-    targets. "icechunk" is optional and only needed for Icechunk repositories. zarr
-    and icechunk require Python 3.12 or newer, which means QGIS 3.40 or newer.
+    build, shows the exact command to run, where to run it, and the interpreter it
+    targets, and on Windows, macOS and Linux can run it for you with "Install now".
+    That installs with pip --user and pins every package QGIS's Python already has,
+    so it never upgrades or replaces one of them. "icechunk" is optional and only
+    needed for Icechunk repositories. zarr and icechunk require Python 3.11 or newer.
+    On Linux, QGIS uses the system Python, which can be older (Python 3.10 on Ubuntu
+    22.04); the README describes using QGIS from conda-forge instead.
     .
     Originally developed by EODC (https://eodc.eu) as "GeoZarr Viewer". MIT licensed.
     This is a renamed fork carrying local changes; it is not the EODC release.

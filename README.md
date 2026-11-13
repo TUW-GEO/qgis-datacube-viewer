@@ -70,17 +70,40 @@ formats listed above:
 | `netCDF4` | NetCDF files. |
 | `fsspec` + `s3fs` | Plain Zarr on `s3://`, `gs://` and `az://`. `http(s)://` needs neither — the plugin reads it directly. For `gs://` use `gcsfs` and for `az://` use `adlfs` in place of `s3fs`. |
 
-The plugin detects your environment and shows the command with your packages already
-filled in: **Raster → Datacube Viewer → Install Python Dependencies…**. For reference:
+The easiest way is **Raster → Datacube Viewer → Install Python Dependencies…**. It
+detects your environment, shows the command with your packages filled in, and on
+Windows, macOS and Linux (system QGIS) its **Install now** button runs that command for
+you. Restart QGIS afterwards. Install now never changes what QGIS's Python already has:
+
+- It installs with `pip install --user`, into your user site-packages, never into
+  QGIS's or the system's own.
+- A constraints file pins every package QGIS's Python already has. pip can add
+  packages, but not upgrade or downgrade one QGIS depends on (numpy in particular: zarr
+  3.2 and newer want numpy 2, which would break GDAL's Python bindings built against
+  numpy 1). It picks older versions of the new packages instead, and if none fit, it
+  installs nothing and says so.
+- Wheels only, so nothing gets compiled.
+- Before pip runs, the interpreter has to confirm it is the one QGIS runs.
+- Packages that need a newer Python than your QGIS has are not offered (see
+  [below](#when-qgiss-python-is-too-old-qgis-from-conda-forge)).
+- If you ask for something that is already installed in an older version (zarr 2 from
+  your distribution, say), it asks first, because the new copy then takes precedence for
+  every program using that Python.
+
+In a conda environment and in Flatpak QGIS the dialog only shows the command. For
+reference, the commands without the constraints file:
 
 | | Where to run it | Command |
 | --- | --- | --- |
-| **Windows** | **OSGeo4W Shell** (Start menu → the QGIS folder). *Not* `cmd` or PowerShell — they have a different Python on `PATH`. | `python -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
+| **Windows** | **OSGeo4W Shell** (Start menu → the QGIS folder). *Not* `cmd` or PowerShell: they have a different Python on `PATH`. | `python -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
 | **macOS** | **Terminal** (Applications → Utilities) | `/Applications/QGIS.app/Contents/MacOS/bin/python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
-| **Linux** (system QGIS) | any terminal | `python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
-| **conda / pixi** | a terminal with the env activated | `conda install -c conda-forge "zarr>=3" netcdf4 fsspec s3fs` then `python -m pip install icechunk` |
+| **Linux** (system QGIS) | any terminal | `/usr/bin/python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
+| **conda / pixi** | a terminal with the env activated | `conda install -c conda-forge "zarr>=3" netcdf4 icechunk fsspec s3fs` |
+| **Flatpak** | any terminal | `flatpak run --devel --command=pip3 org.qgis.qgis install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
 
-Drop what you do not need — each package adds one kind of store; you need at least one of `zarr` or `netCDF4`.
+Without the constraints file pip may upgrade numpy and other packages QGIS uses, so
+prefer the dialog's command, which adds it. Drop what you do not need: each package
+adds one kind of store, and you need at least one of `zarr` or `netCDF4`.
 
 Then **restart QGIS** — packages are imported once per session, so re-enabling the
 plugin is not enough. Confirm in the Python Console with
@@ -95,11 +118,39 @@ Notes that catch people out:
 
 - **A bare `python3` on macOS is the wrong Python.** QGIS.app bundles its own; the
   absolute path is required. Use `QGIS-LTR.app` for the LTR build.
-- **Debian, Ubuntu and Fedora refuse the plain command** (PEP 668:
-  `error: externally-managed-environment`). Add `--break-system-packages` — it only
-  affects your own `~/.local` — or install QGIS from conda-forge instead.
-- **Flatpak QGIS is sandboxed** and has no supported way to add Python packages. Use a
-  distribution package or conda-forge.
+- **A bare `python3` on Linux can be the wrong Python too**, for example when conda's
+  base environment is active. The system QGIS uses `/usr/bin/python3`.
+- **Debian 12, Ubuntu 23.04 and newer, and Fedora refuse the plain command** (PEP 668:
+  `error: externally-managed-environment`). The dialog adds
+  `--break-system-packages` for you. With `--user` that writes only to your own
+  `~/.local`, but whatever is there takes precedence over the system's packages for
+  every program using that Python, which is why the dialog's command pins them.
+- **Flatpak QGIS is sandboxed**, so the plugin cannot install into it from inside QGIS.
+  The command in the table above is the one
+  [Flathub documents](https://github.com/flathub/org.qgis.qgis); the packages live inside
+  the sandbox and are lost when the Flatpak is reset.
+
+### When QGIS's Python is too old: QGIS from conda-forge
+
+This is the recommended route when the Python inside your QGIS cannot take the packages
+above, for example the system QGIS on Ubuntu 22.04 or Linux Mint 21, which runs
+Python 3.10. pip then answers `No matching distribution found for zarr>=3`, and no
+install command can fix that, because QGIS is built against one Python version.
+Install a second QGIS from conda-forge instead, with everything the plugin needs:
+
+```bash
+conda create -n qgis -c conda-forge "qgis=3.44" "zarr>=3" icechunk netcdf4 fsspec s3fs
+conda activate qgis
+qgis
+```
+
+- `qgis=3.44` keeps it on QGIS 3. Unpinned, conda-forge installs QGIS 4, which the
+  plugin is not yet marked compatible with.
+- The system QGIS stays as it is. Both use the same QGIS profile, so plugins installed
+  in one show up in the other.
+- If it dies at startup with `QGIS died on signal 11`, a font cache that another conda
+  environment left in `~/.cache/fontconfig` can be the cause. Run `fc-cache -f` once
+  with the environment activated, then start `qgis` again.
 
 ## Using it
 

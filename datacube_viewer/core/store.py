@@ -25,6 +25,8 @@ from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlsplit
 
+from .. import PLUGIN_NAME
+from .environment import README_CONDA_FORGE_URL, python_too_old
 from .errors import MissingDependencyError, RefNotFoundError, StoreOpenError
 from .model import RefSpec, RepositoryRefs, SnapshotInfo
 from .nodes import GroupNode, lookup
@@ -55,17 +57,34 @@ _cache_lock = threading.RLock()
 _handle_cache: OrderedDict[tuple[str, str, str], StoreHandle] = OrderedDict()
 
 
+#: Where to send someone who is missing a package. Not a pip command: a bare
+#: ``python3 -m pip`` is the wrong interpreter often enough (the Windows shell, the
+#: macOS bundle, an active conda base) that the dialog, which finds the right one,
+#: is the only advice worth giving.
+_INSTALL_HINT = (
+    f"In QGIS: Raster → {PLUGIN_NAME} → Install Python Dependencies…, then restart "
+    "QGIS. Outside QGIS: pip install 'qgis-datacube-viewer[{extra}]'."
+)
+
+
+def _install_hint(package: str, extra: str) -> str:
+    """How to get ``package``, or why this Python cannot have it at all."""
+    too_old = python_too_old(package)
+    if too_old:
+        return (
+            f"{package} {too_old}, and no install can change the Python inside QGIS. "
+            f"The README describes using QGIS from conda-forge instead: {README_CONDA_FORGE_URL}"
+        )
+    return _INSTALL_HINT.format(extra=extra)
+
+
 def _require_icechunk():
     try:
         import icechunk
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise MissingDependencyError(
             "The 'icechunk' package is not available to QGIS's Python interpreter.",
-            hint=(
-                "Install it into the QGIS environment, e.g. via the OSGeo4W shell or\n"
-                "    python3 -m pip install --user icechunk zarr\n"
-                "then restart QGIS."
-            ),
+            hint=_install_hint("icechunk", "icechunk"),
         ) from exc
     return icechunk
 
@@ -76,12 +95,12 @@ def _require_zarr():
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise MissingDependencyError(
             "The 'zarr' package is not available to QGIS's Python interpreter.",
-            hint="Install with: python3 -m pip install --user 'zarr>=3' icechunk",
+            hint=_install_hint("zarr>=3", "zarr"),
         ) from exc
     if int(zarr.__version__.split(".")[0]) < 3:
         raise MissingDependencyError(
             f"zarr {zarr.__version__} is too old; this plugin needs zarr 3 or newer.",
-            hint="Upgrade with: python3 -m pip install --user -U 'zarr>=3'",
+            hint=_install_hint("zarr>=3", "zarr"),
         )
     return zarr
 

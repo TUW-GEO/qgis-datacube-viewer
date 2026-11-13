@@ -9,13 +9,16 @@ as arguments, and these tests fake all three.
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 import tomllib
 
+from datacube_viewer.core import environment as env
 from datacube_viewer.core.environment import (
     ALL_PACKAGES,
     CONDA,
@@ -87,13 +90,37 @@ def test_a_real_python_executable_is_trusted():
     assert str(qgis_python(LINUX, sys.prefix, sys.executable)) == sys.executable
 
 
+def test_a_python_from_path_outside_the_prefix_is_not_trusted(tmp_path):
+    """The regression: QGIS started from a shell with conda's base environment active.
+
+    Embedded Python fills in sys.executable by searching PATH, so inside the system
+    QGIS (prefix /usr) it named ~/miniconda3/bin/python3, and the install command
+    targeted a Python QGIS never imports from.
+    """
+    prefix = tmp_path / "usr"
+    (prefix / "bin").mkdir(parents=True)
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    (prefix / "bin" / version).write_text("")
+    conda_python = tmp_path / "miniconda3" / "bin" / "python3"
+    found = qgis_python(LINUX, str(prefix), str(conda_python))
+    assert found == prefix / "bin" / version
+
+
+def test_no_interpreter_rather_than_a_wrong_one(tmp_path):
+    """Nothing in the prefix: say so, never fall back to the stray python's directory."""
+    conda_bin = tmp_path / "miniconda3" / "bin"
+    conda_bin.mkdir(parents=True)
+    (conda_bin / "python3").write_text("")
+    assert qgis_python(LINUX, str(tmp_path / "usr"), str(conda_bin / "python3")) is None
+
+
 # -------------------------------------------------------------------- commands
 def test_windows_sends_the_user_to_the_osgeo4w_shell(tmp_path):
     (tmp_path / "python.exe").write_text("")
     cmd = install_command(("zarr>=3", "icechunk"), WINDOWS, str(tmp_path), "qgis-bin.exe")
     assert cmd.terminal == "OSGeo4W Shell"
     assert "PowerShell" in cmd.terminal_hint, "the wrong-shell trap must be called out"
-    assert cmd.command == 'python -m pip install --user "zarr>=3" icechunk'
+    assert cmd.command == 'python -m pip install --user --only-binary=:all: "zarr>=3" icechunk'
 
 
 def test_macos_command_uses_the_absolute_bundled_python(tmp_path):
@@ -128,15 +155,23 @@ def test_unmanaged_linux_stays_on_plain_user(tmp_path):
 def test_conda_prefers_the_package_manager(tmp_path):
     (tmp_path / "conda-meta").mkdir()
     cmd = install_command(("zarr>=3", "icechunk"), CONDA, str(tmp_path), sys.executable)
-    assert "conda install -c conda-forge" in cmd.command
-    # icechunk is not on conda-forge, which is why pixi.toml has it under pypi-deps.
-    assert "pip install icechunk" in cmd.command
+    assert cmd.command == 'conda install -c conda-forge "zarr>=3" "icechunk"'
+    # pip inside a conda environment can replace conda's numpy behind its back.
+    assert "pip" not in cmd.command
 
 
 def test_flatpak_is_honest_about_the_sandbox(tmp_path):
     cmd = install_command(("zarr>=3",), FLATPAK, str(tmp_path), sys.executable)
     assert "sandbox" in cmd.terminal_hint.lower()
-    assert any("conda-forge" in note for note in cmd.notes), "needs a route that works"
+    assert "flatpak run --devel --command=pip3 org.qgis.qgis install --user" in cmd.command
+    assert any(env.README_CONDA_FORGE_URL in note for note in cmd.notes), "needs a way out"
+
+
+def test_the_conda_forge_route_is_a_link_not_a_command(tmp_path):
+    """The second-QGIS command lives in the README; notes only point there."""
+    for flavour in (CONDA, WINDOWS, MACOS, FLATPAK, LINUX):
+        cmd = install_command(("zarr>=3",), flavour, str(tmp_path), sys.executable, True)
+        assert "conda create" not in cmd.command + " ".join(cmd.notes), flavour
 
 
 def test_only_the_missing_packages_are_asked_for(tmp_path):
@@ -231,3 +266,128 @@ def test_extra_installs_what_the_dialog_asks_for(label, packages):
 
 def test_all_extra_is_everything_the_dialog_offers():
     assert _extras()["all"] == {_name(p) for p in ALL_PACKAGES}
+
+
+# ------------------------------------------------- never touching what is there
+#: A stand-in for what the Python inside QGIS has installed: what pip_constraints and
+#: shadowed_packages see, as installed_distributions() reports it.
+INSTALLED = {
+    "numpy": ("numpy", "1.26.4", "/usr/lib/python3/dist-packages"),
+    "zarr": ("zarr", "2.10.3+ds", "/usr/lib/python3/dist-packages"),
+    "pyqt5": ("PyQt5", "5.15.10", "/usr/lib/python3/dist-packages"),
+    "odd": ("odd", "2:1.0-1ubuntu1", "/usr/lib/python3/dist-packages"),
+}
+
+
+def _pins(text: str) -> dict[str, str]:
+    lines = [line for line in text.splitlines() if line and not line.startswith("#")]
+    return {re.split("===?", line)[0]: line for line in lines}
+
+
+def test_everything_installed_is_pinned_except_what_is_asked_for():
+    """The guarantee: pip may add packages, never change one QGIS's Python has.
+
+    The case it exists for: zarr 3.2+ wants numpy 2, the Python in Ubuntu 24.04's QGIS
+    has numpy 1.26, and without the pin pip would put numpy 2 in front of it.
+    """
+    pins = _pins(env.pip_constraints(("zarr>=3", "icechunk"), INSTALLED))
+    assert pins["numpy"] == "numpy==1.26.4"
+    assert pins["PyQt5"] == "PyQt5==5.15.10"
+    assert "zarr" not in pins, "pinning what was asked for would make the install impossible"
+
+
+def test_versions_pip_cannot_parse_are_pinned_verbatim():
+    """A distribution-specific version must not make pip reject the whole file."""
+    assert _pins(env.pip_constraints((), INSTALLED))["odd"] == "odd===2:1.0-1ubuntu1"
+
+
+def test_the_running_interpreter_is_pinned_in_full():
+    text = env.pip_constraints(())
+    pinned = {env.requirement_name(name) for name in _pins(text)}
+    assert pinned == set(env.installed_distributions())
+    assert "pytest" in pinned
+
+
+def test_replacing_an_installed_package_is_reported():
+    """zarr 2 from apt is the one thing the install does put something in front of."""
+    shadowed = env.shadowed_packages(("zarr>=3", "netCDF4"), INSTALLED)
+    assert shadowed == [INSTALLED["zarr"]]
+
+
+def test_requirement_names_are_normalised():
+    assert env.requirement_name("zarr>=3") == "zarr"
+    assert env.requirement_name("netCDF4") == "netcdf4"
+    assert env.requirement_name("ruamel_yaml.clib[x]>=1") == "ruamel-yaml-clib"
+
+
+def test_pip_only_ever_installs_for_the_user_from_wheels(tmp_path):
+    cmd = install_command(
+        ("zarr>=3",), LINUX, sys.prefix, sys.executable, False, tmp_path / "pins.txt"
+    )
+    args = env.unattended_arguments(cmd)
+    assert args[:3] == ["-m", "pip", "install"]
+    assert "--user" in args
+    assert "--only-binary=:all:" in args
+    assert args[args.index("--constraint") + 1] == str(tmp_path / "pins.txt")
+    for dangerous in ("--upgrade", "-U", "--force-reinstall", "--ignore-installed", "--target"):
+        assert dangerous not in args
+    assert "--no-input" in args, "nobody can answer a prompt from pip run by the dialog"
+
+
+def test_the_command_shown_is_the_command_run(tmp_path):
+    """Install now must not do anything the copied command would not."""
+    pins = tmp_path / "with space" / "pins.txt"
+    cmd = install_command(("zarr>=3", "netCDF4"), LINUX, sys.prefix, sys.executable, True, pins)
+    words = [w.strip('"') for w in re.findall(r'"[^"]*"|\S+', cmd.command)]
+    assert words[1:] == list(cmd.arguments)
+    assert f'"{pins}"' in cmd.command, "a path with a space has to be quoted"
+
+
+@pytest.mark.parametrize(("flavour", "runs"), [(LINUX, True), (CONDA, False), (FLATPAK, False)])
+def test_only_pip_into_qgis_own_python_is_run_by_the_dialog(tmp_path, flavour, runs):
+    cmd = install_command(("zarr>=3",), flavour, sys.prefix, sys.executable, False)
+    blocker = env.auto_install_blocker(cmd)
+    if runs:
+        # The test interpreter may be a venv, whose user site is off: the one other
+        # reason that is allowed here.
+        assert blocker is None or "user site" in blocker
+    else:
+        assert blocker
+        assert not cmd.arguments
+
+
+def test_no_interpreter_means_no_install_now(tmp_path):
+    cmd = install_command(("zarr>=3",), LINUX, str(tmp_path), str(tmp_path / "qgis"), False)
+    assert cmd.interpreter is None
+    assert "could not be located" in env.auto_install_blocker(cmd)
+
+
+def test_the_probe_reports_what_the_running_interpreter_knows_about_itself():
+    """PROBE_SCRIPT, run by the interpreter, must say what interpreter_facts() says."""
+    result = subprocess.run(
+        [sys.executable, "-c", env.PROBE_SCRIPT], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == env.interpreter_facts()
+    assert env.probe_mismatches(env.interpreter_facts()) == []
+
+
+def test_a_different_python_is_caught_by_the_probe():
+    ours = env.interpreter_facts()
+    conda = dict(ours, version=[3, 12], user_site="/home/u/.local/lib/python3.12/site-packages")
+    problems = env.probe_mismatches(conda, dict(ours, version=[3, 10]))
+    assert any("QGIS runs Python 3.10" in p for p in problems)
+    assert any("would install into" in p for p in problems)
+
+
+# -------------------------------------------------------- Python too old
+def test_zarr_and_what_needs_it_have_a_python_floor():
+    for package in ("zarr>=3", "icechunk", "fsspec", "s3fs"):
+        assert env.python_too_old(package, (3, 10)), package
+        assert env.python_too_old(package, (3, 11)) is None, package
+    assert env.python_too_old("netCDF4", (3, 10)) is None, "NetCDF still installs on 3.10"
+
+
+def test_the_floor_names_both_versions():
+    reason = env.python_too_old("zarr>=3", (3, 10))
+    assert "3.11" in reason and "3.10" in reason
