@@ -76,6 +76,7 @@ class FakeIface(QObject):
         self.raster_menu: list[tuple[str, object]] = []
         self.toolbars: list[QToolBar] = []
         self.docks: list[object] = []
+        self.options_factories: list[object] = []
         self.active = None
 
     def mainWindow(self):
@@ -101,6 +102,22 @@ class FakeIface(QObject):
 
     def activeLayer(self):
         return self.active
+
+    def registerOptionsWidgetFactory(self, factory):
+        self.options_factories.append(factory)
+
+    def unregisterOptionsWidgetFactory(self, factory):
+        if factory in self.options_factories:
+            self.options_factories.remove(factory)
+
+    def setActiveLayer(self, layer):
+        # As in QGIS, where the dock hears about the new selection through
+        # currentLayerChanged and not by asking. Emitting only on a change is what
+        # the layer tree view does too.
+        if layer is not self.active:
+            self.active = layer
+            self.currentLayerChanged.emit(layer)
+        return True
 
     def addDockWidget(self, area, dock):
         # Parented to the window so the dock has the same ownership it would in
@@ -195,6 +212,105 @@ def test_the_cube_dock_follows_the_selected_layer(plugin, iface, store_uri: str)
 
     iface.currentLayerChanged.emit(None)
     assert scrubber.layer() is None
+
+
+def _clear_project() -> None:
+    project = QgsProject.instance()
+    project.removeAllMapLayers()
+    project.layerTreeRoot().removeAllChildren()
+
+
+def test_adding_from_the_dialog_opens_the_dock_on_the_new_layer(
+    plugin, iface, store_uri: str
+) -> None:
+    """Grouped on purpose: QGIS does not select a layer it puts into a group."""
+    plugin.initGui()
+    _clear_project()
+    uri = LayerUri(store_uri=store_uri, dataset="conv", bands=("red", "green"))
+
+    plugin._on_layers_requested(per_variable(uri))
+
+    dock = plugin._cube_dock
+    assert not dock.isHidden()
+    layer = dock.scrubber().layer()
+    assert layer is not None and layer is iface.active
+    assert layer.name() == "red", "the first variable, which is on top of the group"
+    assert [r.axis.name for r in dock.scrubber()._rows] == ["time"]
+    _clear_project()
+
+
+def test_the_dock_stays_closed_when_the_user_turned_that_off(plugin, iface, store_uri: str) -> None:
+    from datacube_viewer.gui import set_opens_automatically
+
+    plugin.initGui()
+    _clear_project()
+    set_opens_automatically(False)
+
+    plugin._on_layers_requested(
+        per_variable(LayerUri(store_uri=store_uri, dataset="conv", bands=("red",)))
+    )
+
+    assert plugin._cube_dock.isHidden()
+    _clear_project()
+
+
+def test_a_script_adding_layers_does_not_open_the_dock(plugin, iface, store_uri: str) -> None:
+    """Only the dialog is someone asking to look at a cube right now."""
+    plugin.initGui()
+    _clear_project()
+
+    made = plugin.add_layers(
+        per_variable(LayerUri(store_uri=store_uri, dataset="conv", bands=("red",)))
+    )
+
+    assert len(made) == 1 and made[0].isValid(), "add_layers returns what it added"
+    assert plugin._cube_dock.isHidden()
+    _clear_project()
+
+
+def test_the_dock_stays_closed_for_a_cube_with_one_slice(plugin, iface, store_uri: str) -> None:
+    """geo is 2-D: the dock would only say there is nothing to scrub."""
+    plugin.initGui()
+    _clear_project()
+
+    plugin._on_layers_requested(
+        per_variable(LayerUri(store_uri=store_uri, dataset="geo", bands=("temperature",)))
+    )
+
+    assert len(QgsProject.instance().mapLayers()) == 1, "the layer itself still loads"
+    assert plugin._cube_dock.isHidden()
+    _clear_project()
+
+
+def test_the_options_page_is_registered_and_withdrawn(plugin, iface) -> None:
+    """Settings → Options must list the plugin once, and not after unload."""
+    plugin.initGui()
+    assert len(iface.options_factories) == 1
+    assert iface.options_factories[0].title() == PLUGIN_NAME
+
+    plugin.unload()
+    assert iface.options_factories == []
+
+
+def test_the_options_page_reads_and_applies_the_setting(plugin, iface) -> None:
+    """On by default; nothing is written until the user applies the page."""
+    from datacube_viewer.gui import opens_automatically
+
+    plugin.initGui()
+    factory = iface.options_factories[0]
+
+    page = factory.createWidget(None)
+    assert page._auto_open.isChecked()
+
+    page._auto_open.setChecked(False)
+    assert opens_automatically(), "unticking is not saving: Cancel must leave it alone"
+    page.apply()
+    assert not opens_automatically()
+
+    reopened = factory.createWidget(None)
+    assert not reopened._auto_open.isChecked()
+    page.deleteLater()
+    reopened.deleteLater()
 
 
 def test_unload_stops_the_dock_hearing_about_layers(plugin, iface, store_uri: str) -> None:

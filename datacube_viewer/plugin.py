@@ -121,6 +121,9 @@ class DatacubeViewerPlugin:
         #: Dock with the axis sliders. Held so ``unload`` can drop its signal
         #: connection before the Python object goes away — see gui.axis_panel.
         self._cube_dock = None
+        #: Settings → Options page. Held because QGIS keeps only a pointer to it, and
+        #: ``unload`` has to hand the same object back to unregister it.
+        self._options_factory = None
 
     # ------------------------------------------------------------ lifecycle
     def initGui(self) -> None:
@@ -160,6 +163,7 @@ class DatacubeViewerPlugin:
             self._toolbar.addAction(action)
 
         self._add_cube_dock()
+        self._add_options_page()
 
         # Restoring a scrubbed slice when a project is read. The indices live in a
         # layer custom property rather than the data source string (see
@@ -169,6 +173,13 @@ class DatacubeViewerPlugin:
         QgsProject.instance().layerWasAdded.connect(self._on_layer_added)
 
         self._announce_dependencies()
+
+    def _add_options_page(self) -> None:
+        """Add the plugin's page to Settings → Options (QGIS's own plugin-settings hook)."""
+        from .gui import DatacubeOptionsFactory
+
+        self._options_factory = DatacubeOptionsFactory(_icon("cube_sliders.svg"))
+        self.iface.registerOptionsWidgetFactory(self._options_factory)
 
     def _add_cube_dock(self) -> None:
         """Add the axis-slider dock, hidden until the user asks for it.
@@ -181,7 +192,8 @@ class DatacubeViewerPlugin:
         The dock starts hidden: a panel that forces itself open on every launch is
         a panel the user closes once and resents twice. QGIS restores its own
         visibility from DOCK_OBJECT_NAME after this, so someone who left it open
-        keeps it open.
+        keeps it open. Adding a cube from the dialog is what opens it, unless the
+        user turned that off in Settings → Options (see :meth:`_on_layers_requested`).
         """
         from .gui import DatacubeDock
 
@@ -288,6 +300,10 @@ class DatacubeViewerPlugin:
             self._toolbar.deleteLater()
             self._toolbar = None
 
+        if self._options_factory is not None:
+            self.iface.unregisterOptionsWidgetFactory(self._options_factory)
+            self._options_factory = None
+
         if self._cube_dock is not None:
             self._cube_dock.teardown()
             self.iface.removeDockWidget(self._cube_dock)
@@ -325,7 +341,7 @@ class DatacubeViewerPlugin:
 
         if self._load_dialog is None:
             self._load_dialog = DatacubeLoadDialog(self.iface.mainWindow())
-            self._load_dialog.layersRequested.connect(self.add_layers)
+            self._load_dialog.layersRequested.connect(self._on_layers_requested)
             self._load_dialog.finished.connect(self._on_dialog_closed)
         self._load_dialog.show()
         self._load_dialog.raise_()
@@ -334,11 +350,24 @@ class DatacubeViewerPlugin:
     def _on_dialog_closed(self, *_args) -> None:
         self._load_dialog = None
 
+    def _on_layers_requested(self, uris: Sequence[LayerUri]) -> None:
+        """The dialog's Add layer: put the layers on the map, then open the sliders.
+
+        Only this path opens the dock. A project being read or a script calling
+        :meth:`add_layers` is not someone who just asked to look at a cube, and a
+        panel that opens then is the one ``_add_cube_dock`` keeps hidden at startup.
+        """
+        from .gui import opens_automatically
+
+        made = self.add_layers(uris)
+        if made and self._cube_dock is not None and opens_automatically():
+            self._cube_dock.reveal(made)
+
     def add_layer(self, uri: LayerUri) -> None:
         """Put one layer on the map. Kept for callers that have a single URI."""
         self.add_layers((uri,))
 
-    def add_layers(self, uris: Sequence[LayerUri]) -> None:
+    def add_layers(self, uris: Sequence[LayerUri]) -> list[QgsRasterLayer]:
         """Put one layer on the map per URI, grouped when there is more than one.
 
         The dialog hands over one URI per variable (see ``layeruri.per_variable``),
@@ -350,12 +379,14 @@ class DatacubeViewerPlugin:
         A URI that fails to open does not stop the others: on a store where one
         variable is broken, loading the rest and saying which one failed is more
         useful than loading nothing.
+
+        Returns the layers that made it onto the map, in request order.
         """
         from .provider import create_layer
 
         requests = tuple(uris)
         if not requests:
-            return
+            return []
 
         grouped = len(requests) > 1
         made: list[QgsRasterLayer] = []
@@ -377,6 +408,7 @@ class DatacubeViewerPlugin:
         if made:
             self._place(made, requests[0], grouped=grouped and len(made) > 1)
         self._report(made, failures, requests[0])
+        return made
 
     def _fix_stretch(self, layer: QgsRasterLayer) -> None:
         """Stretch the layer over the whole cube rather than over one slice.

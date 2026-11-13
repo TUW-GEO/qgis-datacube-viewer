@@ -38,9 +38,9 @@ Three things make the scrubbing feel like a slider rather than a reload:
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
-from qgis.core import QgsMapLayer, QgsRasterLayer
+from qgis.core import QgsMapLayer, QgsRasterLayer, QgsSettings
 from qgis.gui import QgsDockWidget
 from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtWidgets import (
@@ -92,6 +92,24 @@ PANEL_TITLE = "Datacube Viewer"
 #: does not track PANEL_TITLE. Same reasoning as ``plugin.TOOLBAR_OBJECT_NAME``.
 DOCK_OBJECT_NAME = "DatacubeViewerDock"
 
+#: QgsSettings key for "open the dock when a cube is added from the Add Datacube
+#: Layer dialog". The dialog's checkbox writes it, the plugin reads it on each add.
+AUTO_OPEN_KEY = "plugins/datacube_viewer/auto_open_panel"
+
+
+def opens_automatically() -> bool:
+    """Whether adding a cube from the dialog should open the dock. On by default.
+
+    On, because the sliders are the reason to load a cube rather than a GeoTIFF, and
+    a toolbar button that has to be found first hides them from exactly the user who
+    does not yet know they exist.
+    """
+    return bool(QgsSettings().value(AUTO_OPEN_KEY, True, type=bool))
+
+
+def set_opens_automatically(enabled: bool) -> None:
+    QgsSettings().setValue(AUTO_OPEN_KEY, bool(enabled))
+
 
 def is_datacube_layer(layer: QgsMapLayer | None) -> bool:
     """Whether this is one of our raster layers, with a provider we can talk to.
@@ -113,6 +131,20 @@ def is_datacube_layer(layer: QgsMapLayer | None) -> bool:
         return False
     provider = layer.dataProvider()
     return provider is not None and hasattr(provider, "setIndices")
+
+
+def has_axes_to_scrub(layer: QgsMapLayer | None) -> bool:
+    """Whether the dock would show at least one slider for ``layer``.
+
+    The same axes :class:`AxisScrubber` builds its rows from, so "open the dock for
+    this layer" and "the dock has something to show" cannot disagree.
+    """
+    if not is_datacube_layer(layer):
+        return False
+    context = getattr(layer.dataProvider(), "context", None)
+    if context is None:
+        return False
+    return bool(axes_for_bands(context.dataset, tuple(context.view().bands)))
 
 
 def axis_chunk_length(dataset: DatasetInfo, axis: AxisInfo) -> int:
@@ -594,6 +626,28 @@ class DatacubeDock(QgsDockWidget):
 
     def scrubber(self) -> AxisScrubber:
         return self._scrubber
+
+    def reveal(self, layers: Sequence[QgsMapLayer]) -> bool:
+        """Show the dock on the first of ``layers`` that has an axis to scrub.
+
+        Selects that layer as well as showing the dock. QGIS selects a layer it
+        adds to the tree root itself, but not one put into a group, which is where
+        a multi-variable load goes; without the selection the dock would open on
+        whatever was selected before.
+
+        ``setUserVisible`` rather than ``show``: a dock tabbed behind Layers is
+        already "shown", and only raising it puts the sliders in front of the user.
+
+        Nothing happens when no layer has an axis. The dock would only say there is
+        one slice, which is not worth covering part of the map for. Returns whether
+        the dock was shown.
+        """
+        target = next((layer for layer in layers if has_axes_to_scrub(layer)), None)
+        if target is None:
+            return False
+        self._iface.setActiveLayer(target)
+        self.setUserVisible(True)
+        return True
 
     def _on_current_layer_changed(self, layer: QgsMapLayer | None) -> None:
         # Commit anything still in flight for the layer being left behind, or a drag
