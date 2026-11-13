@@ -22,11 +22,14 @@ than mysterious.
 
 Beside Copy sits Install now, which runs that same command itself, with QGIS's own
 Python, where that is pip into QGIS's own Python (Linux system Python, Windows,
-macOS; not conda or Flatpak). It first asks the interpreter what it is and refuses
-unless it is the one QGIS runs, asks before putting a newer copy of an installed
-package in front of the old one, and streams pip's output into the dialog. The rules
-that keep this from changing anything QGIS already has (``--user``, the constraints
-file, wheels only) are in the core module, shared with the command the user copies.
+macOS). It first asks the interpreter what it is and refuses unless it is the one QGIS
+runs, asks before putting a newer copy of an installed package in front of the old one,
+and streams pip's output into the dialog. The rules that keep this from changing
+anything QGIS already has (``--user``, the constraints file, wheels only) are in the
+core module, shared with the command the user copies. In a conda environment it runs
+conda into that environment instead (``--freeze-installed`` takes the part of the
+constraints file; no interpreter probe, as ``-p`` names the environment). Pixi
+environments and Flatpak keep the copy-paste route.
 Packages that need a newer Python than this QGIS has are shown but not offered, with a
 link to the README's conda-forge route instead of a command that cannot work.
 """
@@ -68,16 +71,17 @@ from ..core import (
     install_command,
 )
 from ..core.environment import (
+    CONDA,
     PROBE_SCRIPT,
     README_CONDA_FORGE_URL,
     SCRUBBED_PIP_VARIABLES,
     auto_install_blocker,
     installed_distributions,
+    launch_line,
     pip_constraints,
     probe_mismatches,
     python_too_old,
     shadowed_packages,
-    unattended_arguments,
 )
 
 __all__ = ["SUPPRESS_KEY", "DependencyDialog"]
@@ -272,9 +276,7 @@ class DependencyDialog(QDialog):
         self._copy_button.clicked.connect(self._copy)
         copy_row.addWidget(self._copy_button)
         self._install_button = QPushButton("Install now")
-        self._install_button.setToolTip(
-            "Run the command above with QGIS's own Python. Restart QGIS afterwards."
-        )
+        self._install_button.setToolTip("Run the command above. Restart QGIS afterwards.")
         self._install_button.clicked.connect(self._start_install)
         copy_row.addWidget(self._install_button)
         self._copied = QLabel("")
@@ -470,7 +472,7 @@ class DependencyDialog(QDialog):
         """Rebuild the command for the current ticks and show it."""
         self._wanted = self._selected_packages()
         self._install = install_command(self._wanted, constraints=self._constraints_path)
-        if self._install.arguments and self._wanted:
+        if self._install.arguments and self._wanted and self._install.flavour != CONDA:
             self._write_constraints()
         if self._command_box is None:
             return  # still building the layout
@@ -561,7 +563,14 @@ class DependencyDialog(QDialog):
         else:
             blocker = auto_install_blocker(self._install) or self._constraints_error
         self._install_button.setEnabled(blocker is None)
-        if blocker is None:
+        if blocker is None and self._install.flavour == CONDA:
+            self._set_status(
+                "Install now runs this command with conda, into the environment QGIS "
+                "runs in. --freeze-installed lets conda add packages but not change "
+                "the ones the environment already has; if that is impossible, nothing "
+                "is installed."
+            )
+        elif blocker is None:
             self._set_status(
                 "Install now runs this command with QGIS's own Python, once that Python "
                 "has confirmed it is the one QGIS runs. Everything it already has, apart "
@@ -580,13 +589,18 @@ class DependencyDialog(QDialog):
                 widget.setEnabled(not busy)
 
     def _start_install(self) -> None:
-        """Check the interpreter, confirm any shadowing, then run pip."""
+        """Check the interpreter, confirm any shadowing, then run pip (or conda)."""
         if self._process is not None or not self._wanted:
             return
         command = self._install
         blocker = auto_install_blocker(command) or self._constraints_error
         if blocker:
             self._set_status(blocker, error=True)
+            return
+        if command.flavour == CONDA:
+            # ``-p`` names the environment, so there is no interpreter to vet and no
+            # user site for a package to shadow something in.
+            self._run_installer(command)
             return
 
         facts, failure = self._probe(command.interpreter)
@@ -611,7 +625,7 @@ class DependencyDialog(QDialog):
         if shadowed and not self._confirm_shadowing(shadowed, str(facts["user_site"])):
             self._set_status("Nothing was installed.")
             return
-        self._run_pip(command)
+        self._run_installer(command)
 
     def _probe(self, interpreter: Path | None) -> tuple[dict | None, str]:
         """Ask ``interpreter`` what it is: :data:`PROBE_SCRIPT`'s answer, or why not.
@@ -665,16 +679,23 @@ class DependencyDialog(QDialog):
         )
         return answer == QMessageBox.Yes
 
-    def _run_pip(self, command) -> None:
-        arguments = unattended_arguments(command)
+    def _run_installer(self, command) -> None:
+        """Start pip (or conda) for ``command`` and stream what it prints into the log."""
+        program, arguments = launch_line(command)
+        tool = "conda" if command.flavour == CONDA else "pip"
         self._output = []
         if self._log is not None:
             self._log.clear()
             self._log.show()
-        self._append(f"$ {command.interpreter} {' '.join(arguments)}\n")
+        self._append(f"$ {program} {' '.join(arguments)}\n")
 
         process = QProcess(self)
-        process.setProcessEnvironment(_pip_environment())
+        # conda reads its own settings; the scrubbed variables are pip's.
+        process.setProcessEnvironment(
+            QProcessEnvironment.systemEnvironment()
+            if command.flavour == CONDA
+            else _pip_environment()
+        )
         process.setProcessChannelMode(QProcess.MergedChannels)
         process.readyReadStandardOutput.connect(self._on_pip_output)
         process.finished.connect(self._on_pip_finished)
@@ -682,9 +703,9 @@ class DependencyDialog(QDialog):
         self._process = process
         self._set_busy(True)
         self._set_status(
-            "Installing. pip's output follows; this window stays open until it is done."
+            f"Installing. {tool}'s output follows; this window stays open until it is done."
         )
-        process.start(str(command.interpreter), arguments)
+        process.start(program, arguments)
 
     def _append(self, text: str) -> None:
         if self._log is None:
@@ -707,7 +728,10 @@ class DependencyDialog(QDialog):
         reason = self._process.errorString()
         self._process = None
         self._set_busy(False)
-        self._set_status(f"Nothing was installed: pip could not be started ({reason}).", error=True)
+        tool = "conda" if self._install.flavour == CONDA else "pip"
+        self._set_status(
+            f"Nothing was installed: {tool} could not be started ({reason}).", error=True
+        )
 
     def _on_pip_finished(self, code: int, status=None) -> None:
         process, self._process = self._process, None
@@ -716,6 +740,8 @@ class DependencyDialog(QDialog):
         self._set_busy(False)
         log = "".join(self._output)
         packages = " ".join(self._wanted)
+        conda = self._install.flavour == CONDA
+        tool = "conda" if conda else "pip"
         if process.exitStatus() == QProcess.NormalExit and code == 0:
             self._done = True
             if self._install_button is not None:
@@ -727,28 +753,44 @@ class DependencyDialog(QDialog):
                 "Installed. Restart QGIS to use the new packages: Python imports them "
                 "once per session, so re-enabling the plugin is not enough."
             )
-            QgsMessageLog.logMessage(f"Installed {packages} with pip.", PLUGIN_NAME, Qgis.Info)
+            QgsMessageLog.logMessage(f"Installed {packages} with {tool}.", PLUGIN_NAME, Qgis.Info)
             return
 
-        parts = [f"pip stopped with exit code {code}."]
-        if "Installing collected packages" in log:
-            parts.append("It had started installing; the log above shows how far it got.")
-        else:
-            parts.append("Nothing was installed.")
-        if "ResolutionImpossible" in log or "conflict" in log.lower():
-            parts.append(
-                "The requested packages need different versions of packages QGIS's Python "
-                "already has, and this install never replaces those."
+        parts = [f"{tool} stopped with exit code {code}."]
+        if conda:
+            # conda solves first and applies the result as one transaction, so a failed
+            # solve has changed nothing.
+            solver_failed = any(
+                marker in log
+                for marker in ("UnsatisfiableError", "PackagesNotFoundError", "Conflicts:")
             )
+            if solver_failed:
+                parts.append(
+                    "Nothing was installed. The packages could not be added without "
+                    "changing ones the environment already has (or are not on the "
+                    "channel), and --freeze-installed forbids the former."
+                )
+            else:
+                parts.append("The log above shows what happened.")
+        else:
+            if "Installing collected packages" in log:
+                parts.append("It had started installing; the log above shows how far it got.")
+            else:
+                parts.append("Nothing was installed.")
+            if "ResolutionImpossible" in log or "conflict" in log.lower():
+                parts.append(
+                    "The requested packages need different versions of packages QGIS's "
+                    "Python already has, and this install never replaces those."
+                )
         text = escape(" ".join(parts))
-        if "ResolutionImpossible" in log or "No matching distribution" in log:
+        if not conda and ("ResolutionImpossible" in log or "No matching distribution" in log):
             text += (
                 f" <a href='{README_CONDA_FORGE_URL}'>QGIS from conda-forge</a>, as the "
                 "README describes, comes with these packages and has no such conflict."
             )
         self._set_status(text, error=True, rich=True)
         QgsMessageLog.logMessage(
-            f"Installing {packages} with pip failed (exit code {code}).",
+            f"Installing {packages} with {tool} failed (exit code {code}).",
             PLUGIN_NAME,
             Qgis.Warning,
         )
@@ -756,8 +798,9 @@ class DependencyDialog(QDialog):
     def reject(self) -> None:
         """Close, except while pip runs: stopping it midway can leave half an install."""
         if self._process is not None:
+            tool = "conda" if self._install.flavour == CONDA else "pip"
             self._set_status(
-                "pip is still running. Wait for it to finish; stopping it midway could "
+                f"{tool} is still running. Wait for it to finish; stopping it midway could "
                 "leave a half-finished install behind."
             )
             return

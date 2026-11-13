@@ -42,6 +42,14 @@ the command the user copies and the one the dialog runs alike:
 * Packages that need a newer Python than QGIS has are not offered at all
   (:data:`MIN_PYTHON`); pip would only answer "No matching distribution found".
 
+* Inside a conda environment the package manager is conda, not pip: it is run against
+  the environment QGIS lives in (``-p <prefix>``) with ``--freeze-installed``, which
+  plays the part of the constraints file. It may add packages, but if that needs
+  changing one the environment already has, it installs nothing. The executable is
+  looked up (:func:`find_conda`) rather than assumed to be on ``PATH``, since a
+  QGIS started from a desktop icon has no activated shell. A pixi environment is left
+  to pixi.
+
 This module still never spawns a process: it builds the argument list, and the dialog
 runs it.
 
@@ -54,6 +62,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 import sysconfig
 from dataclasses import dataclass, field
@@ -164,6 +173,52 @@ def detect_flavour(
 
 
 # ------------------------------------------------------------- the interpreter
+def is_pixi(prefix: str | None = None) -> bool:
+    """True when the conda environment at ``prefix`` is owned by pixi, not conda.
+
+    pixi marks its environments with ``conda-meta/pixi``. Installing into one behind
+    pixi's back is undone the next time it syncs the environment with ``pixi.toml``.
+    """
+    prefix = sys.prefix if prefix is None else prefix
+    return (Path(prefix) / "conda-meta" / "pixi").exists()
+
+
+#: Package managers that can install into a conda environment, in order of preference.
+_CONDA_PROGRAMS = ("conda", "mamba", "micromamba")
+
+
+def find_conda(
+    prefix: str | None = None,
+    env: dict[str, str] | None = None,
+    which=shutil.which,
+) -> Path | None:
+    """The conda (or mamba) executable that can install into ``prefix``, or ``None``.
+
+    Not just ``which conda``: a QGIS started from a desktop icon has no activated shell,
+    so ``PATH`` often lacks it. Tried in turn: the variables an activated shell exports,
+    ``PATH``, then where conda sits relative to the environment (the base environment
+    holds it, a named one is ``<base>/envs/<name>``). Any conda can install into any
+    prefix with ``-p``, so the one found need not be the environment's own.
+    """
+    prefix = sys.prefix if prefix is None else prefix
+    env = os.environ if env is None else env
+
+    candidates: list[str | Path] = [env.get("CONDA_EXE", ""), env.get("MAMBA_EXE", "")]
+    candidates += [which(name) or "" for name in _CONDA_PROGRAMS]
+    for base in (Path(prefix), Path(prefix).parent.parent):
+        for name in _CONDA_PROGRAMS:
+            candidates += [
+                base / "bin" / name,
+                base / "condabin" / f"{name}.bat",
+                base / "Scripts" / f"{name}.exe",
+                base / "Library" / "bin" / f"{name}.exe",
+            ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
+    return None
+
+
 def _candidates(flavour: str, prefix: str, executable: str) -> list[Path]:
     """Places QGIS's Python could be, most authoritative first."""
     prefix_path = Path(prefix)
@@ -497,10 +552,15 @@ class InstallCommand:
     #: The file that opens ``terminal`` (Windows: this QGIS's ``OSGeo4W.bat``), when it
     #: could be located. The dialog offers to show its folder in the file manager.
     terminal_launcher: Path | None = None
-    #: What follows the interpreter in ``command``, unquoted, for the flavours where
-    #: that is a single pip call: ``("-m", "pip", "install", "--user", …)``. Empty for
-    #: conda and Flatpak, whose commands are not pip into QGIS's own Python.
+    #: What follows the program in ``command``, unquoted, for the flavours the dialog
+    #: can run: pip into QGIS's own Python (``("-m", "pip", "install", "--user", …)``)
+    #: or conda into its environment (``("install", "-p", …)``). Empty otherwise.
     arguments: tuple[str, ...] = ()
+    #: The package manager, when it is not ``interpreter``: the conda executable.
+    program: Path | None = None
+    #: Why the dialog cannot run this itself although the flavour could allow it (a
+    #: pixi environment, no conda to be found). Empty when there is nothing to say.
+    manual_reason: str = ""
 
     @property
     def label(self) -> str:
@@ -532,10 +592,38 @@ def _pip_arguments(
     return (*args, *packages)
 
 
+def _conda_arguments(packages: list[str], prefix: str) -> tuple[str, ...]:
+    return (
+        "install",
+        "-p",
+        str(prefix),
+        "--override-channels",
+        "-c",
+        "conda-forge",
+        "--freeze-installed",
+        *packages,
+    )
+
+
 def unattended_arguments(command: InstallCommand) -> list[str]:
-    """``command.arguments`` as the dialog runs them: with :data:`UNATTENDED_FLAGS`."""
+    """``command.arguments`` as the dialog runs them: with the flags that stop prompts."""
     args = list(command.arguments)
+    if command.flavour == CONDA:
+        return [args[0], "--yes", *args[1:]]
     return [*args[:3], *UNATTENDED_FLAGS, *args[3:]]
+
+
+def launch_line(command: InstallCommand) -> tuple[str, list[str]]:
+    """The program and arguments the dialog starts for ``command``.
+
+    ``conda`` on Windows is ``conda.bat``, which cannot be started directly: it goes
+    through ``cmd.exe``.
+    """
+    program = command.program or command.interpreter
+    arguments = unattended_arguments(command)
+    if program is not None and program.suffix.lower() in (".bat", ".cmd"):
+        return os.environ.get("COMSPEC", "cmd.exe"), ["/c", str(program), *arguments]
+    return str(program), arguments
 
 
 def _pins_note(constraints: Path | str | None) -> tuple[str, ...]:
@@ -572,19 +660,53 @@ def install_command(
         # All of them from conda-forge, icechunk included: pip inside a conda
         # environment can replace conda's numpy behind its back.
         conda = [_CONDA_NAMES.get(p, p) for p in packages]
+        if is_pixi(prefix):
+            # pixi owns this environment: anything installed behind its back is undone
+            # the next time it syncs with pixi.toml.
+            return InstallCommand(
+                flavour=flavour,
+                terminal="a terminal with the environment activated",
+                terminal_hint=(
+                    f"This is a pixi environment ({prefix}), and pixi decides what is in it. "
+                    "Add the packages to the project's pixi.toml instead; this is the "
+                    "conda equivalent:"
+                ),
+                command=("conda install -c conda-forge " + " ".join(f'"{p}"' for p in conda))
+                if conda
+                else "",
+                interpreter=interpreter,
+                notes=(
+                    "Using pixi in this repo? `pixi.toml` already pins zarr and icechunk, "
+                    "so `pixi run qgis` needs no extra install.",
+                ),
+                manual_reason=(
+                    "pixi manages this environment, and would undo an install made "
+                    "behind its back. Add the packages to pixi.toml (`pixi add`)."
+                ),
+            )
+        conda_exe = find_conda(prefix)
+        arguments = _conda_arguments(conda, prefix)
         return InstallCommand(
             flavour=flavour,
-            terminal="a terminal with the environment activated",
+            terminal="a terminal where conda works",
             terminal_hint=(
-                f"Activate the environment QGIS runs in first (the one at {prefix}), then run:"
+                "-p names the environment QGIS runs in, so it does not have to be activated first:"
             ),
-            command=("conda install -c conda-forge " + " ".join(f'"{p}"' for p in conda))
-            if conda
-            else "",
+            command=("conda " + " ".join(_shell_word(a) for a in arguments) if conda else ""),
             interpreter=interpreter,
             notes=(
-                "Using pixi in this repo? `pixi.toml` already pins zarr and icechunk, "
-                "so `pixi run qgis` needs no extra install.",
+                f"conda installs into the environment at {prefix}. --freeze-installed "
+                "lets it add packages but not change the ones that environment already "
+                "has (QGIS, numpy, GDAL, …); if that is impossible it installs nothing.",
+            ),
+            arguments=arguments if conda_exe else (),
+            program=conda_exe,
+            manual_reason=""
+            if conda_exe
+            else (
+                "No conda, mamba or micromamba executable could be found (looked at "
+                "CONDA_EXE, PATH and next to the environment), so run the command "
+                "above in a terminal where conda works."
             ),
         )
 
@@ -687,19 +809,24 @@ def install_command(
 def auto_install_blocker(command: InstallCommand) -> str | None:
     """Why the dialog cannot run ``command`` itself, or ``None`` when it can.
 
-    It only ever runs pip into the running QGIS's own Python: a conda environment's
-    packages belong to conda, and a Flatpak's Python cannot install from inside the
-    sandbox. Both keep the copy-paste route. The checks on ``site`` and ``pip`` are
-    about the *running* interpreter, which inside QGIS is the one being installed into.
+    It runs pip into the running QGIS's own Python, or conda into the environment QGIS
+    lives in. A pixi environment and a Flatpak's Python keep the copy-paste route: pixi
+    would undo the install, and the sandbox cannot install from inside. The checks on
+    ``site`` and ``pip`` are about the *running* interpreter, which inside QGIS is the
+    one being installed into.
     """
     import importlib.util
     import site
 
+    if command.manual_reason:
+        return command.manual_reason
     if command.flavour == CONDA:
-        return (
-            "In a conda environment conda manages the packages, so run the command above "
-            "with the environment activated."
-        )
+        if not command.arguments or command.program is None:
+            return "There is no conda command to run here."
+        prefix = command.arguments[command.arguments.index("-p") + 1]
+        if not os.access(prefix, os.W_OK):
+            return f"You cannot write to the environment at {prefix}."
+        return None
     if command.flavour == FLATPAK:
         return "QGIS from Flatpak cannot install packages from inside its sandbox."
     if not command.arguments:

@@ -72,8 +72,9 @@ formats listed above:
 
 The easiest way is **Raster → Datacube Viewer → Install Python Dependencies…**. It
 detects your environment, shows the command with your packages filled in, and on
-Windows, macOS and Linux (system QGIS) its **Install now** button runs that command for
-you. Restart QGIS afterwards. Install now never changes what QGIS's Python already has:
+Windows, macOS, Linux (system QGIS) and conda environments its **Install now** button
+runs that command for you. Restart QGIS afterwards. Install now never changes what QGIS
+already has:
 
 - It installs with `pip install --user`, into your user site-packages, never into
   QGIS's or the system's own.
@@ -90,15 +91,24 @@ you. Restart QGIS afterwards. Install now never changes what QGIS's Python alrea
   your distribution, say), it asks first, because the new copy then takes precedence for
   every program using that Python.
 
-In a conda environment and in Flatpak QGIS the dialog only shows the command. For
-reference, the commands without the constraints file:
+In a conda environment it runs `conda install -p <env>` instead, into the environment
+QGIS runs in, so that environment does not have to be activated. `--freeze-installed`
+plays the part of the constraints file: conda may add packages but not change any the
+environment already has, and installs nothing if it cannot. It looks for `conda`
+(or `mamba`, `micromamba`) in `CONDA_EXE`, on `PATH` and next to the environment. The
+button is not available if none is found or the environment is read-only.
+
+In a pixi environment and in Flatpak QGIS the dialog only shows the command: pixi would
+undo anything installed behind its back (add the packages to `pixi.toml` instead), and
+Flatpak's sandbox cannot install from inside. For reference, the commands without the
+constraints file:
 
 | | Where to run it | Command |
 | --- | --- | --- |
 | **Windows** | **OSGeo4W Shell** (Start menu → the QGIS folder). *Not* `cmd` or PowerShell: they have a different Python on `PATH`. | `python -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
 | **macOS** | **Terminal** (Applications → Utilities) | `/Applications/QGIS.app/Contents/MacOS/bin/python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
 | **Linux** (system QGIS) | any terminal | `/usr/bin/python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
-| **conda / pixi** | a terminal with the env activated | `conda install -c conda-forge "zarr>=3" netcdf4 icechunk fsspec s3fs` |
+| **conda** | any terminal where `conda` works | `conda install -p /path/to/env --override-channels -c conda-forge --freeze-installed "zarr>=3" netcdf4 icechunk fsspec s3fs` |
 | **Flatpak** | any terminal | `flatpak run --devel --command=pip3 org.qgis.qgis install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
 
 Without the constraints file pip may upgrade numpy and other packages QGIS uses, so

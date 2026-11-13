@@ -268,8 +268,8 @@ def _wait(predicate, timeout: float = 30.0) -> bool:
 def runnable(dialog, monkeypatch):
     """A Linux dialog whose Install now runs this test's Python, with pip swapped out.
 
-    ``run(script)`` replaces pip's arguments by ``-c script``. Everything before pip
-    is real: the blockers, the probe of the interpreter, the shadowing question.
+    ``run(script)`` replaces the installer's arguments by ``-c script``. Everything
+    before it is real: the blockers, the probe of the interpreter, the shadowing question.
     """
     import sys
 
@@ -284,7 +284,9 @@ def runnable(dialog, monkeypatch):
     monkeypatch.setattr(depmod, "auto_install_blocker", lambda command: None)
 
     def make(script="print('Successfully installed netCDF4-1.7.2')", installed=None, **kwargs):
-        monkeypatch.setattr(depmod, "unattended_arguments", lambda command: ["-c", script])
+        monkeypatch.setattr(
+            depmod, "launch_line", lambda command: (str(command.interpreter), ["-c", script])
+        )
         kwargs.setdefault("missing", ("netCDF4",))
         d = dialog(**kwargs)
         # What the test Python really has would decide whether the "already
@@ -369,11 +371,82 @@ def test_replacing_an_installed_package_needs_a_yes(runnable, monkeypatch) -> No
     assert "Nothing was installed" in _status(d)
 
 
-def test_conda_and_flatpak_keep_the_copy_paste_route(dialog) -> None:
-    for flavour in (env.CONDA, env.FLATPAK):
-        d = dialog(flavour=flavour)
-        assert not d._install_button.isEnabled(), flavour
-        assert "not available" in _status(d)
+def test_flatpak_keeps_the_copy_paste_route(dialog) -> None:
+    d = dialog(flavour=env.FLATPAK)
+    assert not d._install_button.isEnabled()
+    assert "not available" in _status(d)
+
+
+@pytest.fixture
+def conda_dialog(dialog, monkeypatch, tmp_path):
+    """A conda dialog in a writable fake environment, with a conda that is a Python script."""
+    import sys
+
+    import datacube_viewer.gui.dependencies as depmod
+
+    (tmp_path / "env" / "conda-meta").mkdir(parents=True)
+    conda = tmp_path / "conda"
+    conda.write_text("")
+    monkeypatch.setattr(env, "find_conda", lambda prefix=None, **kw: conda)
+    real = env.install_command
+    monkeypatch.setattr(
+        depmod,
+        "install_command",
+        lambda pkgs, **kw: real(pkgs, env.CONDA, str(tmp_path / "env"), sys.executable, **kw),
+    )
+
+    def make(script="print('done')", **kwargs):
+        monkeypatch.setattr(depmod, "launch_line", lambda command: (sys.executable, ["-c", script]))
+        kwargs.setdefault("missing", ("netCDF4",))
+        return dialog(**kwargs)
+
+    return make
+
+
+def test_conda_installs_into_the_environment_without_pip_machinery(conda_dialog, tmp_path) -> None:
+    d = conda_dialog("print('Executing transaction: done')")
+    assert d._install_button.isEnabled()
+    assert "conda install -p" in d._command_box.toPlainText()
+    assert "--freeze-installed" in d._command_box.toPlainText()
+    assert not (tmp_path / "pins.txt").exists(), "conda has no constraints file"
+    d._install_button.click()
+    assert _wait(lambda: d._process is None and d._done)
+    assert "Restart QGIS" in _status(d)
+    assert "Executing transaction" in d._log.toPlainText()
+
+
+def test_conda_failing_to_solve_says_nothing_changed(conda_dialog) -> None:
+    d = conda_dialog("import sys; print('UnsatisfiableError: The following specs'); sys.exit(1)")
+    d._install_button.click()
+    assert _wait(lambda: d._process is None and "exit code 1" in _status(d))
+    assert "conda stopped" in _status(d)
+    assert "--freeze-installed forbids" in _status(d)
+    assert "pip" not in _status(d)
+    assert d._install_button.isEnabled(), "the user may untick something and retry"
+
+
+def test_conda_is_not_run_when_none_can_be_found(dialog, monkeypatch, tmp_path) -> None:
+    (tmp_path / "env" / "conda-meta").mkdir(parents=True)
+    monkeypatch.setattr(env, "find_conda", lambda prefix=None, **kw: None)
+    d = dialog(flavour=env.CONDA)
+    assert not d._install_button.isEnabled()
+    assert "No conda" in _status(d)
+
+
+def test_a_pixi_environment_keeps_the_copy_paste_route(dialog, monkeypatch, tmp_path) -> None:
+    import datacube_viewer.gui.dependencies as depmod
+
+    (tmp_path / "conda-meta").mkdir()
+    (tmp_path / "conda-meta" / "pixi").write_text("")
+    real = env.install_command
+    monkeypatch.setattr(
+        depmod,
+        "install_command",
+        lambda pkgs, **kw: real(pkgs, env.CONDA, str(tmp_path), "/x/bin/qgis", **kw),
+    )
+    d = dialog(missing=("zarr>=3",))
+    assert not d._install_button.isEnabled()
+    assert "pixi" in _status(d)
 
 
 def test_nothing_missing_means_nothing_to_install(dialog) -> None:

@@ -155,9 +155,105 @@ def test_unmanaged_linux_stays_on_plain_user(tmp_path):
 def test_conda_prefers_the_package_manager(tmp_path):
     (tmp_path / "conda-meta").mkdir()
     cmd = install_command(("zarr>=3", "icechunk"), CONDA, str(tmp_path), sys.executable)
-    assert cmd.command == 'conda install -c conda-forge "zarr>=3" "icechunk"'
+    # -p names the environment, so the shell need not be activated; --freeze-installed
+    # is the counterpart of the pip constraints file.
+    assert cmd.command == (
+        f"conda install -p {tmp_path} --override-channels -c conda-forge "
+        '--freeze-installed "zarr>=3" icechunk'
+    )
     # pip inside a conda environment can replace conda's numpy behind its back.
     assert "pip" not in cmd.command
+
+
+def test_netcdf4_is_spelled_the_conda_forge_way(tmp_path):
+    (tmp_path / "conda-meta").mkdir()
+    cmd = install_command(("netCDF4",), CONDA, str(tmp_path), sys.executable)
+    assert cmd.command.endswith("netcdf4")
+
+
+def test_pixi_environments_are_told_apart_from_conda_ones(tmp_path):
+    (tmp_path / "conda-meta").mkdir()
+    assert not env.is_pixi(str(tmp_path))
+    (tmp_path / "conda-meta" / "pixi").write_text("")
+    assert env.is_pixi(str(tmp_path))
+    cmd = install_command(("zarr>=3",), CONDA, str(tmp_path), sys.executable)
+    assert "-p" not in cmd.command, "the command must not write into pixi's environment"
+    assert "pixi" in env.auto_install_blocker(cmd)
+
+
+def _fake_conda(base, name="conda"):
+    exe = base / "bin" / name
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("")
+    return exe
+
+
+def test_conda_is_found_from_the_variable_an_activated_shell_exports(tmp_path):
+    exe = _fake_conda(tmp_path / "anywhere")
+    found = env.find_conda(str(tmp_path / "env"), {"CONDA_EXE": str(exe)}, lambda name: None)
+    assert found == exe
+
+
+def test_conda_is_found_on_path(tmp_path):
+    exe = _fake_conda(tmp_path / "elsewhere", "mamba")
+    found = env.find_conda(
+        str(tmp_path / "env"), {}, lambda name: str(exe) if name == "mamba" else None
+    )
+    assert found == exe
+
+
+def test_conda_is_found_next_to_a_named_environment(tmp_path):
+    """QGIS from a desktop icon: no CONDA_EXE, nothing on PATH, but base is two levels up."""
+    exe = _fake_conda(tmp_path / "miniconda3")
+    prefix = tmp_path / "miniconda3" / "envs" / "qgis"
+    prefix.mkdir(parents=True)
+    assert env.find_conda(str(prefix), {}, lambda name: None) == exe
+
+
+def test_a_missing_conda_is_none_and_the_command_stays_copyable(tmp_path, monkeypatch):
+    monkeypatch.setattr(env, "find_conda", lambda prefix=None, **kw: None)
+    (tmp_path / "conda-meta").mkdir()
+    cmd = install_command(("zarr>=3",), CONDA, str(tmp_path), sys.executable)
+    assert cmd.command.startswith("conda install -p")
+    assert not cmd.arguments
+    assert "No conda" in env.auto_install_blocker(cmd)
+
+
+def test_conda_is_run_by_the_dialog_unattended(tmp_path, monkeypatch):
+    exe = _fake_conda(tmp_path / "base")
+    monkeypatch.setattr(env, "find_conda", lambda prefix=None, **kw: exe)
+    prefix = tmp_path / "env"
+    (prefix / "conda-meta").mkdir(parents=True)
+    cmd = install_command(("zarr>=3", "netCDF4"), CONDA, str(prefix), sys.executable)
+    assert env.auto_install_blocker(cmd) is None
+    program, arguments = env.launch_line(cmd)
+    assert program == str(exe)
+    assert arguments[:2] == ["install", "--yes"], "nobody could answer a prompt"
+    assert arguments[arguments.index("-p") + 1] == str(prefix)
+    assert "--freeze-installed" in arguments
+    assert arguments[-2:] == ["zarr>=3", "netcdf4"]
+
+
+def test_a_conda_bat_goes_through_cmd(tmp_path, monkeypatch):
+    bat = tmp_path / "condabin" / "conda.bat"
+    bat.parent.mkdir()
+    bat.write_text("")
+    monkeypatch.setattr(env, "find_conda", lambda prefix=None, **kw: bat)
+    (tmp_path / "conda-meta").mkdir()
+    cmd = install_command(("zarr>=3",), CONDA, str(tmp_path), sys.executable)
+    monkeypatch.setenv("COMSPEC", "cmd.exe")
+    program, arguments = env.launch_line(cmd)
+    assert program == "cmd.exe"
+    assert arguments[:2] == ["/c", str(bat)]
+
+
+def test_a_read_only_environment_is_not_installed_into(tmp_path, monkeypatch):
+    exe = _fake_conda(tmp_path / "base")
+    monkeypatch.setattr(env, "find_conda", lambda prefix=None, **kw: exe)
+    monkeypatch.setattr(env.os, "access", lambda *a, **k: False)
+    (tmp_path / "conda-meta").mkdir()
+    cmd = install_command(("zarr>=3",), CONDA, str(tmp_path), sys.executable)
+    assert "cannot write" in env.auto_install_blocker(cmd)
 
 
 def test_flatpak_is_honest_about_the_sandbox(tmp_path):
@@ -343,7 +439,7 @@ def test_the_command_shown_is_the_command_run(tmp_path):
     assert f'"{pins}"' in cmd.command, "a path with a space has to be quoted"
 
 
-@pytest.mark.parametrize(("flavour", "runs"), [(LINUX, True), (CONDA, False), (FLATPAK, False)])
+@pytest.mark.parametrize(("flavour", "runs"), [(LINUX, True), (FLATPAK, False)])
 def test_only_pip_into_qgis_own_python_is_run_by_the_dialog(tmp_path, flavour, runs):
     cmd = install_command(("zarr>=3",), flavour, sys.prefix, sys.executable, False)
     blocker = env.auto_install_blocker(cmd)
