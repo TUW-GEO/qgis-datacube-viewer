@@ -122,9 +122,10 @@ class _AxisPicker(QWidget):
 class DatacubeLoadDialog(QDialog):
     """Pick a store, a snapshot, a dataset and a band selection; emit a layer URI."""
 
-    #: Emitted when the user clicks Add, with one LayerUri per layer to create —
-    #: a multi-variable store normally yields one URI per variable. The dialog
-    #: stays open so several loads can be done from one store in a row.
+    #: Emitted when the user clicks Add or Apply, with one LayerUri per layer to
+    #: create -- a multi-variable store normally yields one URI per variable. Apply
+    #: leaves the dialog open so several loads can be done from one store in a row;
+    #: Add closes it.
     layersRequested = pyqtSignal(tuple)
 
     def __init__(self, parent: QWidget | None = None, initial: LayerUri | None = None):
@@ -168,7 +169,7 @@ class DatacubeLoadDialog(QDialog):
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
         # The groups are put inside a scroll area, with the buttons outside it, so
-        # that "Add layer" can never be pushed off the bottom of the screen. The
+        # that "Add" can never be pushed off the bottom of the screen. The
         # dialog's content has a tall minimum (a 220px preview, two list widgets and
         # four group boxes), and on a short or scaled display that minimum used to
         # exceed the screen height — leaving the accept button unreachable with no
@@ -195,11 +196,21 @@ class DatacubeLoadDialog(QDialog):
         scroll.setMinimumHeight(180)
 
         self._buttons = QDialogButtonBox()
-        self._add_button = self._buttons.addButton("Add layer", QDialogButtonBox.AcceptRole)
+        # Add / Apply / Close, as in QGIS's own dialogs: Add is the answer to "I am
+        # done here" and closes, Apply loads and stays so several variables or slices
+        # of one store can be loaded in a row, Close leaves without loading.
+        #
+        # Both load buttons carry the accept role (the standard Apply role would be
+        # placed after Close on some platforms), and are wired through ``clicked``
+        # rather than ``accepted`` so each keeps its own meaning.
+        self._add_button = self._buttons.addButton("Add", QDialogButtonBox.AcceptRole)
+        self._apply_button = self._buttons.addButton("Apply", QDialogButtonBox.AcceptRole)
         self._buttons.addButton(QDialogButtonBox.Close)
-        self._buttons.accepted.connect(self._on_add)
+        self._add_button.setDefault(True)
+        self._add_button.clicked.connect(self._on_add_and_close)
+        self._apply_button.clicked.connect(self._on_add)
         self._buttons.rejected.connect(self.reject)
-        self._add_button.setEnabled(False)
+        self._set_can_add(False)
 
         shell = QVBoxLayout(self)
         shell.addWidget(scroll, 1)
@@ -603,7 +614,7 @@ class DatacubeLoadDialog(QDialog):
         self._dataset = None
         self._refs = None
         self._kind = None
-        self._add_button.setEnabled(False)
+        self._set_can_add(False)
         self._loading = True
         try:
             self._dataset_combo.clear()
@@ -868,18 +879,23 @@ class DatacubeLoadDialog(QDialog):
         if self._loading or self._closing:
             return
         if self._store is None:
-            self._add_button.setEnabled(False)
+            self._set_can_add(False)
             return
 
         uri = self.build_uri()
         issues = validate(self._store, uri, combine=not self._split_check.isChecked())
         ok = can_load(issues)
-        self._add_button.setEnabled(ok)
+        self._set_can_add(ok)
         self._show_messages(summarise(issues), error=not ok)
 
         if self._store.snapshot_id:
             self._snapshot_label.setText(f"snapshot {self._store.snapshot_id}")
         self._preview_timer.start()
+
+    def _set_can_add(self, enabled: bool) -> None:
+        """Add and Apply go together: both load the current selection."""
+        self._add_button.setEnabled(enabled)
+        self._apply_button.setEnabled(enabled)
 
     def _show_messages(self, text: str, error: bool = False) -> None:
         self._messages.setPlainText(text)
@@ -893,7 +909,7 @@ class DatacubeLoadDialog(QDialog):
 
     def _on_worker_failed(self, message: str, detail: str) -> None:
         self._set_busy(False)
-        self._add_button.setEnabled(False)
+        self._set_can_add(False)
         self._show_messages(message, error=True)
         self._messages.setToolTip(detail)
 
@@ -964,11 +980,18 @@ class DatacubeLoadDialog(QDialog):
         self._preview_caption.setText(caption)
 
     # ---------------------------------------------------------------- done
-    def _on_add(self) -> None:
+    def _on_add(self) -> bool:
+        """Apply: request the layers and keep the dialog open. Whether it loaded."""
         if self._store is None:
-            return
+            return False
         uri = self.build_uri()
         combine = not self._split_check.isChecked()
         if not can_load(validate(self._store, uri, combine=combine)):
-            return
+            return False
         self.layersRequested.emit((uri,) if combine else per_variable(uri))
+        return True
+
+    def _on_add_and_close(self) -> None:
+        """Add: as Apply, then close. Stays open when nothing could be loaded."""
+        if self._on_add():
+            self.accept()

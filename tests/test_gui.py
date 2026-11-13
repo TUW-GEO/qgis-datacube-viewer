@@ -487,6 +487,48 @@ def test_add_emits_one_uri_per_variable(connected) -> None:
     assert {u.dataset for u in uris} == {"conv"}
 
 
+def test_apply_loads_and_keeps_the_dialog_open(connected) -> None:
+    emitted: list[tuple] = []
+    connected.layersRequested.connect(emitted.append)
+    connected.show()
+
+    connected._apply_button.click()
+
+    assert len(emitted) == 1
+    assert connected.isVisible(), "Apply is for loading several things in a row"
+
+
+def test_add_loads_and_closes_the_dialog(connected) -> None:
+    emitted: list[tuple] = []
+    connected.layersRequested.connect(emitted.append)
+    connected.show()
+
+    connected._add_button.click()
+
+    assert len(emitted) == 1
+    assert not connected.isVisible()
+
+
+def test_add_and_apply_are_enabled_together(connected) -> None:
+    assert connected._add_button.isEnabled() and connected._apply_button.isEnabled()
+
+
+def test_add_and_apply_start_disabled(dialog) -> None:
+    assert not dialog._add_button.isEnabled() and not dialog._apply_button.isEnabled()
+
+
+def test_add_stays_open_when_there_is_nothing_to_load(dialog) -> None:
+    """No store connected: Add must not close the dialog on an empty promise."""
+    emitted: list[tuple] = []
+    dialog.layersRequested.connect(emitted.append)
+    dialog.show()
+
+    dialog._on_add_and_close()
+
+    assert emitted == []
+    assert dialog.isVisible()
+
+
 def test_add_emits_one_composite_when_splitting_is_off(connected) -> None:
     emitted: list[tuple] = []
     connected.layersRequested.connect(emitted.append)
