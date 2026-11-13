@@ -9,6 +9,7 @@ as arguments, and these tests fake all three.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import subprocess
@@ -444,9 +445,16 @@ def test_only_pip_into_qgis_own_python_is_run_by_the_dialog(tmp_path, flavour, r
     cmd = install_command(("zarr>=3",), flavour, sys.prefix, sys.executable, False)
     blocker = env.auto_install_blocker(cmd)
     if runs:
-        # The test interpreter may be a venv, whose user site is off: the one other
-        # reason that is allowed here.
-        assert blocker is None or "user site" in blocker
+        # The test interpreter stands in for QGIS's Python, and may lack what a real
+        # one has: a venv has its user site off, and a conda or pixi environment
+        # need not ship pip at all (CI's does not). Those blockers are correct
+        # answers about this interpreter, so they are allowed; any other is not.
+        without_pip = importlib.util.find_spec("pip") is None
+        assert (
+            blocker is None
+            or "user site" in blocker
+            or (without_pip and "pip is not installed" in blocker)
+        ), blocker
     else:
         assert blocker
         assert not cmd.arguments
