@@ -4,7 +4,8 @@
 * ``sliders.png``      the map and the slider sidebar for an Icechunk layer, with
                        the axis sliders and the Version section
 * ``time-slider.gif``  the whole QGIS window, with the map redrawing while the time
-                       slider steps through a year
+                       slider steps through a year, and the plugin's toolbar buttons,
+                       axis sliders and Version section boxed and labelled
 
 ``buttons.png`` is the toolbar icon strip, cut from the icon artwork, and not made
 here.
@@ -55,8 +56,8 @@ from qgis.core import (
     QgsMapSettings,
     QgsRasterLayer,
 )
-from qgis.PyQt.QtCore import QObject, QSize, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QColor, QImage, QPainter
+from qgis.PyQt.QtCore import QObject, QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
+from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen
 from qgis.PyQt.QtWidgets import QMainWindow, QWidget
 
 #: The store as typed into the dialog. ``~`` is expanded by the plugin, and keeps
@@ -69,6 +70,9 @@ GIF_FRAME_MS = 450
 #: QGIS window size for the GIF: room for the panels, the map and the sidebar.
 GIF_WINDOW = (1280, 800)
 GIF_SIDEBAR_WIDTH = 430
+#: Annotation colour: orange stands out against QGIS's greys, its selection blue
+#: and the greyscale map.
+ACCENT = QColor("#e8590c")
 
 _app: QgsApplication | None = None
 
@@ -286,6 +290,68 @@ def shot_gif(qgis: str, store: Path, out: Path, scratch: Path) -> None:
         raise SystemExit(f"QGIS did not record the GIF (exit code {result.returncode})")
 
 
+def window_rect(widget: QWidget, window: QWidget) -> QRect:
+    """``widget``'s outline in ``window``'s coordinates."""
+    return QRect(widget.mapTo(window, QPoint(0, 0)), widget.size())
+
+
+def toolbar_buttons_rect(toolbar, window: QWidget) -> QRect:
+    """Just the buttons: a toolbar in a row of its own spans the whole window."""
+    rect = QRect()
+    for action in toolbar.actions():
+        button = toolbar.widgetForAction(action)
+        if button is not None and button.isVisible():
+            rect = rect.united(window_rect(button, window))
+    return rect
+
+
+def annotate(image: QImage, notes: list[tuple[QRect, str, str]]) -> None:
+    """Box each rect and label it, on the ``side`` given: "left" or "right" of the box.
+
+    Coordinates are the window's logical ones; QPainter scales them by the image's
+    device pixel ratio, which is not 1 on every platform.
+    """
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing)
+    font = QFont(painter.font())
+    font.setBold(True)
+    font.setPointSizeF(font.pointSizeF() * 1.05)
+    painter.setFont(font)
+    metrics = QFontMetrics(font)
+    for rect, text, side in notes:
+        # Kept inside the image: a panel against the window edge would lose its
+        # outer line.
+        bounds = QRectF(0, 0, image.width(), image.height())
+        bounds = QRectF(
+            2,
+            2,
+            bounds.width() / image.devicePixelRatio() - 4,
+            bounds.height() / image.devicePixelRatio() - 4,
+        )
+        box = QRectF(rect.adjusted(-5, -4, 5, 4)).intersected(bounds)
+        painter.setPen(QPen(ACCENT, 3))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(box, 6, 6)
+
+        width = metrics.horizontalAdvance(text) + 20
+        height = metrics.height() + 10
+        gap = 18
+        middle = box.center().y()
+        if side == "right":
+            label = QRectF(box.right() + gap, middle - height / 2, width, height)
+            joint = (box.right(), label.left())
+        else:
+            label = QRectF(box.left() - gap - width, middle - height / 2, width, height)
+            joint = (label.right(), box.left())
+        painter.drawLine(int(joint[0]), int(middle), int(joint[1]), int(middle))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(ACCENT)
+        painter.drawRoundedRect(label, height / 2, height / 2)
+        painter.setPen(QColor("white"))
+        painter.drawText(label, Qt.AlignCenter, text)
+    painter.end()
+
+
 def _record_gif_in_qgis() -> None:
     """The half that runs inside QGIS: load the plugin, add the layer, step time."""
     from qgis.utils import iface
@@ -327,12 +393,47 @@ def _record_gif_in_qgis() -> None:
         if not pump(lambda: not canvas.isDrawing(), timeout=30):
             raise RuntimeError(f"the canvas never finished drawing time index {index}")
         settle(0.2)
-        frames.append(to_pil(window.grab().toImage()).quantize(colors=255))
+        image = window.grab().toImage()
+        notes = [
+            (
+                toolbar_buttons_rect(plugin._toolbar, window),
+                "Add layer · Time Travel · Slider sidebar",
+                "right",
+            ),
+            (window_rect(scrubber._body, window), "Step through sensor, time, …", "left"),
+        ]
+        if not versions.isHidden():
+            notes.append(
+                (window_rect(versions, window), "Icechunk branches, tags, snapshots", "left")
+            )
+        annotate(image, notes)
+        frames.append(to_pil(image))
 
-    frames[0].save(
+    save_gif(frames, target)
+
+
+def save_gif(frames: list, target: Path) -> None:
+    """Write ``frames`` (RGB) as a looping GIF that does not flicker.
+
+    GIF has 256 colours per frame. Quantizing each frame on its own gives each a
+    palette of its own, and dithering spreads every frame's rounding error into
+    its neighbours, so a toolbar that never moves came out a few shades different
+    in every frame. One palette for all frames and no dithering maps an unchanged
+    pixel to the same colour every time -- which also lets Pillow store only the
+    part of each frame that changed.
+    """
+    from PIL import Image
+
+    mosaic = Image.new("RGB", (frames[0].width, frames[0].height * len(frames)))
+    for index, frame in enumerate(frames):
+        mosaic.paste(frame, (0, frame.height * index))
+    palette = mosaic.quantize(colors=255, method=Image.Quantize.MEDIANCUT)
+    indexed = [frame.quantize(palette=palette, dither=Image.Dither.NONE) for frame in frames]
+
+    indexed[0].save(
         target,
         save_all=True,
-        append_images=frames[1:],
+        append_images=indexed[1:],
         duration=GIF_FRAME_MS,
         loop=0,
         optimize=True,
