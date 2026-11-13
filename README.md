@@ -121,11 +121,10 @@ print({m: u.find_spec(m) is not None for m in ("zarr", "icechunk", "netCDF4")}, 
 The plugin adds three buttons to the toolbar, and the same entries under
 **Raster → Datacube Viewer**:
 
-![The toolbar buttons](docs/img/buttons.png)
-
-1. **Add Datacube Layer…** loads a store as a layer.
-2. **Time Travel…** switches the selected layer to another Icechunk snapshot.
-3. **Datacube Panel** shows or hides the axis sliders.
+| <img src="datacube_viewer/icons/open_cube.png" width="64" alt="Add Datacube Layer icon"> | <img src="datacube_viewer/icons/history.png" width="64" alt="Time Travel icon"> | <img src="datacube_viewer/icons/cube_sliders.png" width="64" alt="Datacube Panel icon"> |
+| :---: | :---: | :---: |
+| **Add Datacube Layer…** | **Time Travel…** | **Datacube Panel** |
+| Load a datacube. | Choose an Icechunk snapshot. | Toggle the slider sidebar. |
 
 Sliders in a dock panel step through the non-spatial axes of the cube (time, sensor,
 ...) and redraw the layer as you drag. The panel opens by itself when you add a layer
@@ -139,7 +138,7 @@ history as a list with each commit's message, and the two stay in step.
 
 | Pick a store, a version and the variables | Scrub through the axes |
 | --- | --- |
-| ![The Add Datacube Layer dialog, with a preview](docs/img/load-dialog.png) | ![The axis sliders for the sensor and time axes](docs/img/sliders.png) |
+| ![The Add Datacube Layer dialog, with a preview](docs/img/load-dialog.png) | ![The axis sliders for the sensor and time axes, and the Icechunk version slider](docs/img/sliders.png) |
 
 ## Developing
 
