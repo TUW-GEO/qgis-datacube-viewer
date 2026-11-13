@@ -1,8 +1,7 @@
 # Datacube Viewer
 
-Loads multidimensional datacubes into QGIS as raster layers with multiscale
-pyramids. It works with [Icechunk](https://icechunk.io) repositories, regular Zarr
-v3 stores and NetCDF files.
+Loads multidimensional datacubes into QGIS as raster layers with multiscale pyramids.
+It works with GeoZarr, NetCDF, regular Zarr stores (v2 and v3) and even [Icechunk](https://icechunk.io) repositories.
 
 ![Dragging the time slider redraws the layer](docs/img/time-slider.gif)
 
