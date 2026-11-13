@@ -28,6 +28,7 @@ from qgis.PyQt.QtWidgets import QAction, QPushButton
 
 from . import PLUGIN_NAME
 from .core import REMOTE_PACKAGES, SUPPRESS_KEY, DatacubeError
+from .core.environment import python_too_old
 from .layeruri import ERROR_PROPERTY, INDEX_PROPERTY, PROVIDER_KEY, LayerUri
 
 #: Tab name in the QGIS log panel. Same as the display name so that a message is
@@ -47,20 +48,34 @@ def _icon(name: str) -> QIcon:
 
 
 def _format_problems() -> list[str]:
-    """Format libraries (``zarr``, ``netCDF4``) this interpreter cannot use, as report lines."""
+    """Format libraries (``zarr``, ``netCDF4``) this interpreter cannot use, as report lines.
+
+    When the Python itself is too old for zarr 3, that is the report: "found 2.10.3"
+    would suggest an upgrade that pip cannot deliver on this Python.
+    """
     problems = []
+    too_old = python_too_old("zarr>=3")
     try:
         import zarr
 
         if int(zarr.__version__.split(".")[0]) < 3:
-            problems.append(f"zarr>=3 (found {zarr.__version__})")
+            problems.append(f"zarr>=3 ({too_old or f'found {zarr.__version__}'})")
     except ImportError:
-        problems.append("zarr>=3")
+        problems.append(f"zarr>=3 ({too_old})" if too_old else "zarr>=3")
     try:
         import netCDF4  # noqa: F401
     except ImportError:
         problems.append("netCDF4")
     return problems
+
+
+def _too_old_sentence(names: list[str]) -> str:
+    """ "zarr>=3 and icechunk need Python 3.11 or newer, and QGIS runs Python 3.10." """
+    reason = python_too_old(names[0]) or ""
+    if len(names) == 1:
+        return f"{names[0]} {reason}."
+    plural = reason.replace("needs", "need", 1)
+    return f"{', '.join(names[:-1])} and {names[-1]} {plural}."
 
 
 def check_dependencies() -> list[str]:
@@ -82,7 +97,8 @@ def optional_dependencies() -> list[str]:
     try:
         import icechunk  # noqa: F401
     except ImportError:
-        missing.append("icechunk")
+        too_old = python_too_old("icechunk")
+        missing.append(f"icechunk ({too_old})" if too_old else "icechunk")
     return missing
 
 
@@ -143,7 +159,8 @@ class DatacubeViewerPlugin:
 
         setup = QAction("Install Python Dependencies…", self.iface.mainWindow())
         setup.setToolTip(
-            "Show the command that installs zarr, icechunk, fsspec and s3fs for this platform"
+            "Install zarr, netCDF4, icechunk, fsspec and s3fs, or show the command that "
+            "does it on this platform"
         )
         setup.triggered.connect(self.show_dependency_dialog)
 
@@ -250,10 +267,13 @@ class DatacubeViewerPlugin:
             # they know an optional package is absent, nagging every launch is noise.
             return
 
-        summary = ", ".join(m.split("(")[0].strip() for m in missing + optional)
+        names = [m.split("(")[0].strip() for m in missing + optional]
+        summary = ", ".join(names)
+        too_old = [name for name in names if python_too_old(name)]
         widget = self.iface.messageBar().createMessage(
             PLUGIN_NAME,
             f"Python packages not available to QGIS: {summary}. "
+            + (f"{_too_old_sentence(too_old)} " if too_old else "")
             + (
                 "The plugin cannot open stores until this is fixed."
                 if missing

@@ -22,17 +22,22 @@ FLAVOURS = [env.WINDOWS, env.MACOS, env.LINUX, env.CONDA, env.FLATPAK]
 
 
 @pytest.fixture
-def dialog(qgis_app, request):
+def dialog(qgis_app, request, monkeypatch, tmp_path):
+    """``make(...)`` builds a dialog; the constraints file goes to ``tmp_path``.
+
+    Never into the real QGIS profile: the dialog writes that file as soon as it opens.
+    """
+    import datacube_viewer.gui.dependencies as depmod
+
+    monkeypatch.setattr(depmod, "_constraints_file", lambda: tmp_path / "pins.txt")
     made = []
 
     def make(missing=("zarr>=3",), optional=(), remote=(), flavour=None, suppress=False):
         if flavour is not None:
-            import datacube_viewer.gui.dependencies as depmod
-
             real = env.install_command
             request.addfinalizer(lambda: setattr(depmod, "install_command", real))
-            depmod.install_command = lambda pkgs, f=flavour: real(
-                pkgs, f, "/fake/prefix", "/fake/prefix/bin/qgis"
+            depmod.install_command = lambda pkgs, f=flavour, **kw: real(
+                pkgs, f, "/fake/prefix", "/fake/prefix/bin/qgis", **kw
             )
         d = DependencyDialog(list(missing), list(optional), list(remote), show_suppress=suppress)
         made.append(d)
@@ -221,8 +226,12 @@ def test_windows_offers_to_show_the_shell_launcher(dialog, tmp_path) -> None:
     import datacube_viewer.gui.dependencies as depmod
 
     real = depmod.install_command
-    depmod.install_command = lambda pkgs: real(
-        pkgs, env.WINDOWS, str(root / "apps" / "Python312"), str(root / "bin" / "qgis-bin.exe")
+    depmod.install_command = lambda pkgs, **kw: real(
+        pkgs,
+        env.WINDOWS,
+        str(root / "apps" / "Python312"),
+        str(root / "bin" / "qgis-bin.exe"),
+        **kw,
     )
     try:
         d = dialog()
@@ -238,3 +247,251 @@ def test_other_platforms_have_no_launcher_button(dialog) -> None:
 
     d = dialog(flavour=env.LINUX)
     assert not [b for b in d.findChildren(QPushButton) if "file manager" in b.text()]
+
+
+# ----------------------------------------------------------------- Install now
+def _wait(predicate, timeout: float = 30.0) -> bool:
+    import time
+
+    from qgis.core import QgsApplication
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        QgsApplication.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+@pytest.fixture
+def runnable(dialog, monkeypatch):
+    """A Linux dialog whose Install now runs this test's Python, with pip swapped out.
+
+    ``run(script)`` replaces the installer's arguments by ``-c script``. Everything
+    before it is real: the blockers, the probe of the interpreter, the shadowing question.
+    """
+    import sys
+
+    import datacube_viewer.gui.dependencies as depmod
+
+    real = env.install_command
+    monkeypatch.setattr(
+        depmod,
+        "install_command",
+        lambda pkgs, **kw: real(pkgs, env.LINUX, sys.prefix, sys.executable, False, **kw),
+    )
+    monkeypatch.setattr(depmod, "auto_install_blocker", lambda command: None)
+
+    def make(script="print('Successfully installed netCDF4-1.7.2')", installed=None, **kwargs):
+        monkeypatch.setattr(
+            depmod, "launch_line", lambda command: (str(command.interpreter), ["-c", script])
+        )
+        kwargs.setdefault("missing", ("netCDF4",))
+        d = dialog(**kwargs)
+        # What the test Python really has would decide whether the "already
+        # installed" question pops up, and a modal box blocks the test forever.
+        d._installed = installed or {}
+        return d
+
+    return make
+
+
+def _status(d) -> str:
+    return d._install_status.text()
+
+
+def test_install_now_runs_and_says_to_restart(runnable) -> None:
+    d = runnable()
+    assert d._install_button.isEnabled()
+    d._install_button.click()
+    assert _wait(lambda: d._process is None and d._done)
+    assert "Restart QGIS" in _status(d)
+    assert "Successfully installed netCDF4" in d._log.toPlainText()
+    assert not d._install_button.isEnabled(), "installing twice helps nobody"
+
+
+def test_a_failed_install_says_nothing_was_installed(runnable) -> None:
+    d = runnable("import sys; print('ERROR: ResolutionImpossible'); sys.exit(1)")
+    d._install_button.click()
+    assert _wait(lambda: d._process is None and "exit code 1" in _status(d))
+    assert "Nothing was installed" in _status(d)
+    assert "never replaces" in _status(d), "a conflict needs explaining, not just a code"
+    assert d._install_button.isEnabled(), "the user may untick something and retry"
+
+
+def test_the_dialog_stays_open_while_pip_runs(runnable) -> None:
+    d = runnable("import time; time.sleep(2)")
+    d.show()
+    d._install_button.click()
+    assert d._process is not None
+    assert not d._close_button.isEnabled()
+    assert not any(box.isEnabled() for box in d._choices)
+    d.reject()
+    assert d.isVisible(), "closing midway could leave half an install behind"
+    assert _wait(lambda: d._process is None)
+    assert d._close_button.isEnabled()
+    d.reject()
+    assert not d.isVisible()
+
+
+def test_a_different_python_is_refused_before_pip_runs(runnable, monkeypatch) -> None:
+    import datacube_viewer.gui.dependencies as depmod
+
+    other = 'print(\'{"version": [3, 99], "ext_suffix": "x", "stdlib": "/s", "user_site": "/u"}\')'
+    monkeypatch.setattr(depmod, "PROBE_SCRIPT", other)
+    d = runnable("raise SystemExit('pip must not run')")
+    d._install_button.click()
+    assert d._process is None
+    assert "is not the Python QGIS runs" in _status(d)
+    assert "Python 3.99" in _status(d)
+    assert d._log.isHidden()
+
+
+def test_replacing_an_installed_package_needs_a_yes(runnable, monkeypatch) -> None:
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    import datacube_viewer.gui.dependencies as depmod
+
+    asked = []
+    monkeypatch.setattr(
+        depmod.QMessageBox,
+        "question",
+        lambda *args, **kwargs: asked.append(args[2]) or QMessageBox.No,
+    )
+    d = runnable(
+        "raise SystemExit('pip must not run')",
+        installed={"zarr": ("zarr", "2.10.3", "/usr/lib/python3/dist-packages")},
+        missing=("zarr>=3 (found 2.10.3)",),
+    )
+    d._install_button.click()
+    assert asked and "zarr 2.10.3" in asked[0]
+    assert "pip uninstall zarr" in asked[0], "say how to undo it"
+    assert d._process is None
+    assert "Nothing was installed" in _status(d)
+
+
+def test_flatpak_keeps_the_copy_paste_route(dialog) -> None:
+    d = dialog(flavour=env.FLATPAK)
+    assert not d._install_button.isEnabled()
+    assert "not available" in _status(d)
+
+
+@pytest.fixture
+def conda_dialog(dialog, monkeypatch, tmp_path):
+    """A conda dialog in a writable fake environment, with a conda that is a Python script."""
+    import sys
+
+    import datacube_viewer.gui.dependencies as depmod
+
+    (tmp_path / "env" / "conda-meta").mkdir(parents=True)
+    conda = tmp_path / "conda"
+    conda.write_text("")
+    monkeypatch.setattr(env, "find_conda", lambda prefix=None, **kw: conda)
+    real = env.install_command
+    monkeypatch.setattr(
+        depmod,
+        "install_command",
+        lambda pkgs, **kw: real(pkgs, env.CONDA, str(tmp_path / "env"), sys.executable, **kw),
+    )
+
+    def make(script="print('done')", **kwargs):
+        monkeypatch.setattr(depmod, "launch_line", lambda command: (sys.executable, ["-c", script]))
+        kwargs.setdefault("missing", ("netCDF4",))
+        return dialog(**kwargs)
+
+    return make
+
+
+def test_conda_installs_into_the_environment_without_pip_machinery(conda_dialog, tmp_path) -> None:
+    d = conda_dialog("print('Executing transaction: done')")
+    assert d._install_button.isEnabled()
+    assert "conda install -p" in d._command_box.toPlainText()
+    assert "--freeze-installed" in d._command_box.toPlainText()
+    assert not (tmp_path / "pins.txt").exists(), "conda has no constraints file"
+    d._install_button.click()
+    assert _wait(lambda: d._process is None and d._done)
+    assert "Restart QGIS" in _status(d)
+    assert "Executing transaction" in d._log.toPlainText()
+
+
+def test_conda_failing_to_solve_says_nothing_changed(conda_dialog) -> None:
+    d = conda_dialog("import sys; print('UnsatisfiableError: The following specs'); sys.exit(1)")
+    d._install_button.click()
+    assert _wait(lambda: d._process is None and "exit code 1" in _status(d))
+    assert "conda stopped" in _status(d)
+    assert "--freeze-installed forbids" in _status(d)
+    assert "pip" not in _status(d)
+    assert d._install_button.isEnabled(), "the user may untick something and retry"
+
+
+def test_conda_is_not_run_when_none_can_be_found(dialog, monkeypatch, tmp_path) -> None:
+    (tmp_path / "env" / "conda-meta").mkdir(parents=True)
+    monkeypatch.setattr(env, "find_conda", lambda prefix=None, **kw: None)
+    d = dialog(flavour=env.CONDA)
+    assert not d._install_button.isEnabled()
+    assert "No conda" in _status(d)
+
+
+def test_a_pixi_environment_keeps_the_copy_paste_route(dialog, monkeypatch, tmp_path) -> None:
+    import datacube_viewer.gui.dependencies as depmod
+
+    (tmp_path / "conda-meta").mkdir()
+    (tmp_path / "conda-meta" / "pixi").write_text("")
+    real = env.install_command
+    monkeypatch.setattr(
+        depmod,
+        "install_command",
+        lambda pkgs, **kw: real(pkgs, env.CONDA, str(tmp_path), "/x/bin/qgis", **kw),
+    )
+    d = dialog(missing=("zarr>=3",))
+    assert not d._install_button.isEnabled()
+    assert "pixi" in _status(d)
+
+
+def test_nothing_missing_means_nothing_to_install(dialog) -> None:
+    d = dialog(missing=(), flavour=env.LINUX)
+    assert not d._install_button.isEnabled()
+    assert "already installed" in _status(d)
+
+
+def test_the_constraints_file_is_written_for_the_ticked_packages(dialog, tmp_path) -> None:
+    d = dialog(missing=("zarr>=3", "netCDF4"), flavour=env.LINUX)
+    pins = (tmp_path / "pins.txt").read_text()
+    assert f"--constraint {tmp_path / 'pins.txt'}" in d._command_box.toPlainText()
+    assert "\nnumpy==" in pins, "numpy is the package this exists to protect"
+    assert "\nzarr=" not in pins and "\nnetCDF4=" not in pins
+
+
+# -------------------------------------------------------- Python too old
+@pytest.fixture
+def python_310(monkeypatch):
+    """Pretend QGIS runs Python 3.10, as the system QGIS on Ubuntu 22.04 does."""
+    import datacube_viewer.gui.dependencies as depmod
+
+    monkeypatch.setattr(
+        depmod, "python_too_old", lambda package: env.python_too_old(package, (3, 10))
+    )
+
+
+def test_zarr_is_not_offered_on_a_python_too_old_for_it(dialog, python_310) -> None:
+    d = dialog(missing=("zarr>=3", "netCDF4"), optional=("icechunk",), flavour=env.LINUX)
+    zarr_box = d._choices[0]
+    assert not zarr_box.isEnabled() and not zarr_box.isChecked()
+    assert "Python 3.11" in zarr_box.text() and "3.10" in zarr_box.text()
+    assert d._wanted == ("netCDF4",), "NetCDF still installs on 3.10"
+
+
+def test_a_python_too_old_points_to_the_readme(dialog, python_310) -> None:
+    d = dialog(missing=("zarr>=3", "netCDF4"), flavour=env.LINUX)
+    headline = d.findChildren(type(d._install_status))[0].text()
+    assert env.README_CONDA_FORGE_URL in headline
+    assert "conda create" not in headline, "the command itself lives in the README"
+
+
+def test_nothing_installable_says_why(dialog, python_310) -> None:
+    d = dialog(missing=("zarr>=3",), optional=("icechunk",), flavour=env.LINUX)
+    assert not d._install_button.isEnabled()
+    assert "None of the missing packages can be installed" in _status(d)
+    assert d._command_box.toPlainText().startswith("# nothing missing can be installed")
+    assert not d._copy_button.isEnabled()

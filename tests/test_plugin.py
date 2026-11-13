@@ -153,6 +153,22 @@ def test_dependencies_are_present_in_this_environment() -> None:
     assert check_dependencies() == []
 
 
+def test_a_python_too_old_for_zarr_is_reported_as_such(monkeypatch) -> None:
+    """On QGIS's Python 3.10 "found 2.10.3" would suggest an upgrade pip cannot do."""
+    import datacube_viewer.plugin as plugin_module
+    from datacube_viewer.core import environment as env
+
+    monkeypatch.setattr(
+        plugin_module, "python_too_old", lambda package: env.python_too_old(package, (3, 10))
+    )
+    monkeypatch.setitem(sys.modules, "zarr", None)  # import zarr -> ImportError
+    problems = plugin_module._format_problems()
+    assert problems[0] == "zarr>=3 (needs Python 3.11 or newer, and QGIS runs Python 3.10)"
+    assert plugin_module._too_old_sentence(["zarr>=3", "icechunk"]) == (
+        "zarr>=3 and icechunk need Python 3.11 or newer, and QGIS runs Python 3.10."
+    )
+
+
 def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
     plugin.initGui()
     assert is_registered()
