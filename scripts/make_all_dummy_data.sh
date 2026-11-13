@@ -55,6 +55,11 @@ make cube.zarr --sensors
 make shuffled.zarr --dim-order shuffled --sensors
 make nested.zarr --nest 3 --sensors
 
+# --- Icechunk (same content as the Zarr stores above) ------------------------
+make dummy.icechunk
+make cube.icechunk --sensors
+make nested.icechunk --nest 3 --sensors
+
 # --- NetCDF (same content as the Zarr stores above) --------------------------
 make dummy.nc
 make dem.nc --source copernicus

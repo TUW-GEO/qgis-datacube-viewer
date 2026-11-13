@@ -7,9 +7,11 @@
 #     "tifffile>=2024.1",
 #     "imagecodecs>=2024.1",
 #     "netCDF4>=1.7",
+#     "icechunk>=1.0",
 # ]
 # ///
-"""Generate a small dummy geospatial dataset as GeoZarr or NetCDF-4, for testing
+"""Generate a small dummy geospatial dataset as GeoZarr, an Icechunk repository or
+NetCDF-4, for testing
 visualization tooling.
 
 The store models a small alpine area around Innsbruck (Austria) and contains:
@@ -71,9 +73,13 @@ Usage::
     uv run --script scripts/make_dummy_data.py -o dummy.nc            # NetCDF-4, from the suffix
     uv run --script scripts/make_dummy_data.py --format netcdf --nest 3 --sensors
     uv run --script scripts/make_dummy_data.py -o shared.nc --levels 1 --shared-coords
+    uv run --script scripts/make_dummy_data.py -o dummy.icechunk      # Icechunk, from the suffix
+    uv run --script scripts/make_dummy_data.py --format icechunk --nest 3 --sensors
 
-``--format`` chooses ``zarr`` or ``netcdf``; left out, a ``.nc``/``.nc4``/``.cdf``
-output means NetCDF and anything else Zarr. Both formats get the same terrain,
+``--format`` chooses ``zarr``, ``icechunk`` or ``netcdf``; left out, a ``.nc``/``.nc4``/
+``.cdf`` output means NetCDF, ``.icechunk`` means Icechunk and anything else Zarr. An
+Icechunk output is a local repository whose ``main`` branch holds a single commit with
+the same Zarr v3 content as the plain store. All formats get the same terrain,
 variables, levels, nesting and axis orders, so they can be compared pixel for pixel.
 NetCDF attributes are flat: structured metadata (``multiscales``, ``zarr_conventions``)
 is stored as JSON text, ``_CRS`` is omitted (``spatial_ref`` carries the CRS) and every
@@ -720,6 +726,26 @@ class ZarrBackend(Backend):
             zarr.consolidate_metadata(self.path, zarr_format=self.zarr_format)
 
 
+class IcechunkBackend(ZarrBackend):
+    """A Zarr v3 hierarchy inside a local Icechunk repository, committed to ``main``."""
+
+    def __init__(self, chunk: int, dim_order: DimOrder | None = None):
+        super().__init__(chunk, dim_order, zarr_format=3)
+        self.session = None
+
+    def open(self, path):
+        import icechunk
+
+        self.path = path
+        repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(path)))
+        self.session = repo.writable_session("main")
+        return zarr.open_group(self.session.store, mode="w", zarr_format=3)
+
+    def close(self):
+        # Icechunk keeps its own manifests; there is no consolidated metadata to write.
+        self.session.commit("Create dummy dataset with make_dummy_data.py")
+
+
 def netcdf_attr(value):
     """Make an attribute value storable by NetCDF, whose attributes are flat.
 
@@ -962,8 +988,9 @@ def write_variables(
         )
 
 
-FORMATS = ("zarr", "netcdf")
+FORMATS = ("zarr", "icechunk", "netcdf")
 NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf")
+ICECHUNK_SUFFIXES = (".icechunk",)
 
 
 def resolve_format(requested: str | None, output: Path | None) -> str:
@@ -972,6 +999,8 @@ def resolve_format(requested: str | None, output: Path | None) -> str:
         return requested
     if output is not None and output.suffix.lower() in NETCDF_SUFFIXES:
         return "netcdf"
+    if output is not None and output.suffix.lower() in ICECHUNK_SUFFIXES:
+        return "icechunk"
     return "zarr"
 
 
@@ -984,13 +1013,16 @@ def main() -> None:
         "--output",
         type=Path,
         default=None,
-        help="output path (default: dummy.zarr, or dummy.nc for --format netcdf)",
+        help="output path (default: dummy.zarr, dummy.icechunk or dummy.nc by --format)",
     )
     parser.add_argument(
         "--format",
         choices=FORMATS,
         default=None,
-        help="output format (default: from the output suffix; .nc means netcdf, else zarr)",
+        help=(
+            "output format (default: from the output suffix; .nc means netcdf, "
+            ".icechunk means icechunk, else zarr)"
+        ),
     )
     parser.add_argument("--source", choices=["synthetic", "copernicus"], default="synthetic")
     parser.add_argument("--size", type=int, default=256, help="pixels per side at full resolution")
@@ -1057,9 +1089,13 @@ def main() -> None:
 
     fmt = resolve_format(args.format, args.output)
     if args.output is None:
-        args.output = Path("dummy.nc" if fmt == "netcdf" else "dummy.zarr")
+        args.output = Path(
+            {"netcdf": "dummy.nc", "icechunk": "dummy.icechunk"}.get(fmt, "dummy.zarr")
+        )
     if fmt == "netcdf" and args.zarr_format is not None:
         parser.error("--zarr-format only applies to the zarr format")
+    if fmt == "icechunk" and args.zarr_format not in (None, 3):
+        parser.error("icechunk stores are always Zarr v3")
     if args.shared_coords and fmt != "netcdf":
         parser.error("--shared-coords only applies to the netcdf format")
     zarr_format = args.zarr_format or 3
@@ -1100,6 +1136,8 @@ def main() -> None:
     dim_order = DimOrder(args.dim_order, args.seed)
     if fmt == "netcdf":
         writer: Backend = NetcdfBackend(args.chunk, dim_order)
+    elif fmt == "icechunk":
+        writer = IcechunkBackend(args.chunk, dim_order)
     else:
         writer = ZarrBackend(args.chunk, dim_order, zarr_format)
     root = writer.open(args.output)
@@ -1190,7 +1228,7 @@ def main() -> None:
         size = sum(p.stat().st_size for p in args.output.rglob("*") if p.is_file())
     else:
         size = args.output.stat().st_size
-    kind = f"zarr v{zarr_format}" if fmt == "zarr" else "NetCDF-4"
+    kind = {"netcdf": "NetCDF-4", "icechunk": "icechunk"}.get(fmt, f"zarr v{zarr_format}")
     print(
         f"Wrote {args.output} ({kind}, {args.levels} level(s), "
         f"{grid.crs.to_string()}, {size / 1024:.0f} KiB)"
