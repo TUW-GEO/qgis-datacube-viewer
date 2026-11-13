@@ -48,7 +48,7 @@ about=Load GeoZarr datacubes, plain Zarr stores, NetCDF files and Icechunk repos
 tags=geozarr,zarr,netcdf,datacube,icechunk,raster,multiscale,pyramid,cog,earth observation
 
 category=Raster
-icon=icons/open_cube.svg
+icon=icons/open_cube.png
 experimental=True
 deprecated=False
 server=False

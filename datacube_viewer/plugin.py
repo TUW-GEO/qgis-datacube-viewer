@@ -133,11 +133,11 @@ class DatacubeViewerPlugin:
         if not self._registered:
             self._log(f"Failed to register the '{PROVIDER_KEY}' data provider.", Qgis.Critical)
 
-        add = QAction(_icon("open_cube.svg"), "Add Datacube Layer…", self.iface.mainWindow())
+        add = QAction(_icon("open_cube.png"), "Add Datacube Layer…", self.iface.mainWindow())
         add.setToolTip("Load a datacube from a Zarr store, NetCDF file or Icechunk repository")
         add.triggered.connect(self.show_load_dialog)
 
-        travel = QAction(_icon("history.svg"), "Time Travel…", self.iface.mainWindow())
+        travel = QAction(_icon("history.png"), "Time Travel…", self.iface.mainWindow())
         travel.setToolTip("Switch the selected datacube layer to a different Icechunk snapshot")
         travel.triggered.connect(self.show_snapshot_dialog)
 
@@ -178,7 +178,7 @@ class DatacubeViewerPlugin:
         """Add the plugin's page to Settings → Options (QGIS's own plugin-settings hook)."""
         from .gui import DatacubeOptionsFactory
 
-        self._options_factory = DatacubeOptionsFactory(_icon("cube_sliders.svg"))
+        self._options_factory = DatacubeOptionsFactory(_icon("cube_sliders.png"))
         self.iface.registerOptionsWidgetFactory(self._options_factory)
 
     def _add_cube_dock(self) -> None:
@@ -204,7 +204,7 @@ class DatacubeViewerPlugin:
         # The dock's own toggle, so it appears in View → Panels and in the toolbar
         # with the same checked state rather than as a second, divergent control.
         toggle = self._cube_dock.toggleViewAction()
-        toggle.setIcon(_icon("cube_sliders.svg"))
+        toggle.setIcon(_icon("cube_sliders.png"))
         toggle.setText("Datacube Panel")
         toggle.setToolTip("Show the axis sliders for the selected datacube layer")
         self.iface.addPluginToRasterMenu(PLUGIN_NAME, toggle)

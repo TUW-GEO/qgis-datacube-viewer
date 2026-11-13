@@ -1,17 +1,10 @@
 # Datacube Viewer
 
-Loads GeoZarr datacubes into QGIS as raster layers with multiscale
+Loads multidimensional datacubes into QGIS as raster layers with multiscale
 pyramids. It works with [Icechunk](https://icechunk.io) repositories, regular Zarr
 v3 stores and NetCDF files.
 
 ![Dragging the time slider redraws the layer](docs/img/time-slider.gif)
-
-Sliders in a dock panel step through the non-spatial axes of the cube (time, sensor,
-...) and redraw the layer as you drag.
-
-| Pick a store, a version and the variables | Scrub through the axes |
-| --- | --- |
-| ![The Add Datacube Layer dialog, with a preview](docs/img/load-dialog.png) | ![The axis sliders for the sensor and time axes](docs/img/sliders.png) |
 
 ## Supported formats
 
@@ -42,43 +35,74 @@ NetCDF specifics:
 - While a file is open in QGIS, other programs cannot write to it on Windows.
 - A plain `https://` link to a `.nc` file cannot be read in place; download it.
 
-## Installing
 
-**Requires QGIS 3.40 LTR or newer.** `zarr` 3 needs Python ≥ 3.11
-and `icechunk` needs ≥ 3.12, and 3.40 LTR is the first release whose standard builds
-ship Python 3.12. Check with `import sys; print(sys.version)` in
-**Plugins → Python Console**.
+## Installation
 
-### 1. The plugin
+The QGIS python ecosystem is fragile with respect to versions of python, QGIS, the installed operating system and package dependencies.
 
-**Plugins → Manage and Install Plugins → Install from ZIP**, and pick
-`datacube_viewer-<version>.zip` (`pixi run build` makes one).
+On Windows and macOS, QGIS comes with its own Python. Dependencies need to be installed with the bundled `pip` to take effect in QGIS. Depending on your system, there still might be dependency collisions. In that case use [QGIS from conda-forge][conda].
+On Linux, QGIS uses the system Python. Installation of the plugin dependencies may or may not work depending on your system. We do not recommend tinkering with the system python packages and instead recommend using [QGIS from conda-forge][conda].
 
-It is marked experimental, so tick **Settings → Show also experimental plugins**
-if it does not show up in the list.
+**Requirements:**
+What you need depends on the formats you want to open and on your operating system.
+The plugin itself requires QGIS 3.40 LTR or newer on every system.
 
-### 2. The Python packages
+| Plugin feature | Python version | Windows, macOS | Linux |
+| --- | --- | --- | --- |
+| **NetCDF** (`netCDF4`) | whatever QGIS runs on | QGIS 3.40 LTR or newer | QGIS 3.40 or newer; depends on distribution, we recommend using [QGIS from conda-forge][conda] |
+| **Zarr** (`zarr >= 3`) | ≥ 3.11 | QGIS 3.40 LTR or newer (official installers bundle Python 3.12) | Depends on distribution, we recommend using [QGIS from conda-forge][conda] |
+| **Icechunk** (`icechunk`) | ≥ 3.12 | QGIS 3.40 LTR or newer (official installers bundle Python 3.12) | Depends on distribution, we recommend using [QGIS from conda-forge][conda] |
 
-The Plugin Manager unzips plugins; it never runs pip. So this step is manual. No single
-package is mandatory, but you need at least one of `zarr` or `netCDF4` — each adds the
-formats listed above:
+Check your QGIS python version with `import sys; print(sys.version)` in **Plugins → Python Console**.
 
-| Package | What it buys you |
+
+### Install the plugin
+
+Navigate to **Plugins → Manage and Install Plugins → All**, and search for `Datacube Viewer`.
+Press `Install Experimental Plugin` to install. You might need to activate **Settings → Show also experimental plugins** if it does not show up in the list.
+The plugin can also be installed through the `.zip` files available in the GitHub releases.
+
+
+### Install plugin dependencies
+
+The Plugin Manager will prompt you to install these optional dependencies. You can choose to install only what's needed for your usecase or all of the blow for full feature support:
+
+| Package | Needed to support |
 | --- | --- |
-| `zarr>=3` | Zarr stores, and Icechunk (which is built on it). |
+| `zarr>=3` | Zarr stores. |
 | `icechunk` | Icechunk repositories, and their branches, tags and snapshots. |
 | `netCDF4` | NetCDF files. |
 | `fsspec` + `s3fs` | Plain Zarr on `s3://`, `gs://` and `az://`. `http(s)://` needs neither — the plugin reads it directly. For `gs://` use `gcsfs` and for `az://` use `adlfs` in place of `s3fs`. |
 
-The plugin detects your environment and shows the command with your packages already
-filled in: **Raster → Datacube Viewer → Install Python Dependencies…**. For reference:
+You can also install the dependenceis via **Raster → Datacube Viewer → Install Python Dependencies…**.
+It detects your environment, shows the command with your packages filled in, and on
+Windows, macOS and Linux (system QGIS) its **Install now** button runs that command for
+you. Restart QGIS afterwards. Install now never changes what QGIS's Python already has:
+
+- It installs with `pip install --user`, into your user site-packages, never into
+  QGIS's or the system's own.
+- A constraints file pins every package QGIS's Python already has. pip can add
+  packages, but not upgrade or downgrade one QGIS depends on (numpy in particular: zarr
+  3.2 and newer want numpy 2, which would break GDAL's Python bindings built against
+  numpy 1). It picks older versions of the new packages instead, and if none fit, it
+  installs nothing and says so.
+- Wheels only, so nothing gets compiled.
+- Before pip runs, the interpreter has to confirm it is the one QGIS runs.
+- Packages that need a newer Python than your QGIS has are not offered (see
+  [below](#when-qgiss-python-is-too-old-qgis-from-conda-forge)).
+- If you ask for something that is already installed in an older version (zarr 2 from
+  your distribution, say), it asks first, because the new copy then takes precedence for
+  every program using that Python.
+
+In a conda environment the dialog only shows the command.
+For reference, the commands without the constraints file:
 
 | | Where to run it | Command |
 | --- | --- | --- |
 | **Windows** | **OSGeo4W Shell** (Start menu → the QGIS folder). *Not* `cmd` or PowerShell — they have a different Python on `PATH`. | `python -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
 | **macOS** | **Terminal** (Applications → Utilities) | `/Applications/QGIS.app/Contents/MacOS/bin/python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
-| **Linux** (system QGIS) | any terminal | `python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
-| **conda / pixi** | a terminal with the env activated | `conda install -c conda-forge "zarr>=3" netcdf4 fsspec s3fs` then `python -m pip install icechunk` |
+| **Linux** (system QGIS) | any terminal | not recommended! `/usr/bin/python3 -m pip install --user "zarr>=3" netCDF4 icechunk fsspec s3fs` |
+| **conda / pixi** | a terminal with the env activated | `conda install -c conda-forge "zarr>=3" netcdf4 icechunk fsspec s3fs` |
 
 Drop what you do not need — each package adds one kind of store; you need at least one of `zarr` or `netCDF4`.
 
@@ -91,21 +115,31 @@ import sys, importlib.util as u
 print({m: u.find_spec(m) is not None for m in ("zarr", "icechunk", "netCDF4")}, sys.executable)
 ```
 
-Notes that catch people out:
 
-- **A bare `python3` on macOS is the wrong Python.** QGIS.app bundles its own; the
-  absolute path is required. Use `QGIS-LTR.app` for the LTR build.
-- **Debian, Ubuntu and Fedora refuse the plain command** (PEP 668:
-  `error: externally-managed-environment`). Add `--break-system-packages` — it only
-  affects your own `~/.local` — or install QGIS from conda-forge instead.
-- **Flatpak QGIS is sandboxed** and has no supported way to add Python packages. Use a
-  distribution package or conda-forge.
+## Usage
 
-## Using it
+The plugin adds three buttons to the toolbar, and the same entries under
+**Raster → Datacube Viewer**:
 
-**Raster → Datacube Viewer → Add Datacube Layer…**
+![The toolbar buttons](docs/img/buttons.png)
 
-**Raster → Datacube Viewer → Time Travel…**
+1. **Add Datacube Layer…** loads a store as a layer.
+2. **Time Travel…** switches the selected layer to another Icechunk snapshot.
+3. **Datacube Panel** shows or hides the axis sliders.
+
+Sliders in a dock panel step through the non-spatial axes of the cube (time, sensor,
+...) and redraw the layer as you drag. The panel opens by itself when you add a layer
+from the dialog. To stop that, untick **Automatically open slider sidebar** under
+**Settings → Options → Datacube Viewer**, and open the panel from the toolbar or
+**Raster → Datacube Viewer → Datacube Panel** when you want it.
+
+For an Icechunk layer the panel also has a **Version** section: follow a branch or
+tag, or step through the snapshots with a slider. **Time Travel…** shows the same
+history as a list with each commit's message, and the two stay in step.
+
+| Pick a store, a version and the variables | Scrub through the axes |
+| --- | --- |
+| ![The Add Datacube Layer dialog, with a preview](docs/img/load-dialog.png) | ![The axis sliders for the sensor and time axes](docs/img/sliders.png) |
 
 ## Developing
 

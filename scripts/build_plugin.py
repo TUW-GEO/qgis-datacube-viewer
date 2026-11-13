@@ -43,6 +43,7 @@ EXCLUDE = (
     ".pytest_cache",
     ".DS_Store",
     "*.swp",
+    "old",
 )
 
 #: Files that must exist in the archive or QGIS will reject the plugin.
@@ -314,7 +315,7 @@ def verify(archive: Path, expected_version: str | None = None) -> None:
                 f"Archive reports version {packaged!r} but {expected_version!r} was built"
             )
         print(f"  verified: packaged version {packaged}")
-    if not any(name.endswith(".svg") for name in names):
+    if not any(name.endswith((".svg", ".png")) for name in names):
         print("  warning: no icons were packaged")
     print(f"  verified: {len(names)} entries, top-level dir {PACKAGE}/")
 
