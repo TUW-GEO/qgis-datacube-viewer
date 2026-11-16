@@ -23,6 +23,7 @@ import contextlib
 import importlib.util
 import os
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from qgis.core import Qgis, QgsMessageLog, QgsProject, QgsRasterLayer, QgsSettings
 from qgis.PyQt.QtCore import Qt
@@ -33,6 +34,9 @@ from . import PLUGIN_NAME
 from .core import REMOTE_PACKAGES, SUPPRESS_KEY, DatacubeError
 from .core.environment import python_too_old
 from .layeruri import ERROR_PROPERTY, INDEX_PROPERTY, PROVIDER_KEY, LayerUri
+
+if TYPE_CHECKING:
+    from .gui import DroppedStore
 
 #: Tab name in the QGIS log panel. Same as the display name so that a message is
 #: traceable to this plugin rather than to one of the similarly named others.
@@ -399,17 +403,24 @@ class DatacubeViewerPlugin:
         self._load_dialog.raise_()
         self._load_dialog.activateWindow()
 
-    def open_dropped(self, paths: Sequence[str]) -> None:
-        """Open stores dropped onto QGIS: the first in the load dialog, the rest listed.
+    def open_dropped(self, stores: Sequence[DroppedStore]) -> None:
+        """Open the stores of one drop onto QGIS, each as its kind's drop action says.
 
-        The dialog rather than straight onto the map, for the reason QGIS shows its
-        own sublayer picker for a multi-layer file: a store has datasets and variables
-        to choose from, and a NetCDF with forty variables should not land as forty
-        layers because it was dragged in. Every further store of the same drop is put
-        at the top of the dialog's Location list, since each needs its own choice.
+        "all-layers" stores go straight onto the map. "open-dialog" stores share the
+        one load dialog: the first is connected to, and every further one is put at
+        the top of its Location list, since each needs its own choice of variables.
         """
-        if not paths:
-            return
+        to_dialog = [store.path for store in stores if store.action == "open-dialog"]
+        made: list[QgsRasterLayer] = []
+        for store in stores:
+            if store.action == "all-layers":
+                made.extend(self.add_all_layers(store.path, store.kind))
+        if made:
+            self._reveal(made)
+        if to_dialog:
+            self._open_in_dialog(to_dialog)
+
+    def _open_in_dialog(self, paths: Sequence[str]) -> None:
         self.show_load_dialog()
         if self._load_dialog is None:  # dependency dialog shown instead
             return
@@ -424,20 +435,75 @@ class DatacubeViewerPlugin:
                 duration=8,
             )
 
+    def add_all_layers(self, store_uri: str, kind: str | None = None) -> list[QgsRasterLayer]:
+        """Put every variable of every dataset on the map, one group per dataset.
+
+        The layers are the ones Add in the dialog makes when every variable is ticked
+        and nothing else is touched: one single-band layer per variable, the first
+        slice of every axis, and for Icechunk the ``main`` branch. A variable missing
+        from some pyramid levels is left out, as the dialog cannot select it either.
+
+        On the GUI thread, like :meth:`add_layers`, which opens each layer's store
+        there anyway; a dropped store is local, and describing it needs PROJ, which
+        may only be entered from the main thread.
+        """
+        from .core import describe_store, open_store
+        from .layeruri import per_variable
+
+        try:
+            store = describe_store(open_store(store_uri, kind=kind))  # type: ignore[arg-type]
+        except DatacubeError as exc:
+            self._report_unopened(store_uri, exc.detailed)
+            return []
+        except Exception as exc:
+            self._report_unopened(store_uri, repr(exc))
+            return []
+
+        made: list[QgsRasterLayer] = []
+        for dataset in store.datasets:
+            if not dataset.variable_names:
+                continue
+            uri = LayerUri(
+                store_uri=store_uri,
+                dataset=dataset.path,
+                snapshot_id=store.snapshot_id,
+                bands=tuple(dataset.variable_names),
+                kind=store.kind,
+            )
+            made.extend(self.add_layers(per_variable(uri)))
+        if not made and not any(dataset.variable_names for dataset in store.datasets):
+            self._report_unopened(store_uri, "it holds no variable that can be shown on a map")
+        return made
+
+    def _report_unopened(self, store_uri: str, detail: str) -> None:
+        self._log(f"Could not open {store_uri}: {detail}", Qgis.Critical)
+        self.iface.messageBar().pushMessage(
+            PLUGIN_NAME,
+            f"Could not open {os.path.basename(store_uri)}: {detail}",
+            level=Qgis.Critical,
+            duration=0,
+        )
+
     def _on_dialog_closed(self, *_args) -> None:
         self._load_dialog = None
 
     def _on_layers_requested(self, uris: Sequence[LayerUri]) -> None:
         """The dialog's Add layer: put the layers on the map, then open the sliders.
 
-        Only this path opens the dock. A project being read or a script calling
-        :meth:`add_layers` is not someone who just asked to look at a cube, and a
-        panel that opens then is the one ``_add_cube_dock`` keeps hidden at startup.
+        Only this path and a drop open the dock. A project being read or a script
+        calling :meth:`add_layers` is not someone who just asked to look at a cube,
+        and a panel that opens then is the one ``_add_cube_dock`` keeps hidden at
+        startup.
         """
+        made = self.add_layers(uris)
+        if made:
+            self._reveal(made)
+
+    def _reveal(self, made: Sequence[QgsRasterLayer]) -> None:
+        """Open the sliders on new layers someone just asked to look at, if wanted."""
         from .gui import opens_automatically
 
-        made = self.add_layers(uris)
-        if made and self._cube_dock is not None and opens_automatically():
+        if self._cube_dock is not None and opens_automatically():
             self._cube_dock.reveal(made)
 
     def add_layer(self, uri: LayerUri) -> None:

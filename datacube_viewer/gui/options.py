@@ -8,7 +8,7 @@ what a checkbox in the load dialog could not give.
 
 Where each setting is stored and read lives next to the code that uses it
 (:func:`~datacube_viewer.gui.axis_panel.opens_automatically`,
-:func:`~datacube_viewer.gui.drop.opens_dropped_stores`), so the plugin can ask
+:func:`~datacube_viewer.gui.drop.drop_action`), so the plugin can ask
 without importing this module's widgets.
 """
 
@@ -16,11 +16,25 @@ from __future__ import annotations
 
 from qgis.gui import QgsOptionsPageWidget, QgsOptionsWidgetFactory
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QCheckBox, QVBoxLayout, QWidget
+from qgis.PyQt.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .. import PLUGIN_NAME
 from .axis_panel import opens_automatically, set_opens_automatically
-from .drop import opens_dropped_stores, set_opens_dropped_stores
+from .drop import (
+    ACTION_LABELS,
+    DROP_KINDS,
+    KIND_LABELS,
+    drop_action,
+    drop_actions,
+    set_drop_action,
+)
 
 
 class DatacubeOptionsPage(QgsOptionsPageWidget):
@@ -35,8 +49,9 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
         self._auto_open.setToolTip(
             "\n".join(
                 (
-                    "On: Add or Apply in the Add Datacube Layer dialog also opens the",
-                    "Datacube Viewer panel with the axis sliders, on the new layer.",
+                    "On: Add or Apply in the Add Datacube Layer dialog, or a drop that",
+                    "adds layers, also opens the Datacube Viewer panel with the axis",
+                    "sliders, on the new layer.",
                     "Not for a dataset with only one slice.",
                     "",
                     "Off: the panel stays as it is. Open it from the toolbar or from",
@@ -46,25 +61,36 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
         )
         layout.addWidget(self._auto_open)
 
-        self._open_drops = QCheckBox("Open dropped Zarr, NetCDF and Icechunk with Datacube Viewer")
-        self._open_drops.setChecked(opens_dropped_stores())
-        self._open_drops.setToolTip(
+        drops = QGroupBox("Drag-and-drop behavior")
+        drops.setToolTip(
             "\n".join(
                 (
-                    "On: a Zarr store, NetCDF file or Icechunk repository dragged onto",
-                    "QGIS opens in the Add Datacube Layer dialog.",
+                    "What happens to a store dragged from the file manager onto the map,",
+                    "the Layers panel or anywhere else in the QGIS window.",
                     "",
-                    "Off: QGIS opens it as it would without this plugin, through GDAL.",
-                    "Icechunk repositories then cannot be dropped at all.",
+                    "Open the dialog: it opens already connected, to pick what to load.",
+                    "Add every variable: one layer per variable of every dataset, in a",
+                    "group per dataset, as Add in the dialog makes them.",
+                    "Leave it to QGIS: opened as without this plugin, through GDAL.",
                 )
             )
         )
-        layout.addWidget(self._open_drops)
+        form = QFormLayout(drops)
+        self._drop_actions: dict[str, QComboBox] = {}
+        for kind in DROP_KINDS:
+            combo = QComboBox()
+            for action in drop_actions(kind):
+                combo.addItem(ACTION_LABELS[action], action)
+            combo.setCurrentIndex(combo.findData(drop_action(kind)))
+            form.addRow(KIND_LABELS[kind], combo)
+            self._drop_actions[kind] = combo
+        layout.addWidget(drops)
         layout.addStretch(1)
 
     def apply(self) -> None:
         set_opens_automatically(self._auto_open.isChecked())
-        set_opens_dropped_stores(self._open_drops.isChecked())
+        for kind, combo in self._drop_actions.items():
+            set_drop_action(kind, combo.currentData())
 
 
 class DatacubeOptionsFactory(QgsOptionsWidgetFactory):

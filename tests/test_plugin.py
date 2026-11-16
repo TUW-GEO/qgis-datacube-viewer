@@ -349,15 +349,25 @@ def test_the_drop_handler_is_registered_and_withdrawn(plugin, iface) -> None:
     assert iface.drop_handlers == []
 
 
-def test_the_options_page_applies_the_drop_setting(plugin, iface) -> None:
-    from datacube_viewer.gui import opens_dropped_stores
+def test_the_options_page_applies_the_drop_actions(plugin, iface) -> None:
+    """One choice per kind, offering only the actions that kind allows."""
+    from datacube_viewer.gui import drop_action
 
     plugin.initGui()
     page = iface.options_factories[0].createWidget(None)
-    assert page._open_drops.isChecked()
-    page._open_drops.setChecked(False)
+    combos = page._drop_actions
+    assert list(combos) == ["zarr", "netcdf", "icechunk"]
+    assert all(combo.currentData() == "open-dialog" for combo in combos.values())
+    offered = [combos["icechunk"].itemData(i) for i in range(combos["icechunk"].count())]
+    assert offered == ["open-dialog", "all-layers"]
+
+    combos["netcdf"].setCurrentIndex(combos["netcdf"].findData("qgis-default"))
+    combos["icechunk"].setCurrentIndex(combos["icechunk"].findData("all-layers"))
+    assert drop_action("netcdf") == "open-dialog", "nothing is saved before Apply"
     page.apply()
-    assert not opens_dropped_stores()
+    assert drop_action("netcdf") == "qgis-default"
+    assert drop_action("icechunk") == "all-layers"
+    assert drop_action("zarr") == "open-dialog"
     page.deleteLater()
 
 
@@ -399,6 +409,67 @@ def test_a_dropped_store_opens_in_the_load_dialog(plugin, iface, store_uri, tmp_
         QThreadPool.globalInstance().waitForDone(10_000)
 
 
+def test_all_layers_puts_every_variable_of_every_dataset_on_the_map(
+    plugin, iface, store_uri
+) -> None:
+    """One group per dataset, one layer per variable, and no dialog."""
+    from datacube_viewer.core import describe_store, open_store
+
+    plugin.initGui()
+    _clear_project()
+    expected = {
+        d.path: set(d.variable_names) for d in describe_store(open_store(store_uri)).datasets
+    }
+
+    made = plugin.add_all_layers(store_uri, "icechunk")
+
+    assert plugin._load_dialog is None
+    assert len(made) == sum(len(names) for names in expected.values())
+    root = QgsProject.instance().layerTreeRoot()
+    groups = {g.name().rsplit("/", 1)[-1]: g for g in root.children() if g.nodeType() == 0}
+    for path, names in expected.items():
+        if len(names) > 1:
+            assert {layer.name() for layer in groups[path].findLayers()} == names, path
+    assert all(layer.isValid() for layer in made)
+    _clear_project()
+
+
+def test_a_store_that_cannot_be_opened_is_reported_not_raised(plugin, iface, tmp_path) -> None:
+    plugin.initGui()
+    broken = tmp_path / "broken.nc"
+    broken.write_bytes(b"not netcdf")
+    assert plugin.add_all_layers(str(broken), "netcdf") == []
+    assert any("broken.nc" in message for _, message, _ in iface.messageBar().messages)
+
+
+def test_a_mixed_drop_adds_some_stores_and_opens_the_dialog_for_the_rest(
+    plugin, iface, store_uri, tmp_path
+) -> None:
+    """Each store follows its own kind's action, all from one gesture."""
+    from datacube_viewer.gui import DroppedStore
+
+    plugin.initGui()
+    _clear_project()
+    other = tmp_path / "other.nc"
+    other.write_bytes(b"CDF\x01")
+    plugin.open_dropped(
+        [
+            DroppedStore(str(other), "netcdf", "open-dialog"),
+            DroppedStore(store_uri, "icechunk", "all-layers"),
+        ]
+    )
+    try:
+        assert QgsProject.instance().mapLayers(), "the all-layers store went onto the map"
+        assert plugin._load_dialog is not None
+        assert plugin._load_dialog._uri_combo.currentText() == str(other)
+        assert not plugin._cube_dock.isHidden(), "a drop that adds layers opens the sliders"
+    finally:
+        from qgis.PyQt.QtCore import QThreadPool
+
+        QThreadPool.globalInstance().waitForDone(10_000)
+        _clear_project()
+
+
 def test_a_drop_supersedes_a_connect_in_flight(plugin, iface, store_uri, tmp_path) -> None:
     """Connect ignores a second press while busy; a drop must not be ignored that way."""
     from qgis.PyQt.QtCore import QThreadPool
@@ -412,7 +483,9 @@ def test_a_drop_supersedes_a_connect_in_flight(plugin, iface, store_uri, tmp_pat
         dialog._uri_combo.setCurrentText(str(tmp_path / "missing"))
         dialog._on_connect()
         assert not dialog._connect_button.isEnabled(), "precondition: a connect is in flight"
-        plugin.open_dropped([store_uri])
+        from datacube_viewer.gui import DroppedStore
+
+        plugin.open_dropped([DroppedStore(store_uri, "icechunk", "open-dialog")])
         assert pump(lambda: dialog._store is not None)
         assert dialog._connected_uri == store_uri
     finally:
