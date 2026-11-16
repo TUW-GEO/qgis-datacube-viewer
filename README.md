@@ -179,6 +179,15 @@ The plugin adds three buttons to the toolbar, and the same entries under
 | **Add Datacube Layer…** | **Time Travel…** | **Datacube Panel** |
 | Load a datacube. | Choose an Icechunk snapshot. | Toggle the slider sidebar. |
 
+You can also drag a Zarr store, a NetCDF file (`.nc`, `.nc4`, `.cdf`) or an Icechunk
+repository from your file manager onto QGIS: onto the map, the Layers panel or
+anywhere else in the window. It opens in the **Add Datacube Layer** dialog, already
+connected. If you drop several stores at once, the first one opens and the others are
+listed at the top of the dialog's **Location** list. Other files you drop with them
+open in QGIS as usual. To have QGIS open Zarr and NetCDF through GDAL instead, as it
+does without this plugin, untick **Open dropped Zarr, NetCDF and Icechunk with
+Datacube Viewer** under **Settings → Options → Datacube Viewer**.
+
 Sliders in a dock panel step through the non-spatial axes of the cube (time, sensor,
 ...) and redraw the layer as you drag. The panel opens by itself when you add a layer
 from the dialog. To stop that, untick **Automatically open slider sidebar** under

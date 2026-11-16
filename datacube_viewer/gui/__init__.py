@@ -20,6 +20,12 @@ from .axis_panel import (
     slice_ranges,
 )
 from .dependencies import DependencyDialog
+from .drop import (
+    OPEN_DROPS_KEY,
+    DatacubeDropHandler,
+    opens_dropped_stores,
+    set_opens_dropped_stores,
+)
 from .load_dialog import DatacubeLoadDialog
 from .options import DatacubeOptionsFactory, DatacubeOptionsPage
 from .preview import PreviewResult, render_thumbnail, to_image
@@ -29,9 +35,11 @@ from .worker import StoreWorker
 
 __all__ = [
     "AUTO_OPEN_KEY",
+    "OPEN_DROPS_KEY",
     "REF_SWITCHES",
     "AxisScrubber",
     "DatacubeDock",
+    "DatacubeDropHandler",
     "DatacubeLoadDialog",
     "DatacubeOptionsFactory",
     "DatacubeOptionsPage",
@@ -48,8 +56,10 @@ __all__ = [
     "is_datacube_layer",
     "is_versioned_layer",
     "opens_automatically",
+    "opens_dropped_stores",
     "render_thumbnail",
     "set_opens_automatically",
+    "set_opens_dropped_stores",
     "should_restretch",
     "slice_ranges",
     "switch_ref",

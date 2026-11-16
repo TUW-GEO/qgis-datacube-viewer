@@ -85,11 +85,11 @@ def isolate_recent_stores():
 
 
 @pytest.fixture(autouse=True)
-def isolate_auto_open_panel():
-    """Start each test from the default "open the slider dock" setting.
+def isolate_options():
+    """Start each test from the defaults of the Settings → Options page.
 
-    Same reason as :func:`isolate_recent_stores`: a test that unticks the box would
-    otherwise leave the dock closed for every later test, and for the next run.
+    Same reason as :func:`isolate_recent_stores`: a test that unticks a box would
+    otherwise leave it unticked for every later test, and for the next run.
     """
     try:
         from qgis.core import QgsSettings
@@ -98,15 +98,19 @@ def isolate_auto_open_panel():
         return
 
     from datacube_viewer.gui.axis_panel import AUTO_OPEN_KEY
+    from datacube_viewer.gui.drop import OPEN_DROPS_KEY
 
     settings = QgsSettings()
-    before = settings.value(AUTO_OPEN_KEY)
-    settings.remove(AUTO_OPEN_KEY)
+    keys = (AUTO_OPEN_KEY, OPEN_DROPS_KEY)
+    before = {key: settings.value(key) for key in keys}
+    for key in keys:
+        settings.remove(key)
     yield
-    if before is None:
-        settings.remove(AUTO_OPEN_KEY)
-    else:
-        settings.setValue(AUTO_OPEN_KEY, before)
+    for key, value in before.items():
+        if value is None:
+            settings.remove(key)
+        else:
+            settings.setValue(key, value)
 
 
 @pytest.fixture(scope="session")

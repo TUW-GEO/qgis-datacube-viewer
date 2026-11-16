@@ -12,6 +12,9 @@ Everything here is about QGIS lifecycle. The rules that matter:
   PyPI packages, so this notice is the whole of the plugin's post-install setup and
   is treated as a feature rather than an error path. See
   :mod:`datacube_viewer.gui.dependencies`.
+* Files dropped onto QGIS reach the plugin through a ``QgsCustomDropHandler``,
+  which QGIS holds only by pointer: the plugin keeps the Python object alive and
+  must unregister it in :meth:`unload`. See :mod:`datacube_viewer.gui.drop`.
 """
 
 from __future__ import annotations
@@ -78,6 +81,20 @@ def _too_old_sentence(names: list[str]) -> str:
     return f"{', '.join(names[:-1])} and {names[-1]} {plural}."
 
 
+def can_open(kind: str) -> bool:
+    """Whether this interpreter has the library that reads stores of this kind.
+
+    Asked by the drop handler, so that a Zarr store dropped onto a QGIS without zarr 3
+    goes to GDAL, which reads it, rather than to a dialog that cannot.
+    """
+    library = {"zarr": "zarr", "netcdf": "netCDF4", "icechunk": "icechunk"}.get(kind)
+    if library is None:
+        return False
+    if library == "icechunk":
+        return not any(m.startswith("icechunk") for m in optional_dependencies())
+    return not any(m.startswith(library) for m in _format_problems())
+
+
 def check_dependencies() -> list[str]:
     """What blocks the plugin entirely. Empty means "good to go".
 
@@ -140,6 +157,8 @@ class DatacubeViewerPlugin:
         #: Settings → Options page. Held because QGIS keeps only a pointer to it, and
         #: ``unload`` has to hand the same object back to unregister it.
         self._options_factory = None
+        #: Drop handler, held for the same reason as the options factory.
+        self._drop_handler = None
 
     # ------------------------------------------------------------ lifecycle
     def initGui(self) -> None:
@@ -181,6 +200,7 @@ class DatacubeViewerPlugin:
 
         self._add_cube_dock()
         self._add_options_page()
+        self._add_drop_handler()
 
         # Restoring a scrubbed slice when a project is read. The indices live in a
         # layer custom property rather than the data source string (see
@@ -197,6 +217,13 @@ class DatacubeViewerPlugin:
 
         self._options_factory = DatacubeOptionsFactory(_icon("cube_sliders.png"))
         self.iface.registerOptionsWidgetFactory(self._options_factory)
+
+    def _add_drop_handler(self) -> None:
+        """Have stores dropped onto QGIS open in the load dialog rather than in GDAL."""
+        from .gui import DatacubeDropHandler
+
+        self._drop_handler = DatacubeDropHandler(self.open_dropped, can_open)
+        self.iface.registerCustomDropHandler(self._drop_handler)
 
     def _add_cube_dock(self) -> None:
         """Add the axis-slider dock, hidden until the user asks for it.
@@ -325,6 +352,10 @@ class DatacubeViewerPlugin:
             self.iface.unregisterOptionsWidgetFactory(self._options_factory)
             self._options_factory = None
 
+        if self._drop_handler is not None:
+            self.iface.unregisterCustomDropHandler(self._drop_handler)
+            self._drop_handler = None
+
         if self._cube_dock is not None:
             self._cube_dock.teardown()
             self.iface.removeDockWidget(self._cube_dock)
@@ -367,6 +398,31 @@ class DatacubeViewerPlugin:
         self._load_dialog.show()
         self._load_dialog.raise_()
         self._load_dialog.activateWindow()
+
+    def open_dropped(self, paths: Sequence[str]) -> None:
+        """Open stores dropped onto QGIS: the first in the load dialog, the rest listed.
+
+        The dialog rather than straight onto the map, for the reason QGIS shows its
+        own sublayer picker for a multi-layer file: a store has datasets and variables
+        to choose from, and a NetCDF with forty variables should not land as forty
+        layers because it was dragged in. Every further store of the same drop is put
+        at the top of the dialog's Location list, since each needs its own choice.
+        """
+        if not paths:
+            return
+        self.show_load_dialog()
+        if self._load_dialog is None:  # dependency dialog shown instead
+            return
+        first, others = paths[0], tuple(paths[1:])
+        self._load_dialog.open_location(first, others)
+        if others:
+            self.iface.messageBar().pushMessage(
+                PLUGIN_NAME,
+                f"Opened {os.path.basename(first)}. The other {len(others)} dropped "
+                "store(s) are at the top of the dialog's Location list.",
+                level=Qgis.Info,
+                duration=8,
+            )
 
     def _on_dialog_closed(self, *_args) -> None:
         self._load_dialog = None

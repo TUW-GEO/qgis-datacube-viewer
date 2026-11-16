@@ -179,6 +179,15 @@ def test_a_present_local_entry_is_left_alone(dialog, store_uri: str) -> None:
     assert dialog._uri_combo.itemData(0, Qt.DecorationRole) is None
 
 
+def test_a_present_netcdf_file_is_not_marked_missing(dialog, tmp_path) -> None:
+    """A NetCDF store is a file, not a directory."""
+    path = tmp_path / "cube.nc"
+    path.write_bytes(b"CDF\x01")
+    assert dialog.recent_is_missing(str(path)) is False
+    dialog._rewrite_recents([str(path)])
+    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is None
+
+
 def test_remote_entries_are_never_probed(dialog) -> None:
     """A probe would be credentialed network I/O, and a failure would not mean gone."""
     for uri in ("s3://bucket/x.zarr", "gs://bucket/x.zarr", "https://host/x.zarr"):

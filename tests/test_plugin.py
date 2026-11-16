@@ -77,6 +77,7 @@ class FakeIface(QObject):
         self.toolbars: list[QToolBar] = []
         self.docks: list[object] = []
         self.options_factories: list[object] = []
+        self.drop_handlers: list[object] = []
         self.active = None
 
     def mainWindow(self):
@@ -102,6 +103,13 @@ class FakeIface(QObject):
 
     def activeLayer(self):
         return self.active
+
+    def registerCustomDropHandler(self, handler):
+        self.drop_handlers.append(handler)
+
+    def unregisterCustomDropHandler(self, handler):
+        if handler in self.drop_handlers:
+            self.drop_handlers.remove(handler)
 
     def registerOptionsWidgetFactory(self, factory):
         self.options_factories.append(factory)
@@ -327,6 +335,88 @@ def test_the_options_page_reads_and_applies_the_setting(plugin, iface) -> None:
     assert not reopened._auto_open.isChecked()
     page.deleteLater()
     reopened.deleteLater()
+
+
+def test_the_drop_handler_is_registered_and_withdrawn(plugin, iface) -> None:
+    """QGIS holds the handler by pointer only; left registered, it outlives the plugin."""
+    from qgis.gui import QgsCustomDropHandler
+
+    plugin.initGui()
+    assert len(iface.drop_handlers) == 1
+    assert isinstance(iface.drop_handlers[0], QgsCustomDropHandler)
+
+    plugin.unload()
+    assert iface.drop_handlers == []
+
+
+def test_the_options_page_applies_the_drop_setting(plugin, iface) -> None:
+    from datacube_viewer.gui import opens_dropped_stores
+
+    plugin.initGui()
+    page = iface.options_factories[0].createWidget(None)
+    assert page._open_drops.isChecked()
+    page._open_drops.setChecked(False)
+    page.apply()
+    assert not opens_dropped_stores()
+    page.deleteLater()
+
+
+def test_can_open_follows_the_installed_libraries(monkeypatch) -> None:
+    import datacube_viewer.plugin as plugin_module
+
+    assert plugin_module.can_open("zarr")
+    assert plugin_module.can_open("netcdf")
+    assert not plugin_module.can_open("geotiff")
+    monkeypatch.setitem(sys.modules, "netCDF4", None)  # import netCDF4 -> ImportError
+    assert not plugin_module.can_open("netcdf")
+    assert plugin_module.can_open("zarr")
+
+
+def test_a_dropped_store_opens_in_the_load_dialog(plugin, iface, store_uri, tmp_path) -> None:
+    """The first store is connected to; the rest of the drop waits in the Location list."""
+    from qgis.core import QgsApplication
+    from qgis.PyQt.QtCore import QThreadPool
+
+    from tests.test_gui import pump
+
+    other = tmp_path / "other.nc"
+    other.write_bytes(b"CDF\x01")
+    plugin.initGui()
+    handler = iface.drop_handlers[0]
+    assert handler.handleFileDrop(store_uri)
+    assert handler.handleFileDrop(str(other))
+    QgsApplication.processEvents()
+
+    dialog = plugin._load_dialog
+    assert dialog is not None and dialog.isVisible()
+    try:
+        assert pump(lambda: dialog._store is not None), "the dialog never opened the store"
+        assert dialog._connected_uri == store_uri
+        listed = [dialog._uri_combo.itemText(i) for i in range(dialog._uri_combo.count())]
+        assert str(other) in listed
+        assert any("other 1 dropped" in message for _, message, _ in iface.messageBar().messages)
+    finally:
+        QThreadPool.globalInstance().waitForDone(10_000)
+
+
+def test_a_drop_supersedes_a_connect_in_flight(plugin, iface, store_uri, tmp_path) -> None:
+    """Connect ignores a second press while busy; a drop must not be ignored that way."""
+    from qgis.PyQt.QtCore import QThreadPool
+
+    from tests.test_gui import pump
+
+    plugin.initGui()
+    plugin.show_load_dialog()
+    dialog = plugin._load_dialog
+    try:
+        dialog._uri_combo.setCurrentText(str(tmp_path / "missing"))
+        dialog._on_connect()
+        assert not dialog._connect_button.isEnabled(), "precondition: a connect is in flight"
+        plugin.open_dropped([store_uri])
+        assert pump(lambda: dialog._store is not None)
+        assert dialog._connected_uri == store_uri
+    finally:
+        QThreadPool.globalInstance().waitForDone(10_000)
 
 
 def test_unload_stops_the_dock_hearing_about_layers(plugin, iface, store_uri: str) -> None:

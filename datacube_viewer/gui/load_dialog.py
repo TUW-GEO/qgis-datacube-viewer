@@ -464,7 +464,8 @@ class DatacubeLoadDialog(QDialog):
             parsed = parse_uri(uri)
         except Exception:
             return False  # unparseable is a different complaint; let Connect say it
-        return parsed.is_local and not os.path.isdir(parsed.path)
+        # exists, not isdir: a NetCDF store is a file.
+        return parsed.is_local and not os.path.exists(parsed.path)
 
     def _mark_missing_recents(self) -> None:
         """Grey out recent entries that are not reachable, without removing any.
@@ -587,6 +588,24 @@ class DatacubeLoadDialog(QDialog):
             # returnPressed and activated -- and _set_busy already tracks exactly
             # this state on every success and failure path.
             return
+        self._connect(uri)
+
+    def open_location(self, uri: str, others: tuple[str, ...] = ()) -> None:
+        """Connect to ``uri`` as if typed in and Connect pressed. Drops onto QGIS land here.
+
+        Unlike Connect, this does not wait for a connect already in flight: a store
+        dropped while another is opening is the user changing their mind, and the
+        worker drops the superseded result. ``others`` (the rest of a multi-store
+        drop) go to the top of the Location list, unopened, so each is one click
+        away; they are remembered as recent only once actually opened.
+        """
+        for other in reversed(others):
+            if other != uri and self._uri_combo.findText(other) < 0:
+                self._uri_combo.insertItem(0, other)
+        self._uri_combo.setCurrentText(uri)
+        self._connect(uri)
+
+    def _connect(self, uri: str) -> None:
         if uri != self._connected_uri:
             self._forget_store()
         self._set_busy(True, f"Opening {uri} …")

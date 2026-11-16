@@ -57,6 +57,7 @@ from .store import (
     list_refs,
     open_store,
     parse_uri,
+    recognize_local,
 )
 
 __all__ = [
@@ -112,6 +113,7 @@ __all__ = [
     "parse_multiscales",
     "parse_uri",
     "qgis_python",
+    "recognize_local",
     "resolve_crs",
     "select_level",
     "window_from_bounds",

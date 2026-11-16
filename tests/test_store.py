@@ -18,6 +18,7 @@ from datacube_viewer.core import (
     list_refs,
     open_store,
     parse_uri,
+    recognize_local,
 )
 from datacube_viewer.core.errors import RefNotFoundError
 from tests.fixture_store import FixtureInfo
@@ -72,6 +73,39 @@ def test_detect_kind_recognises_icechunk(store_uri: str) -> None:
 def test_detect_kind_recognises_plain_zarr(tmp_path) -> None:
     (tmp_path / "zarr.json").write_text('{"zarr_format": 3, "node_type": "group"}')
     assert detect_kind(str(tmp_path)) == "zarr"
+
+
+def test_detect_kind_still_guesses_where_recognition_declines(tmp_path) -> None:
+    """detect_kind names a kind for anything typed; only recognize_local may say None."""
+    (tmp_path / "data.bin").write_bytes(b"")
+    assert detect_kind(str(tmp_path / "data.bin")) == "netcdf"
+    assert detect_kind(str(tmp_path)) == "icechunk"
+
+
+# ---------------------------------------------------- recognition (drag and drop)
+def test_recognize_local_names_each_kind(store_uri: str, tmp_path) -> None:
+    v3 = tmp_path / "v3.zarr"
+    v3.mkdir()
+    (v3 / "zarr.json").write_text('{"zarr_format": 3, "node_type": "group"}')
+    v2 = tmp_path / "v2.zarr"
+    v2.mkdir()
+    (v2 / ".zgroup").write_text('{"zarr_format": 2}')
+    nc = tmp_path / "cube.NC"  # suffixes are matched without regard to case
+    nc.write_bytes(b"CDF\x01")
+    assert recognize_local(str(v3)) == "zarr"
+    assert recognize_local(str(v2)) == "zarr"
+    assert recognize_local(str(nc)) == "netcdf"
+    assert recognize_local(store_uri) == "icechunk"
+
+
+def test_recognize_local_declines_what_is_not_evidently_a_store(tmp_path) -> None:
+    """None hands a dropped path back to QGIS, so anything short of evidence is None."""
+    (tmp_path / "image.tif").write_bytes(b"II*\x00")
+    (tmp_path / "plain").mkdir()
+    (tmp_path / "plain" / "readme.txt").write_text("not a store")
+    assert recognize_local(str(tmp_path / "image.tif")) is None
+    assert recognize_local(str(tmp_path / "plain")) is None
+    assert recognize_local(str(tmp_path / "nope.zarr")) is None
 
 
 # ---------------------------------------------------------------------- errors

@@ -264,16 +264,35 @@ def detect_kind(uri: str) -> StoreKind:
     root = parsed.path
     if os.path.isfile(root):
         return "netcdf"
+    return recognize_local(root) or "icechunk"
+
+
+def recognize_local(path: str) -> StoreKind | None:
+    """The kind of store a local path *evidently* is, or None when it is not one.
+
+    Stricter than :func:`detect_kind`, which has to name a kind for whatever the user
+    typed and so falls back to a guess. This is for deciding whether a path is ours
+    at all, as when a file is dropped onto QGIS: a None here leaves it to QGIS's own
+    providers, so anything short of positive evidence must be None. Hence NetCDF by
+    suffix rather than "any regular file", and a directory only when it carries Zarr
+    metadata or Icechunk's layout.
+
+    Filesystem checks only, never an open: this runs on the GUI thread.
+    """
+    if os.path.isfile(path):
+        return "netcdf" if path.lower().endswith(_NETCDF_SUFFIXES) else None
+    if not os.path.isdir(path):
+        return None
     # A Zarr store announces itself with metadata at the top level.
     for marker in _ZARR_MARKERS:
-        if os.path.exists(os.path.join(root, marker)):
+        if os.path.exists(os.path.join(path, marker)):
             return "zarr"
     # Icechunk's on-disk layout. `refs` was used by 0.x, `repo` by 1.x/2.x.
-    if os.path.isdir(os.path.join(root, "snapshots")) and (
-        os.path.isdir(os.path.join(root, "refs")) or os.path.exists(os.path.join(root, "repo"))
+    if os.path.isdir(os.path.join(path, "snapshots")) and (
+        os.path.isdir(os.path.join(path, "refs")) or os.path.exists(os.path.join(path, "repo"))
     ):
         return "icechunk"
-    return "icechunk"
+    return None
 
 
 def _remote_zarr_marker(parsed: ParsedUri) -> bool:

@@ -6,8 +6,9 @@ it in the Options dialog, with the usual OK / Apply / Cancel handling. Nothing h
 writes a setting until the user applies it, which is what a settings page is for and
 what a checkbox in the load dialog could not give.
 
-Where each setting is stored and read lives in :mod:`datacube_viewer.gui.axis_panel`
-(:func:`~datacube_viewer.gui.axis_panel.opens_automatically`), so the plugin can ask
+Where each setting is stored and read lives next to the code that uses it
+(:func:`~datacube_viewer.gui.axis_panel.opens_automatically`,
+:func:`~datacube_viewer.gui.drop.opens_dropped_stores`), so the plugin can ask
 without importing this module's widgets.
 """
 
@@ -19,6 +20,7 @@ from qgis.PyQt.QtWidgets import QCheckBox, QVBoxLayout, QWidget
 
 from .. import PLUGIN_NAME
 from .axis_panel import opens_automatically, set_opens_automatically
+from .drop import opens_dropped_stores, set_opens_dropped_stores
 
 
 class DatacubeOptionsPage(QgsOptionsPageWidget):
@@ -43,10 +45,26 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
             )
         )
         layout.addWidget(self._auto_open)
+
+        self._open_drops = QCheckBox("Open dropped Zarr, NetCDF and Icechunk with Datacube Viewer")
+        self._open_drops.setChecked(opens_dropped_stores())
+        self._open_drops.setToolTip(
+            "\n".join(
+                (
+                    "On: a Zarr store, NetCDF file or Icechunk repository dragged onto",
+                    "QGIS opens in the Add Datacube Layer dialog.",
+                    "",
+                    "Off: QGIS opens it as it would without this plugin, through GDAL.",
+                    "Icechunk repositories then cannot be dropped at all.",
+                )
+            )
+        )
+        layout.addWidget(self._open_drops)
         layout.addStretch(1)
 
     def apply(self) -> None:
         set_opens_automatically(self._auto_open.isChecked())
+        set_opens_dropped_stores(self._open_drops.isChecked())
 
 
 class DatacubeOptionsFactory(QgsOptionsWidgetFactory):
