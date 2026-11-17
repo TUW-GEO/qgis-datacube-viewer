@@ -62,9 +62,11 @@ from ..core import (
     parse_uri,
 )
 from ..core.reader import RESAMPLING_METHODS, DatasetReader
+from ..core.search import SearchEntry, axis_entries, filter_matches, variable_entry
 from ..layeruri import LEVEL_STRATEGIES, LayerUri, per_variable
 from ..selection import can_load, summarise, validate
 from .preview import PreviewResult, render_thumbnail
+from .search import FuzzySearchBox
 from .worker import StoreWorker
 
 _SETTINGS_RECENT = "plugins/datacube_viewer/recent_stores"
@@ -339,6 +341,21 @@ class DatacubeLoadDialog(QDialog):
     def _build_bands_group(self) -> QGroupBox:
         group = QGroupBox("Bands")
         layout = QVBoxLayout(group)
+        self._search = FuzzySearchBox("Search variables and axis values…")
+        self._search.setToolTip(
+            "\n".join(
+                (
+                    "Typing narrows the list to matching variables; the popup also",
+                    "offers values along the axes (2025-03, sensor amsr).",
+                    "",
+                    "Picking a variable ticks it, picking an axis value sets that axis.",
+                    "Enter takes the best match.",
+                )
+            )
+        )
+        self._search.textChanged.connect(self._filter_bands)
+        self._search.picked.connect(self._on_search_picked)
+        layout.addWidget(self._search)
         self._band_list = QListWidget()
         self._band_list.setSelectionMode(QListWidget.SingleSelection)
         self._band_list.setDragDropMode(QListWidget.InternalMove)
@@ -856,6 +873,49 @@ class DatacubeLoadDialog(QDialog):
                 self._crs_override_check.setChecked(True)
         finally:
             self._loading = False
+        self._search.set_entries(self._search_entries())
+
+    # --------------------------------------------------------------- search
+    def _search_entries(self) -> list[SearchEntry]:
+        """Variables that can be ticked, then every axis value, as in the sidebar."""
+        dataset = self._dataset
+        if dataset is None:
+            return []
+        entries = [
+            variable_entry(name, dataset.base.variables[name].long_name)
+            for name in dataset.variable_names
+        ]
+        for axis in dataset.axes:
+            entries += axis_entries(axis.name, [axis.label_at(i) for i in range(axis.size)])
+        return entries
+
+    def _filter_bands(self, query: str) -> None:
+        """Hide the variables that do not match. Hidden ones keep their tick."""
+        variables = self._dataset.base.variables if self._dataset is not None else {}
+
+        def text(item: QListWidgetItem) -> str:
+            name = str(item.data(Qt.UserRole))
+            info = variables.get(name)
+            return f"{name} {info.long_name}" if info is not None else name
+
+        items = [self._band_list.item(row) for row in range(self._band_list.count())]
+        kept = {id(item) for item in filter_matches(query, items, text)}
+        for item in items:
+            item.setHidden(id(item) not in kept)
+
+    def _on_search_picked(self, entry: SearchEntry) -> None:
+        if entry.kind == "axis":
+            picker = self._axis_pickers.get(entry.name)
+            if picker is not None:
+                picker.set_value(entry.index)
+            return
+        for row in range(self._band_list.count()):
+            item = self._band_list.item(row)
+            if item.data(Qt.UserRole) == entry.name:
+                item.setCheckState(Qt.Checked)
+                self._band_list.setCurrentItem(item)
+                self._band_list.scrollToItem(item)
+                return
 
     def _on_crs_override_toggled(self) -> None:
         self._crs_widget.setEnabled(self._crs_override_check.isChecked())

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 
 from qgis.core import QgsMapLayer, QgsRasterLayer, QgsSettings
 from qgis.gui import QgsDockWidget
@@ -58,6 +59,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from ..core import AxisInfo, DatacubeError, DatasetInfo
+from ..core.search import SearchEntry, axis_entries, variable_entry
 from ..layeruri import (
     INDEX_PROPERTY,
     PROVIDER_KEY,
@@ -74,6 +76,7 @@ from ..provider.statistics import (
     stretch_is_effective,
 )
 from .attribute_panel import AttributePanel
+from .search import FuzzySearchBox
 from .version_panel import REF_SWITCHES, VersionPanel
 
 #: Quiet period before a drag turns into a read. Long enough that a sweep across an
@@ -268,6 +271,9 @@ class AxisScrubber(QWidget):
     an embedded widget on the layer row) would reuse.
     """
 
+    #: A variable was picked in the search box: the dock finds or adds its layer.
+    variablePicked = pyqtSignal(str)
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._layer: QgsRasterLayer | None = None
@@ -286,6 +292,20 @@ class AxisScrubber(QWidget):
         self._heading = QLabel()
         self._heading.setWordWrap(True)
         self._outer.addWidget(self._heading)
+        self._search = FuzzySearchBox("Search dates, axis values, variables…", self)
+        self._search.setToolTip(
+            "\n".join(
+                (
+                    "Jump to a slice or a variable by typing part of it:",
+                    "2025-03, sensor amsr, soil moist. Enter takes the best match.",
+                    "",
+                    "A variable selects its layer, or adds it next to this one with",
+                    "the same slice if it is not on the map yet.",
+                )
+            )
+        )
+        self._search.picked.connect(self._on_search_picked)
+        self._outer.addWidget(self._search)
         #: Rebuilt per layer; everything axis-specific lives inside it, so that
         #: retargeting is one widget swap rather than a hunt for stale children.
         self._body: QWidget | None = None
@@ -356,7 +376,9 @@ class AxisScrubber(QWidget):
         self._layer = layer if is_datacube_layer(layer) else None
         self._provider = self._layer.dataProvider() if self._layer is not None else None
 
+        self._search.setVisible(self._layer is not None)
         if self._layer is None:
+            self._search.set_entries([])
             self._heading.setText("<i>No datacube layer selected.</i>")
             self._status.setText("Select a datacube layer in the Layers panel to scrub its axes.")
             self._restretch.setVisible(False)
@@ -367,7 +389,7 @@ class AxisScrubber(QWidget):
         grid = QGridLayout(self._body)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setColumnStretch(1, 1)
-        self._outer.insertWidget(1, self._body)
+        self._outer.insertWidget(2, self._body)
 
         dataset = self._dataset()
         for position, axis in enumerate(axes_for_bands(dataset, self._bands())):
@@ -402,6 +424,7 @@ class AxisScrubber(QWidget):
         self._fit_cube.setVisible(bool(self._rows))
 
         self._load_from_layer()
+        self._search.set_entries(self._search_entries())
 
         if not self._rows:
             bands = self._bands()
@@ -409,6 +432,41 @@ class AxisScrubber(QWidget):
             self._status.setText(
                 f"{what} has no non-spatial dimensions — there is only one slice to show."
             )
+
+    def search_box(self) -> FuzzySearchBox:
+        return self._search
+
+    def _search_entries(self) -> list[SearchEntry]:
+        """The layer's axis values, then its dataset's variables, in that order.
+
+        Axis values first: with a layer selected, a slice of it is what is most
+        often wanted. Only the axes this layer has, as on the sliders.
+        """
+        dataset = self._dataset()
+        entries: list[SearchEntry] = []
+        for row in self._rows:
+            labels = [row.axis.label_at(i) for i in range(row.axis.size)]
+            entries += axis_entries(row.axis.name, labels)
+        variables = dataset.base.variables
+        for name in dataset.variable_names:
+            info = variables.get(name)
+            entries.append(variable_entry(name, info.long_name if info is not None else ""))
+        return entries
+
+    def _on_search_picked(self, entry: SearchEntry) -> None:
+        if entry.kind == "variable":
+            self.variablePicked.emit(entry.name)
+            return
+        row = next((r for r in self._rows if r.axis.name == entry.name), None)
+        if row is None:
+            return
+        self._loading = True
+        try:
+            row.set_index(entry.index)
+        finally:
+            self._loading = False
+        row.refresh_labels()
+        self._apply_now()
 
     def _on_restretch_toggled(self, checked: bool) -> None:
         if self._loading or self._layer is None:
@@ -620,6 +678,9 @@ class DatacubeDock(QgsDockWidget):
 
     #: "Full history…" was clicked: open the Time Travel dialog for the layer.
     historyRequested = pyqtSignal()
+    #: A variable picked in the search has no layer yet: ``(uri, next_to)``, the
+    #: layer to add and the one it was searched from. The plugin adds it.
+    variableRequested = pyqtSignal(object, object)
 
     def __init__(self, iface, parent: QWidget | None = None):
         super().__init__(PANEL_TITLE, parent)
@@ -630,6 +691,7 @@ class DatacubeDock(QgsDockWidget):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 0, 0)
         self._scrubber = AxisScrubber(body)
+        self._scrubber.variablePicked.connect(self._on_variable_picked)
         self._versions = VersionPanel(body)
         self._versions.historyRequested.connect(self.historyRequested)
         self._attributes = AttributePanel(body)
@@ -658,6 +720,36 @@ class DatacubeDock(QgsDockWidget):
     def attributes(self) -> AttributePanel:
         """The selected layer's metadata, hidden for anything but a datacube layer."""
         return self._attributes
+
+    def _on_variable_picked(self, name: str) -> None:
+        """Select the layer showing ``name``, or ask for one at the current slice."""
+        from qgis.core import QgsProject
+
+        current = self._scrubber.layer()
+        if current is None:
+            return
+        uri = current.dataProvider().context.uri
+        for layer in QgsProject.instance().mapLayers().values():
+            if not is_datacube_layer(layer) or layer is current:
+                continue
+            other = layer.dataProvider().context.uri
+            if (other.store_uri, other.dataset, other.bands) == (
+                uri.store_uri,
+                uri.dataset,
+                (name,),
+            ):
+                self._iface.setActiveLayer(layer)
+                return
+        if uri.bands == (name,):
+            return  # the layer it was searched from
+        dataset = current.dataProvider().context.dataset
+        wanted = {axis.name for axis in axes_for_bands(dataset, (name,))}
+        indices = {
+            axis: index
+            for axis, index in current.dataProvider().indices().items()
+            if axis in wanted
+        }
+        self.variableRequested.emit(replace(uri, bands=(name,), indices=indices), current)
 
     def _on_ref_switched(self, layer) -> None:
         if layer is not None and layer is self._scrubber.layer():

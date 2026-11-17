@@ -796,3 +796,38 @@ def test_tick_marks_only_on_a_short_axis(widget) -> None:
 
 def test_axis_tooltip_mentions_the_size(widget) -> None:
     assert "2 slice(s) along time" in widget._rows[0].slider.toolTip()
+
+
+# ------------------------------------------------------------------- search
+def test_the_search_offers_the_layers_axis_values_and_variables(widget, fixture_info) -> None:
+    entries = widget.search_box()._entries
+    assert {e.name for e in entries if e.kind == "axis"} == {"time"}
+    assert {e.name for e in entries if e.kind == "variable"} == set(fixture_info.conv_bands)
+
+
+def test_picking_a_date_moves_the_slider_and_the_layer(widget, layer) -> None:
+    row = widget._rows[0]
+    row.set_index(0)
+    widget._apply_now()
+    box = widget.search_box()
+    box.setText(f"time {row.axis.label_at(1)}")
+    box.pick_best()
+    assert row.index() == 1
+    assert layer.dataProvider().indices()["time"] == 1
+
+
+def test_picking_a_variable_is_handed_to_the_dock(widget) -> None:
+    picked = []
+    widget.variablePicked.connect(picked.append)
+    box = widget.search_box()
+    box.setText("nir")
+    box.pick_best()
+    assert picked == ["nir"]
+
+
+def test_without_a_layer_there_is_nothing_to_search(qgis_app) -> None:
+    made = AxisScrubber()
+    try:
+        assert made.search_box().isHidden()
+    finally:
+        made.deleteLater()

@@ -688,3 +688,41 @@ def test_to_image_handles_a_constant_band(qgis_app) -> None:
     assert is_flat
     assert cuts[0] == (0.0, 0.0)
     assert image.width() == 4
+
+
+# ------------------------------------------------------------------- search
+def test_typing_narrows_the_variable_list(connected) -> None:
+    connected._search.setText("ni")
+    visible = [
+        connected._band_list.item(i).data(Qt.UserRole)
+        for i in range(connected._band_list.count())
+        if not connected._band_list.item(i).isHidden()
+    ]
+    assert visible == ["nir"]
+    connected._search.setText("")
+    assert not any(
+        connected._band_list.item(i).isHidden() for i in range(connected._band_list.count())
+    )
+
+
+def test_picking_a_variable_ticks_it(connected) -> None:
+    before = connected._checked_bands()
+    candidate = next(name for name in ("nir", "blue", "green", "red") if name not in before)
+    connected._search.setText(candidate)
+    connected._search.pick_best()
+    assert candidate in connected._checked_bands()
+
+
+def test_picking_an_axis_value_sets_that_axis(connected) -> None:
+    picker = connected._axis_pickers["time"]
+    picker.set_value(0)
+    label = picker.axis.label_at(1)
+    connected._search.setText(f"time {label}")
+    connected._search.pick_best()
+    assert picker.value() == 1
+    assert connected.build_uri().indices["time"] == 1
+
+
+def test_the_search_follows_the_dataset(connected) -> None:
+    texts = {entry.name for entry in connected._search._entries if entry.kind == "variable"}
+    assert set(connected._dataset.variable_names) == texts

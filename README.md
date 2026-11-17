@@ -221,6 +221,14 @@ For an Icechunk layer the panel also has a **Version** section: follow a branch 
 tag, or step through the snapshots with a slider. **Time Travel…** shows the same
 history as a list with each commit's message, and the two stay in step.
 
+The search box at the top of the panel jumps to a slice or a variable: type part of
+a date or axis value (`2025-03`, `sensor amsr`) or of a variable's name or long name
+(`soil moist`), and pick from the list or press Enter for the best match. Every word
+has to match, and letters in order are enough when nothing matches as typed. A
+variable selects its layer, or, if it is not on the map yet, adds it next to the
+current one at the same slice. The **Add Datacube Layer** dialog has the same search
+above its variable list, which it narrows as you type.
+
 At the bottom of the panel, **Attributes** shows the layer's metadata, as `ncdump -h`
 would: the variable (its type, dimensions and chunks, then its attributes such as
 `long_name`, `units` and the valid range), the axes, the dataset (path, CRS and where

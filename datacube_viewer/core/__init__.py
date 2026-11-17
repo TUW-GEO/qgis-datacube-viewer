@@ -49,6 +49,7 @@ from .model import (
     select_level,
 )
 from .reader import DatasetReader, ReadRequest, ReadResult
+from .search import SearchEntry, axis_entries, rank, variable_entry
 from .store import (
     StoreHandle,
     clear_cache,
@@ -93,12 +94,14 @@ __all__ = [
     "RefNotFoundError",
     "RefSpec",
     "RepositoryRefs",
+    "SearchEntry",
     "SnapshotInfo",
     "StoreHandle",
     "StoreInfo",
     "StoreOpenError",
     "VariableInfo",
     "Window",
+    "axis_entries",
     "bounds_from_window",
     "clear_cache",
     "describe_crs",
@@ -115,9 +118,11 @@ __all__ = [
     "parse_multiscales",
     "parse_uri",
     "qgis_python",
+    "rank",
     "recognize_local",
     "resolve_crs",
     "select_level",
     "structure_difference",
+    "variable_entry",
     "window_from_bounds",
 ]

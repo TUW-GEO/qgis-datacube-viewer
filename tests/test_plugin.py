@@ -263,6 +263,59 @@ def test_adding_from_the_dialog_opens_the_dock_on_the_new_layer(
     _clear_project()
 
 
+def _layer_of(band: str):
+    return next(
+        layer
+        for layer in QgsProject.instance().mapLayers().values()
+        if layer.dataProvider().context.uri.bands == (band,)
+    )
+
+
+def test_searching_a_variable_on_the_map_selects_its_layer(plugin, iface, store_uri) -> None:
+    plugin.initGui()
+    _clear_project()
+    plugin._on_layers_requested(
+        per_variable(LayerUri(store_uri=store_uri, dataset="conv", bands=("red", "green")))
+    )
+    count = len(QgsProject.instance().mapLayers())
+    box = plugin._cube_dock.scrubber().search_box()
+    box.setText("green")
+    box.pick_best()
+    assert iface.active is _layer_of("green")
+    assert len(QgsProject.instance().mapLayers()) == count, "nothing new was added"
+    _clear_project()
+
+
+def test_searching_a_variable_not_on_the_map_adds_it_beside_at_the_same_slice(
+    plugin, iface, store_uri
+) -> None:
+    plugin.initGui()
+    _clear_project()
+    plugin._on_layers_requested(
+        per_variable(LayerUri(store_uri=store_uri, dataset="conv", bands=("red", "green")))
+    )
+    red = _layer_of("red")
+    iface.setActiveLayer(red)
+    scrubber = plugin._cube_dock.scrubber()
+    scrubber._rows[0].set_index(1)
+    scrubber._apply_now()
+
+    box = scrubber.search_box()
+    box.setText("nir")
+    box.pick_best()
+
+    nir = _layer_of("nir")
+    assert iface.active is nir
+    assert nir.dataProvider().indices()["time"] == 1
+    root = QgsProject.instance().layerTreeRoot()
+    red_node = root.findLayer(red.id())
+    group = red_node.parent()
+    assert root.findLayer(nir.id()).parent() is group
+    assert group.children()[group.children().index(red_node) - 1].layer() is nir
+    assert nir.name() == "nir", "named like its siblings in the group"
+    _clear_project()
+
+
 def test_the_dock_stays_closed_when_the_user_turned_that_off(plugin, iface, store_uri: str) -> None:
     from datacube_viewer.gui import set_opens_automatically
 

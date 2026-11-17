@@ -266,6 +266,7 @@ class DatacubeViewerPlugin:
 
         self._cube_dock = DatacubeDock(self.iface, self.iface.mainWindow())
         self._cube_dock.historyRequested.connect(self.show_snapshot_dialog)
+        self._cube_dock.variableRequested.connect(self.add_variable_next_to)
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self._cube_dock)
         self._cube_dock.hide()
 
@@ -575,6 +576,35 @@ class DatacubeViewerPlugin:
         if not made and not any(dataset.variable_names for dataset in store.datasets):
             self._report_unopened(store_uri, "it holds no variable that can be shown on a map")
         return made
+
+    def add_variable_next_to(self, uri: LayerUri, near: QgsRasterLayer) -> QgsRasterLayer | None:
+        """Add the layer a sidebar search asked for, beside the layer it came from.
+
+        In the same group as ``near`` and just above it, named like its siblings
+        there, and selected, so the sidebar moves on to it. Returns the layer, or
+        None when it could not be made (and says why).
+        """
+        from .provider import create_layer
+
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        near_node = root.findLayer(near.id()) if near is not None else None
+        parent = near_node.parent() if near_node is not None else None
+        grouped = parent is not None and parent is not root
+
+        layer = create_layer(uri, uri.bands[0] if grouped else None)
+        if not layer.isValid():
+            detail = layer.customProperty(ERROR_PROPERTY, "") or "unknown error"
+            self._report_unopened(uri.store_uri, detail)
+            return None
+        self._fix_stretch(layer)
+        if parent is None:
+            project.addMapLayer(layer)
+        else:
+            project.addMapLayer(layer, False)
+            parent.insertLayer(parent.children().index(near_node), layer)
+        self.iface.setActiveLayer(layer)
+        return layer
 
     def _report_unopened(self, store_uri: str, detail: str) -> None:
         self._log(f"Could not open {store_uri}: {detail}", Qgis.Critical)
