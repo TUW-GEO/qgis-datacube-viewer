@@ -15,7 +15,7 @@ import pytest
 
 pytest.importorskip("qgis.core")
 
-from qgis.core import QgsLayerTreeGroup, QgsProject, QgsRasterLayer
+from qgis.core import Qgis, QgsLayerTreeGroup, QgsProject, QgsRasterLayer
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 from qgis.PyQt.QtWidgets import QToolBar, QWidget
 
@@ -313,6 +313,24 @@ def test_searching_a_variable_not_on_the_map_adds_it_beside_at_the_same_slice(
     assert root.findLayer(nir.id()).parent() is group
     assert group.children()[group.children().index(red_node) - 1].layer() is nir
     assert nir.name() == "nir", "named like its siblings in the group"
+    _clear_project()
+
+
+def test_a_saved_slice_the_store_no_longer_has_is_reported(plugin, iface, store_uri) -> None:
+    """The store changed under the project: say so rather than show another slice."""
+    from datacube_viewer.layeruri import INDEX_PROPERTY
+    from datacube_viewer.provider import create_layer
+
+    plugin.initGui()
+    _clear_project()
+    layer = create_layer(LayerUri(store_uri=store_uri, dataset="conv", bands=("red",)))
+    layer.setCustomProperty(INDEX_PROPERTY, "time=9")
+    QgsProject.instance().addMapLayer(layer)
+    assert layer.dataProvider().indices() == {"time": 0}, "left where it was created"
+    (_, message, level) = iface.messageBar().messages[-1]
+    assert "Could not restore the slice of" in message
+    assert "Index 9 is outside axis 'time'" in message
+    assert level == Qgis.Warning
     _clear_project()
 
 

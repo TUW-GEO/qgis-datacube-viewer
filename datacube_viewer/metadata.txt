@@ -75,6 +75,11 @@ changelog=0.3.0
       date or axis value, select or add a variable by part of its name.
     - Attributes at the bottom of the slider sidebar: the selected layer's
       variable, axes, dataset and store metadata, with copy.
+    - A layer asked for a slice it does not have (an unknown axis, or an
+      index outside its axis) is now invalid and says why, rather than
+      silently showing another slice. setIndices refuses the same with the
+      reason in lastError, and a project whose saved slice the store no
+      longer has says so when it opens.
     - Fix: recent NetCDF files are no longer greyed out as missing in the
       dialog's Location list.
   0.2.0

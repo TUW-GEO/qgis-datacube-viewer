@@ -15,17 +15,20 @@ mixed-age tiles at worst, never a torn read.
 
 from __future__ import annotations
 
+import difflib
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from ..core import (
+    AxisIndexError,
     AxisInfo,
     CrsInfo,
     DatacubeError,
     DatasetInfo,
     DatasetReader,
     NoDatasetsError,
+    NoSuchAxisError,
     NoSuchVariableError,
     RefSpec,
     StoreHandle,
@@ -114,10 +117,12 @@ def choose_bands(dataset: DatasetInfo, requested: tuple[str, ...] = ()) -> tuple
 def default_indices(
     dataset: DatasetInfo, requested: Mapping[str, int] | None = None
 ) -> dict[str, int]:
-    """One index per non-spatial axis, clamped into range.
+    """One index per non-spatial axis, clamped into range; unknown axes are dropped.
 
-    Out-of-range values are clamped rather than rejected: a project saved against a
-    store that has since grown or shrunk its time axis should still open.
+    Lenient on purpose, for state carried over rather than asked for: a snapshot
+    switch keeps the indices of the snapshot before, and an older snapshot of a
+    growing store has fewer steps. What a caller asks for is checked first, by
+    :func:`index_error`.
     """
     requested = requested or {}
     out: dict[str, int] = {}
@@ -125,6 +130,36 @@ def default_indices(
         value = int(requested.get(axis.name, 0))
         out[axis.name] = max(0, min(value, axis.size - 1))
     return out
+
+
+def index_error(dataset: DatasetInfo, requested: Mapping[str, int]) -> DatacubeError | None:
+    """Why ``dataset`` cannot show the slice ``requested``, or None when it can.
+
+    A name it has no axis for (a typo, or a store changed since a project was saved)
+    is a :class:`NoSuchAxisError`, an index outside its axis an
+    :class:`AxisIndexError`. Axes left out of ``requested`` are fine: they start at 0.
+    """
+    names = [axis.name for axis in dataset.axes]
+    unknown = [name for name in requested if name not in names]
+    if unknown:
+        have = ", ".join(f"{axis.name} ({axis.size})" for axis in dataset.axes) or "none"
+        guesses = [
+            f"{name!r} -> {close[0]!r}"
+            for name in unknown
+            if (close := difflib.get_close_matches(name, names, n=1))
+        ]
+        return NoSuchAxisError(
+            f"No axis {', '.join(map(repr, unknown))} in dataset "
+            f"'{dataset.path or '/'}'. Its axes: {have}.",
+            hint=f"Did you mean {', '.join(guesses)}?" if guesses else None,
+        )
+    outside = [
+        f"Index {int(requested[axis.name])} is outside axis '{axis.name}', which has "
+        f"{axis.size} steps (0 to {axis.size - 1})."
+        for axis in dataset.axes
+        if axis.name in requested and not 0 <= int(requested[axis.name]) < axis.size
+    ]
+    return AxisIndexError(" ".join(outside)) if outside else None
 
 
 def axes_for_bands(dataset: DatasetInfo, bands: Sequence[str]) -> tuple[AxisInfo, ...]:
@@ -192,14 +227,25 @@ class LayerContext:
         self._reader: DatasetReader
         self._bands: tuple[str, ...]
         self._indices: dict[str, int]
-        self._load(uri)
+        # Strict here: this is where a slice is *asked for*, by a new layer or one
+        # read from a project. One the dataset cannot show is a typo, or a store
+        # that no longer matches the project, and a layer that silently shows
+        # another slice instead is worse than one that fails and says why.
+        self._load(uri, check_indices=True)
 
     # -- construction -----------------------------------------------------
-    def _load(self, uri: LayerUri) -> None:
-        """(Re)open the store and rebind everything. Caller may hold the lock."""
+    def _load(self, uri: LayerUri, check_indices: bool = False) -> None:
+        """(Re)open the store and rebind everything. Caller may hold the lock.
+
+        With ``check_indices``, raises :func:`index_error`'s error for a slice the
+        dataset cannot show. Without, the slice is fitted to the dataset (see
+        :func:`default_indices`).
+        """
         handle = open_store(uri.store_uri, uri.effective_ref, kind=uri.kind)  # type: ignore[arg-type]
         store = describe_store(handle, crs_override=uri.crs_override)
         dataset = pick_dataset(store, uri.dataset)
+        if check_indices and (error := index_error(dataset, uri.indices)) is not None:
+            raise error
 
         self._handle = handle
         self._store = store
@@ -300,7 +346,11 @@ class LayerContext:
             self._uri = replace(self._uri, bands=resolved)
 
     def set_indices(self, indices: Mapping[str, int]) -> None:
+        """Move to another slice. Raises :func:`index_error`'s error, and stays on the
+        current slice, when the dataset cannot show it."""
         with self._lock:
+            if (error := index_error(self._dataset, indices)) is not None:
+                raise error
             resolved = default_indices(self._dataset, indices)
             self._indices = resolved
             self._uri = replace(self._uri, indices=dict(resolved))

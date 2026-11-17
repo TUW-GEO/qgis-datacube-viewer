@@ -64,6 +64,14 @@ class NoSuchVariableError(MetadataError):
     """
 
 
+class NoSuchAxisError(MetadataError):
+    """An index names an axis the dataset does not have, typically a typo."""
+
+
+class AxisIndexError(DatacubeError):
+    """An index lies outside its axis."""
+
+
 class CrsResolutionError(MetadataError):
     """No CRS could be determined and no override was supplied."""
 

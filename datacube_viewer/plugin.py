@@ -297,8 +297,14 @@ class DatacubeViewerPlugin:
                 f"Ignoring unreadable {INDEX_PROPERTY} on {layer.name()}: {exc}", Qgis.Warning
             )
             return
-        if layer.dataProvider().setIndices(indices):
+        provider = layer.dataProvider()
+        if provider.setIndices(indices):
             layer.triggerRepaint()
+        elif error := provider.lastError():
+            # The store no longer has the slice the project was saved on. Said out
+            # loud: the layer is left on the slice it was created with, which is
+            # not what the project showed.
+            self._report_unrestored(layer, error)
 
     # ------------------------------------------------------------ onboarding
     def _announce_dependencies(self) -> None:
@@ -605,6 +611,11 @@ class DatacubeViewerPlugin:
             parent.insertLayer(parent.children().index(near_node), layer)
         self.iface.setActiveLayer(layer)
         return layer
+
+    def _report_unrestored(self, layer, detail: str) -> None:
+        message = f"Could not restore the slice of {layer.name()}: {detail}"
+        self._log(message, Qgis.Warning)
+        self.iface.messageBar().pushMessage(PLUGIN_NAME, message, level=Qgis.Warning, duration=0)
 
     def _report_unopened(self, store_uri: str, detail: str) -> None:
         self._log(f"Could not open {store_uri}: {detail}", Qgis.Critical)

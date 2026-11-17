@@ -503,3 +503,51 @@ def test_html_metadata_reports_the_pyramid_and_provenance(layer) -> None:
     html = layer.dataProvider().htmlMetadata()
     for expected in ("EPSG:32633", "proj:code", "conv", "Pyramid", "zarr-conventions"):
         assert expected in html
+
+
+# ------------------------------------------------------------- asked-for slices
+def _layer(store_uri: str, **indices) -> QgsRasterLayer:
+    return create_layer(
+        LayerUri(store_uri=store_uri, dataset="conv", bands=("red",), indices=indices)
+    )
+
+
+def test_a_new_layer_on_an_axis_it_lacks_is_invalid_and_says_which(store_uri: str) -> None:
+    """A typo in a script must not quietly show index 0."""
+    layer = _layer(store_uri, tiem=1)
+    assert not layer.isValid()
+    error = layer.customProperty(ERROR_PROPERTY, "")
+    assert "No axis 'tiem'" in error
+    assert "time (2)" in error, "lists the axes there are"
+    assert "Did you mean 'tiem' -> 'time'?" in error
+
+
+@pytest.mark.parametrize("index", [7, -1])
+def test_a_new_layer_outside_an_axis_is_invalid_and_says_how_far_it_goes(
+    store_uri: str, index: int
+) -> None:
+    layer = _layer(store_uri, time=index)
+    assert not layer.isValid()
+    assert (
+        f"Index {index} is outside axis 'time', which has 2 steps (0 to 1)."
+        in layer.customProperty(ERROR_PROPERTY, "")
+    )
+
+
+def test_a_layer_within_range_opens_on_that_slice(store_uri: str) -> None:
+    assert _layer(store_uri, time=1).dataProvider().indices() == {"time": 1}
+
+
+@pytest.mark.parametrize(
+    ("indices", "expected"),
+    [
+        ({"tiem": 1}, "No axis 'tiem'"),
+        ({"time": 5}, "Index 5 is outside axis 'time'"),
+        ({"time": -1}, "Index -1 is outside axis 'time'"),
+    ],
+)
+def test_set_indices_refuses_what_the_layer_cannot_show(store_uri, indices, expected) -> None:
+    provider = _layer(store_uri, time=1).dataProvider()
+    assert provider.setIndices(indices) is False
+    assert expected in provider.lastError()
+    assert provider.indices() == {"time": 1}, "left on its slice"

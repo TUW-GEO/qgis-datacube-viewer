@@ -683,9 +683,10 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
         axis on its own would silently rewind the rest.
 
         Returns True when the resolved indices actually changed, so the caller can
-        skip a repaint that would show identical pixels. Out-of-range values are
-        clamped rather than rejected (see ``default_indices``), so "changed" means
-        "changed after clamping", not "the caller passed something new".
+        skip a repaint that would show identical pixels.
+
+        An axis the layer does not have, or an index outside its axis, is refused:
+        False, the slice unchanged, and the reason in :meth:`lastError`.
         """
         if self._context is None:
             return False
