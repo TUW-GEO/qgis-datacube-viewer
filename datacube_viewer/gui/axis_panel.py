@@ -73,6 +73,7 @@ from ..provider.statistics import (
     slice_ranges,
     stretch_is_effective,
 )
+from .attribute_panel import AttributePanel
 from .version_panel import REF_SWITCHES, VersionPanel
 
 #: Quiet period before a drag turns into a read. Long enough that a sweep across an
@@ -607,8 +608,10 @@ class AxisScrubber(QWidget):
 
 
 class DatacubeDock(QgsDockWidget):
-    """The dock: an :class:`AxisScrubber` that follows the selected layer, and, for
-    an Icechunk layer, a :class:`~datacube_viewer.gui.version_panel.VersionPanel`.
+    """The dock: an :class:`AxisScrubber` that follows the selected layer, for an
+    Icechunk layer a :class:`~datacube_viewer.gui.version_panel.VersionPanel`, and
+    the layer's metadata in an
+    :class:`~datacube_viewer.gui.attribute_panel.AttributePanel`.
 
     ``QgsDockWidget`` rather than a plain ``QDockWidget`` so QGIS treats it as one
     of its own panels — listed in View → Panels, and with its geometry restored
@@ -629,9 +632,12 @@ class DatacubeDock(QgsDockWidget):
         self._scrubber = AxisScrubber(body)
         self._versions = VersionPanel(body)
         self._versions.historyRequested.connect(self.historyRequested)
+        self._attributes = AttributePanel(body)
         layout.addWidget(self._scrubber)
         layout.addWidget(self._versions)
-        layout.addStretch(1)
+        # Last, and given the spare height: a tree of attributes is the one part of
+        # the sidebar that can use it, and it is the part read least often.
+        layout.addWidget(self._attributes, 1)
         self.setWidget(body)
 
         # A snapshot switch, from the version group or from the Time Travel
@@ -649,9 +655,15 @@ class DatacubeDock(QgsDockWidget):
         """The Icechunk version group, hidden for a layer without versions."""
         return self._versions
 
+    def attributes(self) -> AttributePanel:
+        """The selected layer's metadata, hidden for anything but a datacube layer."""
+        return self._attributes
+
     def _on_ref_switched(self, layer) -> None:
         if layer is not None and layer is self._scrubber.layer():
             self._scrubber.set_layer(layer)
+            # Another snapshot can carry other attributes.
+            self._attributes.set_layer(layer)
 
     def reveal(self, layers: Sequence[QgsMapLayer]) -> bool:
         """Show the dock on the first of ``layers`` that has an axis to scrub.
@@ -681,6 +693,7 @@ class DatacubeDock(QgsDockWidget):
         self._scrubber.flush()
         self._scrubber.set_layer(layer)
         self._versions.set_layer(layer)
+        self._attributes.set_layer(layer)
 
     def teardown(self) -> None:
         """Drop the signal connection. Called from the plugin's ``unload``.

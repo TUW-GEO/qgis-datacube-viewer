@@ -221,6 +221,13 @@ For an Icechunk layer the panel also has a **Version** section: follow a branch 
 tag, or step through the snapshots with a slider. **Time Travel…** shows the same
 history as a list with each commit's message, and the two stay in step.
 
+At the bottom of the panel, **Attributes** shows the layer's metadata, as `ncdump -h`
+would: the variable (its type, dimensions and chunks, then its attributes such as
+`long_name`, `units` and the valid range), the axes, the dataset (path, CRS and where
+the CRS was found, pyramid levels, attributes) and the store. Names in italics were
+worked out by the plugin rather than read from the store. Long values are shortened;
+hover for the full text, or right-click to copy it.
+
 | Pick a store, a version and the variables | Scrub through the axes |
 | --- | --- |
 | ![The Add Datacube Layer dialog, with a preview](docs/img/load-dialog.png) | ![The axis sliders for the sensor and time axes, and the Icechunk version slider](docs/img/sliders.png) |

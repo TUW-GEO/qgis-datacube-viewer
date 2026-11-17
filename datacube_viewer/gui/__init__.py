@@ -4,6 +4,7 @@ from :mod:`datacube_viewer.core`.
 
 from __future__ import annotations
 
+from .attribute_panel import AttributePanel, attribute_sections, format_value
 from .axis_panel import (
     AUTO_OPEN_KEY,
     AxisScrubber,
@@ -51,6 +52,7 @@ __all__ = [
     "INHERIT",
     "REF_SWITCHES",
     "SHARE_MATCHING_KEY",
+    "AttributePanel",
     "AxisScrubber",
     "DatacubeDock",
     "DatacubeDropHandler",
@@ -64,6 +66,7 @@ __all__ = [
     "StoreWorker",
     "VersionPanel",
     "apply_stretch",
+    "attribute_sections",
     "axes_for_bands",
     "axis_chunk_length",
     "batch_action",
@@ -73,6 +76,7 @@ __all__ = [
     "drop_action",
     "drop_action_key",
     "drop_actions",
+    "format_value",
     "has_auto_limits",
     "has_axes_to_scrub",
     "is_datacube_layer",

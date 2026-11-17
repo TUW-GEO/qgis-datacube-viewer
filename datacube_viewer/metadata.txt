@@ -71,6 +71,8 @@ changelog=0.3.0
     - Stores of a batch that open the dialog share one when they match (same
       datasets, variables and axes), and what is added from it is added from
       each; otherwise they open one after another, with Skip Remaining to stop.
+    - Attributes at the bottom of the slider sidebar: the selected layer's
+      variable, axes, dataset and store metadata, with copy.
     - Fix: recent NetCDF files are no longer greyed out as missing in the
       dialog's Location list.
   0.2.0
