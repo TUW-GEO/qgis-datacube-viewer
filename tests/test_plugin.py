@@ -408,6 +408,19 @@ def test_the_options_page_reads_and_applies_the_setting(plugin, iface) -> None:
     reopened.deleteLater()
 
 
+def test_the_options_page_sets_the_default_for_redrawing_while_dragging(plugin, iface) -> None:
+    from datacube_viewer.gui import redraws_while_dragging
+
+    plugin.initGui()
+    page = iface.options_factories[0].createWidget(None)
+    assert page._live_redraw.isChecked()
+    page._live_redraw.setChecked(False)
+    assert redraws_while_dragging()
+    page.apply()
+    assert not redraws_while_dragging()
+    page.deleteLater()
+
+
 def test_the_drop_handler_is_registered_and_withdrawn(plugin, iface) -> None:
     """QGIS holds the handler by pointer only; left registered, it outlives the plugin."""
     from qgis.gui import QgsCustomDropHandler

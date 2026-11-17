@@ -27,7 +27,12 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .. import PLUGIN_NAME
-from .axis_panel import opens_automatically, set_opens_automatically
+from .axis_panel import (
+    opens_automatically,
+    redraws_while_dragging,
+    set_opens_automatically,
+    set_redraws_while_dragging,
+)
 from .drop import (
     ACTION_LABELS,
     DROP_KINDS,
@@ -67,6 +72,22 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
             )
         )
         layout.addWidget(self._auto_open)
+
+        self._live_redraw = QCheckBox("Redraw while dragging a slider")
+        self._live_redraw.setChecked(redraws_while_dragging())
+        self._live_redraw.setToolTip(
+            "\n".join(
+                (
+                    "How the slider sidebar starts out; its own checkbox changes it",
+                    "for the session.",
+                    "",
+                    "On: the map follows the handle while it is dragged.",
+                    "Off: the map is redrawn once the handle is let go. Better for",
+                    "slow or remote stores.",
+                )
+            )
+        )
+        layout.addWidget(self._live_redraw)
 
         drops = QGroupBox("Drag-and-drop behavior")
         drops.setToolTip(
@@ -135,6 +156,7 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
 
     def apply(self) -> None:
         set_opens_automatically(self._auto_open.isChecked())
+        set_redraws_while_dragging(self._live_redraw.isChecked())
         for kind, combo in self._drop_actions.items():
             set_drop_action(kind, combo.currentData())
         for kind, combo in self._batch_actions.items():

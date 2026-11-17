@@ -726,3 +726,18 @@ def test_picking_an_axis_value_sets_that_axis(connected) -> None:
 def test_the_search_follows_the_dataset(connected) -> None:
     texts = {entry.name for entry in connected._search._entries if entry.kind == "variable"}
     assert set(connected._dataset.variable_names) == texts
+
+
+def test_the_add_button_says_how_many_layers(connected) -> None:
+    def tick(*names):
+        for i in range(connected._band_list.count()):
+            item = connected._band_list.item(i)
+            item.setCheckState(Qt.Checked if item.data(Qt.UserRole) in names else Qt.Unchecked)
+
+    connected._split_check.setChecked(True)
+    tick("red")
+    assert connected._add_button.text() == "Add Layer"
+    tick("red", "green")
+    assert connected._add_button.text() == "Add Layers"
+    connected._split_check.setChecked(False)
+    assert connected._add_button.text() == "Add Layer", "a composite is one layer"

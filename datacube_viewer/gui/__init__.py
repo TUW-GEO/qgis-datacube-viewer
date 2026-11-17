@@ -7,6 +7,7 @@ from __future__ import annotations
 from .attribute_panel import AttributePanel, attribute_sections, format_value
 from .axis_panel import (
     AUTO_OPEN_KEY,
+    LIVE_REDRAW_KEY,
     AxisScrubber,
     DatacubeDock,
     apply_stretch,
@@ -16,7 +17,9 @@ from .axis_panel import (
     has_axes_to_scrub,
     is_datacube_layer,
     opens_automatically,
+    redraws_while_dragging,
     set_opens_automatically,
+    set_redraws_while_dragging,
     should_restretch,
     slice_ranges,
 )
@@ -50,6 +53,7 @@ __all__ = [
     "AUTO_OPEN_KEY",
     "DROP_KINDS",
     "INHERIT",
+    "LIVE_REDRAW_KEY",
     "REF_SWITCHES",
     "SHARE_MATCHING_KEY",
     "AttributePanel",
@@ -82,10 +86,12 @@ __all__ = [
     "is_datacube_layer",
     "is_versioned_layer",
     "opens_automatically",
+    "redraws_while_dragging",
     "render_thumbnail",
     "set_batch_action",
     "set_drop_action",
     "set_opens_automatically",
+    "set_redraws_while_dragging",
     "set_shares_matching_dialog",
     "shares_matching_dialog",
     "should_restretch",

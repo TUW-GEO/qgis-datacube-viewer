@@ -80,6 +80,11 @@ changelog=0.3.0
       silently showing another slice. setIndices refuses the same with the
       reason in lastError, and a project whose saved slice the store no
       longer has says so when it opens.
+    - The slider sidebar redraws while a handle is dragged, not only when it
+      stops moving; "Redraw while dragging" turns that off for slow stores,
+      with its default in the plugin's options.
+    - The dialog's Add button says Add Layer or Add Layers; the install help
+      can copy its check command too.
     - Fix: recent NetCDF files are no longer greyed out as missing in the
       dialog's Location list.
   0.2.0

@@ -300,6 +300,14 @@ class DependencyDialog(QDialog):
             )
         )
         body.addWidget(_monospace(VERIFY_SNIPPET, 1))
+        verify_row = QHBoxLayout()
+        self._copy_verify_button = QPushButton("Copy command")
+        self._copy_verify_button.clicked.connect(self._copy_verify)
+        verify_row.addWidget(self._copy_verify_button)
+        self._verify_copied = QLabel("")
+        verify_row.addWidget(self._verify_copied)
+        verify_row.addStretch(1)
+        body.addLayout(verify_row)
 
         body.addWidget(_rule())
         for note in self._notes():
@@ -537,6 +545,10 @@ class DependencyDialog(QDialog):
     def _copy(self) -> None:
         QApplication.clipboard().setText(self._install.command)
         self._copied.setText("Copied.")
+
+    def _copy_verify(self) -> None:
+        QApplication.clipboard().setText(VERIFY_SNIPPET)
+        self._verify_copied.setText("Copied.")
 
     def suppressed(self) -> bool:
         """Whether the user ticked "don't show again"."""

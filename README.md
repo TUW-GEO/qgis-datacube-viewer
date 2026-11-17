@@ -217,6 +217,10 @@ from the dialog. To stop that, untick **Automatically open slider sidebar** unde
 **Settings → Options → Datacube Viewer**, and open the panel from the toolbar or
 **Raster → Datacube Viewer → Datacube Panel** when you want it.
 
+For a slow or remote store, untick **Redraw while dragging** in the panel: the layer
+is then redrawn once, when you let go of the handle, rather than for slices on the
+way past. Its default is under **Settings → Options → Datacube Viewer** too.
+
 For an Icechunk layer the panel also has a **Version** section: follow a branch or
 tag, or step through the snapshots with a slider. **Time Travel…** shows the same
 history as a list with each commit's message, and the two stay in step.

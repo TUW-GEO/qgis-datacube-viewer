@@ -79,8 +79,10 @@ from .attribute_panel import AttributePanel
 from .search import FuzzySearchBox
 from .version_panel import REF_SWITCHES, VersionPanel
 
-#: Quiet period before a drag turns into a read. Long enough that a sweep across an
-#: axis is one read, short enough to feel like a direct response to the handle.
+#: Quiet period before a slider change turns into a read. Long enough that a sweep
+#: across an axis is one read, short enough to feel like a direct response to the
+#: handle. While the handle is dragged with "Redraw while dragging" on, it is also
+#: the shortest time between two reads.
 DEBOUNCE_MS = 180
 
 
@@ -114,6 +116,24 @@ def opens_automatically() -> bool:
 
 def set_opens_automatically(enabled: bool) -> None:
     QgsSettings().setValue(AUTO_OPEN_KEY, bool(enabled))
+
+
+#: Settings key: whether "Redraw while dragging" starts ticked.
+LIVE_REDRAW_KEY = "plugins/datacube_viewer/live_redraw"
+
+
+def redraws_while_dragging() -> bool:
+    """Whether the sidebar starts out redrawing during a drag. On by default.
+
+    On, because watching the data change under the handle is what a slider is for.
+    Off suits a slow store, where every redraw on the way past is a remote read the
+    user is not going to look at.
+    """
+    return bool(QgsSettings().value(LIVE_REDRAW_KEY, True, type=bool))
+
+
+def set_redraws_while_dragging(enabled: bool) -> None:
+    QgsSettings().setValue(LIVE_REDRAW_KEY, bool(enabled))
 
 
 def is_datacube_layer(layer: QgsMapLayer | None) -> bool:
@@ -309,6 +329,21 @@ class AxisScrubber(QWidget):
         #: Rebuilt per layer; everything axis-specific lives inside it, so that
         #: retargeting is one widget swap rather than a hunt for stale children.
         self._body: QWidget | None = None
+        self._live = QCheckBox("Redraw while dragging")
+        self._live.setChecked(redraws_while_dragging())
+        self._live.setToolTip(
+            "\n".join(
+                (
+                    "On: the map follows the slider handle while it is dragged.",
+                    "",
+                    "Off: the map is redrawn once, when the handle is let go. For a",
+                    "slow or remote store, where every slice on the way past is a read.",
+                    "",
+                    "The default is set in Settings → Options → Datacube Viewer.",
+                )
+            )
+        )
+        self._outer.addWidget(self._live)
         self._restretch = QCheckBox("Rescale colours to each slice")
         self._restretch.setToolTip(
             "\n".join(
@@ -381,6 +416,7 @@ class AxisScrubber(QWidget):
             self._search.set_entries([])
             self._heading.setText("<i>No datacube layer selected.</i>")
             self._status.setText("Select a datacube layer in the Layers panel to scrub its axes.")
+            self._live.setVisible(False)
             self._restretch.setVisible(False)
             self._fit_cube.setVisible(False)
             return
@@ -420,6 +456,7 @@ class AxisScrubber(QWidget):
         finally:
             self._loading = False
         # Nothing to scrub means nothing to rescale on, and no cube to span.
+        self._live.setVisible(bool(self._rows))
         self._restretch.setVisible(bool(self._rows))
         self._fit_cube.setVisible(bool(self._rows))
 
@@ -432,6 +469,9 @@ class AxisScrubber(QWidget):
             self._status.setText(
                 f"{what} has no non-spatial dimensions — there is only one slice to show."
             )
+
+    def live_redraw_box(self) -> QCheckBox:
+        return self._live
 
     def search_box(self) -> FuzzySearchBox:
         return self._search
@@ -601,6 +641,15 @@ class AxisScrubber(QWidget):
         # pixels are still catching up.
         for row in self._rows:
             row.refresh_labels()
+        if any(row.slider.isSliderDown() for row in self._rows):
+            # A drag. Redrawing: at most every DEBOUNCE_MS, so the map follows the
+            # handle without a read per pixel of travel; the timer is not
+            # restarted, which would hold the redraw back until the handle stops.
+            # Not redrawing: nothing until the release, which applies at once.
+            if self._live.isChecked() and not self._debounce.isActive():
+                self._debounce.start()
+            return
+        # Keys, wheel, a click on the groove: one read once the changes settle.
         self._debounce.start()
 
     def _step(self, row: AxisSliderRow, delta: int) -> None:

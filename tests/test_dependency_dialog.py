@@ -216,6 +216,17 @@ def test_copy_puts_the_command_on_the_clipboard(dialog) -> None:
     assert QApplication.clipboard().text() == d._install.command
 
 
+def test_the_check_snippet_can_be_copied_too(dialog) -> None:
+    from qgis.PyQt.QtWidgets import QApplication
+
+    from datacube_viewer.core import VERIFY_SNIPPET
+
+    d = dialog(flavour=env.LINUX)
+    d._copy_verify_button.click()
+    assert QApplication.clipboard().text() == VERIFY_SNIPPET
+    assert d._verify_copied.text() == "Copied."
+
+
 def test_windows_offers_to_show_the_shell_launcher(dialog, tmp_path) -> None:
     from qgis.PyQt.QtWidgets import QPushButton
 

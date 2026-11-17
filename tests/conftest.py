@@ -97,7 +97,7 @@ def isolate_options():
         yield
         return
 
-    from datacube_viewer.gui.axis_panel import AUTO_OPEN_KEY
+    from datacube_viewer.gui.axis_panel import AUTO_OPEN_KEY, LIVE_REDRAW_KEY
     from datacube_viewer.gui.drop import (
         DROP_KINDS,
         SHARE_MATCHING_KEY,
@@ -108,6 +108,7 @@ def isolate_options():
     settings = QgsSettings()
     keys = (
         AUTO_OPEN_KEY,
+        LIVE_REDRAW_KEY,
         SHARE_MATCHING_KEY,
         *(drop_action_key(kind) for kind in DROP_KINDS),
         *(batch_action_key(kind) for kind in DROP_KINDS),

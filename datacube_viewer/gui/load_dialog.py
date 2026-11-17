@@ -208,7 +208,7 @@ class DatacubeLoadDialog(QDialog):
         # Both load buttons carry the accept role (the standard Apply role would be
         # placed after Close on some platforms), and are wired through ``clicked``
         # rather than ``accepted`` so each keeps its own meaning.
-        self._add_button = self._buttons.addButton("Add", QDialogButtonBox.AcceptRole)
+        self._add_button = self._buttons.addButton("Add Layer", QDialogButtonBox.AcceptRole)
         self._apply_button = self._buttons.addButton("Apply", QDialogButtonBox.AcceptRole)
         self._buttons.addButton(QDialogButtonBox.Close)
         # Only while a drop of several stores is being worked through; see
@@ -982,6 +982,8 @@ class DatacubeLoadDialog(QDialog):
         issues = validate(self._store, uri, combine=not self._split_check.isChecked())
         ok = can_load(issues)
         self._set_can_add(ok)
+        several = self._split_check.isChecked() and len(uri.bands) > 1
+        self._add_button.setText("Add Layers" if several else "Add Layer")
         self._show_messages(summarise(issues), error=not ok)
 
         if self._store.snapshot_id:

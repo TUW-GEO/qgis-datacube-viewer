@@ -831,3 +831,66 @@ def test_without_a_layer_there_is_nothing_to_search(qgis_app) -> None:
         assert made.search_box().isHidden()
     finally:
         made.deleteLater()
+
+
+# ------------------------------------------------------------ redraw on drag
+def _record_reads(layer) -> list[dict[str, int]]:
+    reads: list[dict[str, int]] = []
+    original = layer.dataProvider().setIndices
+
+    def record(indices, *args, **kwargs):
+        reads.append(dict(indices))
+        return original(indices, *args, **kwargs)
+
+    layer.dataProvider().setIndices = record
+    return reads
+
+
+def _wobble(slider, duration_ms: float) -> None:
+    """Keep the handle moving, as a hand does, for ``duration_ms``."""
+    import time
+
+    deadline = time.monotonic() + duration_ms / 1000
+    value = 1
+    while time.monotonic() < deadline:
+        slider.setValue(value)
+        value = 1 - value
+        QgsApplication.processEvents()
+        time.sleep(0.02)
+
+
+def test_redraw_while_dragging_starts_from_the_setting(qgis_app) -> None:
+    from datacube_viewer.gui.axis_panel import set_redraws_while_dragging
+
+    assert AxisScrubber().live_redraw_box().isChecked(), "on by default"
+    set_redraws_while_dragging(False)
+    assert not AxisScrubber().live_redraw_box().isChecked()
+
+
+def test_a_drag_redraws_while_the_handle_keeps_moving(widget, layer) -> None:
+    """The quiet period must not hold the redraw back until the hand stops."""
+    reads = _record_reads(layer)
+    slider = widget._rows[0].slider
+    slider.setSliderDown(True)
+    _wobble(slider, DEBOUNCE_MS * 3)
+    assert reads, "nothing was drawn while the handle was moving"
+    assert len(reads) <= 4, "throttled, not a read per step"
+    slider.setSliderDown(False)
+
+
+def test_without_live_redraw_a_drag_reads_once_on_release(widget, layer) -> None:
+    widget.live_redraw_box().setChecked(False)
+    reads = _record_reads(layer)
+    slider = widget._rows[0].slider
+    slider.setSliderDown(True)
+    _wobble(slider, DEBOUNCE_MS * 3)
+    slider.setValue(1)
+    assert reads == []
+    assert not widget._debounce.isActive()
+    slider.setSliderDown(False)  # emits sliderReleased
+    assert reads == [{"time": 1}]
+
+
+def test_the_checkbox_hides_with_the_sliders(qgis_app) -> None:
+    made = AxisScrubber()
+    assert made.live_redraw_box().isHidden()
