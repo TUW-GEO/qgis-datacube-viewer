@@ -59,6 +59,7 @@ from .store import (
     parse_uri,
     recognize_local,
 )
+from .structure import first_structure_difference, structure_difference
 
 __all__ = [
     "ALL_PACKAGES",
@@ -104,6 +105,7 @@ __all__ = [
     "describe_store",
     "detect_flavour",
     "detect_kind",
+    "first_structure_difference",
     "has_versions",
     "inspect_store",
     "install_command",
@@ -116,5 +118,6 @@ __all__ = [
     "recognize_local",
     "resolve_crs",
     "select_level",
+    "structure_difference",
     "window_from_bounds",
 ]

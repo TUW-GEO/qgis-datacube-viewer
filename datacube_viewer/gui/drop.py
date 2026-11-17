@@ -12,7 +12,8 @@ bands, and it cannot read an Icechunk repository at all.
 QGIS has no setting for which handler gets which file type, so the choice is made
 here, per kind of store, by :func:`drop_action`: open the load dialog, add every
 variable straight away, or decline and let QGIS open it as it would without this
-plugin.
+plugin. A drop of two or more stores is a batch, with a choice of its own per kind
+(:func:`batch_action`), which by default is the single-file one.
 
 A path is claimed only when it is evidently one of ours (see
 :func:`~datacube_viewer.core.recognize_local`) and this QGIS can actually read it. A
@@ -93,6 +94,61 @@ def set_drop_action(kind: str, action: str) -> None:
     QgsSettings().setValue(drop_action_key(kind), action)
 
 
+#: The batch setting's value for "do what a single file of this kind does".
+INHERIT = "inherit"
+INHERIT_LABEL = "Same as single file"
+
+
+def batch_action_key(kind: str) -> str:
+    return f"plugins/datacube_viewer/batch_drop_action/{kind}"
+
+
+def batch_choices(kind: str) -> tuple[str, ...]:
+    """What the batch setting of ``kind`` can be: inherit, or any single-file action."""
+    return (INHERIT, *drop_actions(kind))
+
+
+def batch_setting(kind: str) -> str:
+    """The batch setting as stored: :data:`INHERIT` (the default) or an action."""
+    value = str(QgsSettings().value(batch_action_key(kind), INHERIT))
+    return value if value in batch_choices(kind) else INHERIT
+
+
+def batch_action(kind: str) -> DropAction:
+    """What a store of ``kind`` does when dropped with at least one other store.
+
+    Its single-file action unless set otherwise, so that nothing changes for someone
+    who never opens the setting. Set otherwise for the case the single-file action
+    gets wrong: one NetCDF opens the dialog, fifty go straight onto the map.
+    """
+    value = batch_setting(kind)
+    return drop_action(kind) if value == INHERIT else value  # type: ignore[return-value]
+
+
+def set_batch_action(kind: str, value: str) -> None:
+    if value not in batch_choices(kind):
+        raise ValueError(f"{value!r} is not a batch drop setting for {kind}")
+    QgsSettings().setValue(batch_action_key(kind), value)
+
+
+SHARE_MATCHING_KEY = "plugins/datacube_viewer/share_matching_dialog"
+
+
+def shares_matching_dialog() -> bool:
+    """Whether matching stores of a batch share one load dialog. On by default.
+
+    "Matching" is :func:`~datacube_viewer.core.structure_difference` finding nothing:
+    the same datasets, variables and axis lengths. One selection, made once, is what
+    someone dropping fifty daily files means. Off, or when the stores do not match,
+    each gets a dialog of its own, one after another.
+    """
+    return bool(QgsSettings().value(SHARE_MATCHING_KEY, True, type=bool))
+
+
+def set_shares_matching_dialog(enabled: bool) -> None:
+    QgsSettings().setValue(SHARE_MATCHING_KEY, bool(enabled))
+
+
 def dropped_path(file: str) -> str:
     """The store path for a dropped ``file``, as QGIS hands it over.
 
@@ -134,13 +190,36 @@ class DatacubeDropHandler(QgsCustomDropHandler):
         self._open_stores = open_stores
         self._can_open = can_open
         self._pending: list[DroppedStore] = []
+        #: The stores in the drop QGIS is handling now, from handleMimeDataV2.
+        self._drop_stores: frozenset[str] = frozenset()
+
+    def handleMimeDataV2(self, data) -> bool:
+        """Note which stores the whole drop holds, and let QGIS carry on as usual.
+
+        QGIS calls this before it offers the drop's files one at a time, and it is the
+        only time a handler sees the whole drop. ``handleFileDrop`` needs to know
+        whether its path is one of several stores (a batch, with its own setting),
+        and could not tell from the path alone. Only file-system checks, as the drag
+        source stays locked until this returns. Always False: the files themselves
+        are claimed one by one, so that what is not ours still reaches QGIS.
+        """
+        stores = set()
+        for url in data.urls() if data is not None and data.hasUrls() else ():
+            local = url.toLocalFile()
+            if local and recognize_local(dropped_path(local)) is not None:
+                stores.add(dropped_path(local))
+        self._drop_stores = frozenset(stores)
+        return False
 
     def handleFileDrop(self, file: str) -> bool:
         path = dropped_path(file)
         kind = recognize_local(path)
         if kind is None:
             return False
-        action = drop_action(kind)
+        # Keyed on the path, so a file offered by any other route, or after a stale
+        # note, counts as a single file rather than as part of the last drop.
+        in_batch = path in self._drop_stores and len(self._drop_stores) > 1
+        action = batch_action(kind) if in_batch else drop_action(kind)
         if action == "qgis-default":
             return False
         if kind not in self.ALWAYS_CLAIMED and not self._can_open(kind):

@@ -183,16 +183,33 @@ You can also drag a Zarr store, a NetCDF file (`.nc`, `.nc4`, `.cdf`) or an Icec
 repository from your file manager onto QGIS: onto the map, the Layers panel or
 anywhere else in the window. Other files you drop with them open in QGIS as usual.
 What a dropped store does is set per kind under **Settings → Options → Datacube
-Viewer → Drag-and-drop behavior**:
+Viewer → Drag-and-drop behavior**, in two columns: **Single file** for a store
+dropped on its own, and **Batch** for two or more stores dropped at once.
 
 - **Open the Add Datacube Layer dialog** (the default): it opens already connected.
-  If you drop several stores at once, the first one opens and the others are listed
-  at the top of the dialog's **Location** list.
 - **Add every variable as a layer**: no dialog. Each dataset in the store becomes a
   group with one layer per variable, showing the first slice of every axis (and the
   `main` branch of an Icechunk repository).
 - **Leave it to QGIS (GDAL)**: QGIS opens it as it does without this plugin. Not
   offered for Icechunk, which GDAL cannot read.
+
+The **Batch** column also offers **Same as single file**, its default. Set it to
+differ when one file and many need different handling: for example, open the dialog
+for a single NetCDF but add every variable when you drop fifty. Files other than
+Zarr, NetCDF and Icechunk do not count towards a batch.
+
+When the stores of a batch open the dialog, **One dialog for matching files**
+(on by default) opens one dialog for all of them if they match: the same datasets,
+the same variables over the same dimensions, the same number of steps along each
+axis and the same pyramid levels. The dates, the extent and the CRS may differ, so a
+set of daily files or neighbouring tiles matches. What you add from that dialog is
+added from each store, in a group per store. Icechunk repositories never match,
+since each has its own branches and snapshots.
+
+Otherwise, with the box unticked or when the stores do not match (a message names
+the first difference), they get a dialog each, one after another. The title says
+which one you are at ("2 of 5"); **Add** or **Close** moves on to the next, and
+**Skip Remaining** stops. Stores dropped while this runs are added to the end.
 
 Sliders in a dock panel step through the non-spatial axes of the cube (time, sensor,
 ...) and redraw the layer as you drag. The panel opens by itself when you add a layer

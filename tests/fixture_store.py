@@ -384,6 +384,48 @@ def build_plain_zarr_store(path: str | Path, *, overwrite: bool = True) -> str:
     return str(target)
 
 
+def write_small_netcdf(
+    path: str | Path,
+    *,
+    variables: tuple[str, ...] = ("temperature", "humidity"),
+    steps: int = 3,
+    first_day: float = 0.0,
+    x0: float = 500_000.0,
+) -> str:
+    """Write a small georeferenced NetCDF cube: ``variables`` over (time, y, x).
+
+    For tests of several dropped files. The defaults make files of the same
+    structure; ``first_day`` and ``x0`` move them in time and space without changing
+    it, and ``variables`` and ``steps`` change it.
+    """
+    import netCDF4
+    import pyproj
+
+    nx, ny, res = 8, 6, 10.0
+    with netCDF4.Dataset(path, "w") as ds:
+        ds.createDimension("time", steps)
+        ds.createDimension("y", ny)
+        ds.createDimension("x", nx)
+        x = ds.createVariable("x", "f8", ("x",))
+        x[:] = x0 + res * (np.arange(nx) + 0.5)
+        x.units = "m"
+        y = ds.createVariable("y", "f8", ("y",))
+        y[:] = 5_000_000.0 - res * (np.arange(ny) + 0.5)
+        y.units = "m"
+        t = ds.createVariable("time", "f8", ("time",))
+        t[:] = first_day + np.arange(steps)
+        t.units = TIME_UNITS
+        t.calendar = "standard"
+        crs = ds.createVariable("spatial_ref", "i4", ())
+        crs.grid_mapping_name = "transverse_mercator"
+        crs.crs_wkt = crs.spatial_ref = pyproj.CRS.from_user_input(CONV_EPSG).to_wkt()
+        for index, name in enumerate(variables):
+            var = ds.createVariable(name, "f4", ("time", "y", "x"))
+            var[:] = np.arange(steps * ny * nx, dtype="float32").reshape(steps, ny, nx) + index
+            var.grid_mapping = "spatial_ref"
+    return str(path)
+
+
 if __name__ == "__main__":  # pragma: no cover - manual use
     import sys
 

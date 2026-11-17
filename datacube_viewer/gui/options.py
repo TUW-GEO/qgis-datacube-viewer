@@ -19,8 +19,9 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFormLayout,
+    QGridLayout,
     QGroupBox,
+    QLabel,
     QVBoxLayout,
     QWidget,
 )
@@ -30,10 +31,16 @@ from .axis_panel import opens_automatically, set_opens_automatically
 from .drop import (
     ACTION_LABELS,
     DROP_KINDS,
+    INHERIT,
+    INHERIT_LABEL,
     KIND_LABELS,
+    batch_setting,
     drop_action,
     drop_actions,
+    set_batch_action,
     set_drop_action,
+    set_shares_matching_dialog,
+    shares_matching_dialog,
 )
 
 
@@ -72,18 +79,57 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
                     "Add every variable: one layer per variable of every dataset, in a",
                     "group per dataset, as Add in the dialog makes them.",
                     "Leave it to QGIS: opened as without this plugin, through GDAL.",
+                    "",
+                    "Batch: two or more stores dropped at once. Same as single file",
+                    "does what the Single file column says.",
                 )
             )
         )
-        form = QFormLayout(drops)
+        grid = QGridLayout(drops)
+        single_header = QLabel("Single file")
+        batch_header = QLabel("Batch")
+        batch_header.setToolTip("Two or more stores dropped at once")
+        grid.addWidget(single_header, 0, 1)
+        grid.addWidget(batch_header, 0, 2)
         self._drop_actions: dict[str, QComboBox] = {}
-        for kind in DROP_KINDS:
-            combo = QComboBox()
+        self._batch_actions: dict[str, QComboBox] = {}
+        for row, kind in enumerate(DROP_KINDS, start=1):
+            single = QComboBox()
             for action in drop_actions(kind):
-                combo.addItem(ACTION_LABELS[action], action)
-            combo.setCurrentIndex(combo.findData(drop_action(kind)))
-            form.addRow(KIND_LABELS[kind], combo)
-            self._drop_actions[kind] = combo
+                single.addItem(ACTION_LABELS[action], action)
+            single.setCurrentIndex(single.findData(drop_action(kind)))
+            batch = QComboBox()
+            batch.addItem(INHERIT_LABEL, INHERIT)
+            for action in drop_actions(kind):
+                batch.addItem(ACTION_LABELS[action], action)
+            batch.setCurrentIndex(batch.findData(batch_setting(kind)))
+            grid.addWidget(QLabel(KIND_LABELS[kind]), row, 0)
+            grid.addWidget(single, row, 1)
+            grid.addWidget(batch, row, 2)
+            self._drop_actions[kind] = single
+            self._batch_actions[kind] = batch
+
+        self._share_matching = QCheckBox("One dialog for matching files")
+        self._share_matching.setChecked(shares_matching_dialog())
+        self._share_matching.setToolTip(
+            "\n".join(
+                (
+                    "For the stores of a batch that open the dialog.",
+                    "",
+                    "On: if they all match, one dialog opens, and what you add from it",
+                    "is added from each store. Matching means the same datasets, the",
+                    "same variables over the same dimensions, the same number of steps",
+                    "along each axis and the same pyramid levels. The dates, the extent",
+                    "and the CRS may differ. Icechunk repositories never match.",
+                    "",
+                    "Off, or when they do not match: a dialog for each, one after",
+                    "another. Add or Close moves on; Skip Remaining stops.",
+                )
+            )
+        )
+        grid.addWidget(self._share_matching, len(DROP_KINDS) + 1, 0, 1, 3)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
         layout.addWidget(drops)
         layout.addStretch(1)
 
@@ -91,6 +137,9 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
         set_opens_automatically(self._auto_open.isChecked())
         for kind, combo in self._drop_actions.items():
             set_drop_action(kind, combo.currentData())
+        for kind, combo in self._batch_actions.items():
+            set_batch_action(kind, combo.currentData())
+        set_shares_matching_dialog(self._share_matching.isChecked())
 
 
 class DatacubeOptionsFactory(QgsOptionsWidgetFactory):

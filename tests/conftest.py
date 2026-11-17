@@ -98,10 +98,20 @@ def isolate_options():
         return
 
     from datacube_viewer.gui.axis_panel import AUTO_OPEN_KEY
-    from datacube_viewer.gui.drop import DROP_KINDS, drop_action_key
+    from datacube_viewer.gui.drop import (
+        DROP_KINDS,
+        SHARE_MATCHING_KEY,
+        batch_action_key,
+        drop_action_key,
+    )
 
     settings = QgsSettings()
-    keys = (AUTO_OPEN_KEY, *(drop_action_key(kind) for kind in DROP_KINDS))
+    keys = (
+        AUTO_OPEN_KEY,
+        SHARE_MATCHING_KEY,
+        *(drop_action_key(kind) for kind in DROP_KINDS),
+        *(batch_action_key(kind) for kind in DROP_KINDS),
+    )
     before = {key: settings.value(key) for key in keys}
     for key in keys:
         settings.remove(key)

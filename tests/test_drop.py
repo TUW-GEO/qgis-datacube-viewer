@@ -12,12 +12,16 @@ import pytest
 pytest.importorskip("qgis.core")
 
 from qgis.core import QgsApplication, QgsSettings
+from qgis.PyQt.QtCore import QMimeData, QUrl
 
 from datacube_viewer.gui import (
     DatacubeDropHandler,
+    batch_action,
+    batch_choices,
     drop_action,
     drop_action_key,
     drop_actions,
+    set_batch_action,
     set_drop_action,
 )
 from datacube_viewer.gui.drop import dropped_path
@@ -48,7 +52,10 @@ class Recorder:
 
 
 def drop(handler: DatacubeDropHandler, *paths: str) -> list[bool]:
-    """One drop gesture: every path offered in turn, then the event loop runs."""
+    """One drop gesture: the whole drop first, every path in turn, then the event loop."""
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(path) for path in paths])
+    assert handler.handleMimeDataV2(mime) is False
     claimed = [handler.handleFileDrop(path) for path in paths]
     QgsApplication.processEvents()
     return claimed
@@ -75,7 +82,62 @@ def test_an_unknown_stored_action_reads_as_the_default(qgis_app) -> None:
     assert drop_action("icechunk") == "open-dialog"
 
 
+def test_a_batch_does_what_a_single_file_does_until_set_otherwise(qgis_app) -> None:
+    set_drop_action("netcdf", "all-layers")
+    assert batch_action("netcdf") == "all-layers"
+    set_batch_action("netcdf", "open-dialog")
+    assert batch_action("netcdf") == "open-dialog"
+    set_batch_action("netcdf", "inherit")
+    assert batch_action("netcdf") == "all-layers"
+
+
+def test_a_batch_offers_the_single_file_actions_and_inherit(qgis_app) -> None:
+    assert batch_choices("netcdf") == ("inherit", "open-dialog", "all-layers", "qgis-default")
+    assert batch_choices("icechunk") == ("inherit", "open-dialog", "all-layers")
+    with pytest.raises(ValueError):
+        set_batch_action("icechunk", "qgis-default")
+
+
 # ------------------------------------------------------------------ claiming
+def test_two_stores_are_a_batch_and_one_is_not(qgis_app, stores) -> None:
+    set_batch_action("netcdf", "all-layers")
+    opened = Recorder()
+    handler = DatacubeDropHandler(opened, lambda kind: True)
+    drop(handler, stores["netcdf"])
+    drop(handler, stores["netcdf"], stores["zarr"])
+    assert [store.action for store in opened.calls[0]] == ["open-dialog"]
+    assert [store.action for store in opened.calls[1]] == ["all-layers", "open-dialog"]
+
+
+def test_files_that_are_not_stores_do_not_make_a_batch(qgis_app, stores) -> None:
+    """A NetCDF dropped with a GeoTIFF is still a single store."""
+    set_batch_action("netcdf", "all-layers")
+    opened = Recorder()
+    handler = DatacubeDropHandler(opened, lambda kind: True)
+    drop(handler, stores["netcdf"], stores["other"])
+    assert [store.action for store in opened.calls[0]] == ["open-dialog"]
+
+
+def test_a_batch_can_leave_a_kind_to_qgis_that_single_files_are_not(qgis_app, stores) -> None:
+    """The batch decision must already be known when QGIS asks about the first file."""
+    set_batch_action("netcdf", "qgis-default")
+    opened = Recorder()
+    handler = DatacubeDropHandler(opened, lambda kind: True)
+    assert drop(handler, stores["netcdf"], stores["zarr"]) == [False, True]
+    assert drop(handler, stores["netcdf"]) == [True]
+
+
+def test_a_path_from_outside_the_noted_drop_counts_as_single(qgis_app, stores) -> None:
+    """A file offered without a drop note, or after a stale one, is not in a batch."""
+    set_batch_action("netcdf", "all-layers")
+    opened = Recorder()
+    handler = DatacubeDropHandler(opened, lambda kind: True)
+    drop(handler, stores["zarr"], stores["icechunk"])
+    assert handler.handleFileDrop(stores["netcdf"])
+    QgsApplication.processEvents()
+    assert opened.calls[-1][0].action == "open-dialog"
+
+
 def test_one_drop_of_several_stores_is_handed_over_once(qgis_app, stores) -> None:
     """One dialog for one gesture, not one per file."""
     opened = Recorder()

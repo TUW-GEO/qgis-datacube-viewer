@@ -361,6 +361,13 @@ def test_the_options_page_applies_the_drop_actions(plugin, iface) -> None:
     offered = [combos["icechunk"].itemData(i) for i in range(combos["icechunk"].count())]
     assert offered == ["open-dialog", "all-layers"]
 
+    batch = page._batch_actions
+    assert all(combo.currentData() == "inherit" for combo in batch.values())
+    offered = [batch["icechunk"].itemData(i) for i in range(batch["icechunk"].count())]
+    assert offered == ["inherit", "open-dialog", "all-layers"]
+    assert page._share_matching.isChecked()
+    batch["netcdf"].setCurrentIndex(batch["netcdf"].findData("all-layers"))
+    page._share_matching.setChecked(False)
     combos["netcdf"].setCurrentIndex(combos["netcdf"].findData("qgis-default"))
     combos["icechunk"].setCurrentIndex(combos["icechunk"].findData("all-layers"))
     assert drop_action("netcdf") == "open-dialog", "nothing is saved before Apply"
@@ -368,6 +375,11 @@ def test_the_options_page_applies_the_drop_actions(plugin, iface) -> None:
     assert drop_action("netcdf") == "qgis-default"
     assert drop_action("icechunk") == "all-layers"
     assert drop_action("zarr") == "open-dialog"
+    from datacube_viewer.gui import batch_action, shares_matching_dialog
+
+    assert batch_action("netcdf") == "all-layers"
+    assert batch_action("icechunk") == "all-layers", "inherited from the single-file column"
+    assert not shares_matching_dialog()
     page.deleteLater()
 
 
@@ -382,31 +394,189 @@ def test_can_open_follows_the_installed_libraries(monkeypatch) -> None:
     assert plugin_module.can_open("zarr")
 
 
-def test_a_dropped_store_opens_in_the_load_dialog(plugin, iface, store_uri, tmp_path) -> None:
-    """The first store is connected to; the rest of the drop waits in the Location list."""
+def test_a_batch_follows_the_batch_setting_and_one_file_the_single_one(
+    plugin, iface, tmp_path
+) -> None:
+    """One NetCDF opens the dialog; two go straight onto the map."""
+    from datacube_viewer.gui import set_batch_action
+    from tests.fixture_store import write_small_netcdf
+
+    set_batch_action("netcdf", "all-layers")
+    paths = [write_small_netcdf(tmp_path / f"day{i}.nc", first_day=i) for i in range(2)]
+    plugin.initGui()
+    _clear_project()
+
+    _drop(plugin, iface, *paths)
+    assert len(QgsProject.instance().mapLayers()) == 2 * 2
+    assert plugin._load_dialog is None
+
+    _drop(plugin, iface, paths[0])
+    assert plugin._load_dialog is not None, "a single file still opens the dialog"
+    _finish(plugin._load_dialog)
+    _clear_project()
+
+
+def _drop(plugin, iface, *paths: str) -> None:
+    """One drop gesture through the registered handler, as QgisApp::dropEvent does it."""
+    from qgis.core import QgsApplication
+    from qgis.PyQt.QtCore import QMimeData, QUrl
+
+    handler = iface.drop_handlers[0]
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(path) for path in paths])
+    assert handler.handleMimeDataV2(mime) is False, "the files must still reach QGIS"
+    for path in paths:
+        assert handler.handleFileDrop(path), path
+    QgsApplication.processEvents()
+
+
+def _finish(dialog) -> None:
+    """Close a dialog as Close does, and let the plugin open the next one."""
     from qgis.core import QgsApplication
     from qgis.PyQt.QtCore import QThreadPool
 
-    from tests.test_gui import pump
-
-    other = tmp_path / "other.nc"
-    other.write_bytes(b"CDF\x01")
-    plugin.initGui()
-    handler = iface.drop_handlers[0]
-    assert handler.handleFileDrop(store_uri)
-    assert handler.handleFileDrop(str(other))
+    QThreadPool.globalInstance().waitForDone(10_000)
+    dialog.reject()
+    QgsApplication.processEvents()
     QgsApplication.processEvents()
 
+
+def test_stores_of_the_same_structure_share_one_dialog(plugin, iface, tmp_path) -> None:
+    """Add from the shared dialog adds the same selection from every store."""
+    from tests.fixture_store import write_small_netcdf
+    from tests.test_gui import pump
+
+    paths = [write_small_netcdf(tmp_path / f"day{i}.nc", first_day=3 * i) for i in range(3)]
+    plugin.initGui()
+    _clear_project()
+    _drop(plugin, iface, *paths)
+
     dialog = plugin._load_dialog
-    assert dialog is not None and dialog.isVisible()
-    try:
-        assert pump(lambda: dialog._store is not None), "the dialog never opened the store"
-        assert dialog._connected_uri == store_uri
-        listed = [dialog._uri_combo.itemText(i) for i in range(dialog._uri_combo.count())]
-        assert str(other) in listed
-        assert any("other 1 dropped" in message for _, message, _ in iface.messageBar().messages)
-    finally:
-        QThreadPool.globalInstance().waitForDone(10_000)
+    assert dialog is not None
+    assert dialog.windowTitle() == "Add Datacube Layer (for 3 stores)"
+    assert not dialog._skip_button.isVisible(), "nothing is queued behind a shared dialog"
+    assert pump(lambda: dialog._store is not None and dialog._dataset is not None)
+    assert dialog._connected_uri == paths[0]
+
+    dialog._on_add_and_close()
+
+    layers = list(QgsProject.instance().mapLayers().values())
+    assert len(layers) == 3 * 2, "two variables from each of three stores"
+    groups = [g.name() for g in QgsProject.instance().layerTreeRoot().children()]
+    assert sorted(groups) == ["day0.nc", "day1.nc", "day2.nc"]
+    summaries = [message for _, message, _ in iface.messageBar().messages]
+    assert "Loaded 6 layers from 3 stores" in summaries
+    assert not any(message.startswith("Loaded 2 layers") for message in summaries), (
+        "one message for the drop, not one per store"
+    )
+    _clear_project()
+
+
+def test_stores_that_differ_get_a_dialog_each_in_turn(plugin, iface, tmp_path) -> None:
+    from tests.fixture_store import write_small_netcdf
+    from tests.test_gui import pump
+
+    first = write_small_netcdf(tmp_path / "a.nc")
+    second = write_small_netcdf(tmp_path / "b.nc", variables=("temperature",))
+    plugin.initGui()
+    _drop(plugin, iface, first, second)
+
+    assert any(
+        "b.nc has no variable 'humidity'" in message
+        for _, message, _ in iface.messageBar().messages
+    ), "the message says why they are not shared"
+    dialog = plugin._load_dialog
+    assert dialog.windowTitle() == "Add Datacube Layer (1 of 2)"
+    assert not dialog._skip_button.isHidden()
+    assert pump(lambda: dialog._connected_uri == first)
+
+    _finish(dialog)
+    following = plugin._load_dialog
+    assert following is not None and following is not dialog
+    assert following.windowTitle() == "Add Datacube Layer (2 of 2)"
+    assert following._skip_button.isHidden(), "nothing left to skip"
+    assert pump(lambda: following._connected_uri == second)
+
+    _finish(following)
+    assert plugin._load_dialog is None, "the queue ends after the last store"
+
+
+def test_skip_remaining_ends_the_queue(plugin, iface, tmp_path) -> None:
+    from datacube_viewer.gui import set_shares_matching_dialog
+    from tests.fixture_store import write_small_netcdf
+
+    set_shares_matching_dialog(False)
+    paths = [write_small_netcdf(tmp_path / f"day{i}.nc", first_day=i) for i in range(4)]
+    plugin.initGui()
+    _drop(plugin, iface, *paths)
+
+    dialog = plugin._load_dialog
+    assert dialog.windowTitle() == "Add Datacube Layer (1 of 4)", "decide-each never shares"
+    from qgis.core import QgsApplication
+    from qgis.PyQt.QtCore import QThreadPool
+
+    QThreadPool.globalInstance().waitForDone(10_000)
+    dialog._skip_button.click()
+    QgsApplication.processEvents()
+    QgsApplication.processEvents()
+    assert plugin._load_dialog is None
+
+
+def test_a_drop_while_a_queue_runs_waits_behind_it(plugin, iface, tmp_path) -> None:
+    from datacube_viewer.gui import set_shares_matching_dialog
+    from tests.fixture_store import write_small_netcdf
+
+    set_shares_matching_dialog(False)
+    paths = [write_small_netcdf(tmp_path / f"day{i}.nc", first_day=i) for i in range(3)]
+    plugin.initGui()
+    _drop(plugin, iface, paths[0], paths[1])
+    dialog = plugin._load_dialog
+    assert dialog.windowTitle() == "Add Datacube Layer (1 of 2)"
+
+    _drop(plugin, iface, paths[2])
+    assert plugin._load_dialog is dialog, "the dialog showing is not taken over"
+    assert dialog.windowTitle() == "Add Datacube Layer (1 of 3)"
+    _finish(dialog)
+    _finish(plugin._load_dialog)
+    assert plugin._load_dialog.windowTitle() == "Add Datacube Layer (3 of 3)"
+    _finish(plugin._load_dialog)
+
+
+def test_the_kind_settings_decide_first_and_only_dialog_stores_are_queued(
+    plugin, iface, store_uri, tmp_path
+) -> None:
+    """The checkbox never overrides a kind's own action; it only orders the dialogs."""
+    from datacube_viewer.gui import set_drop_action, set_shares_matching_dialog
+    from tests.fixture_store import write_small_netcdf
+
+    set_shares_matching_dialog(False)
+    set_drop_action("icechunk", "all-layers")
+    paths = [write_small_netcdf(tmp_path / f"day{i}.nc", first_day=i) for i in range(2)]
+    plugin.initGui()
+    _clear_project()
+    _drop(plugin, iface, paths[0], store_uri, paths[1])
+
+    assert QgsProject.instance().mapLayers(), "the Icechunk repository went onto the map"
+    assert plugin._load_dialog.windowTitle() == "Add Datacube Layer (1 of 2)", (
+        "only the two NetCDF files wait for a dialog"
+    )
+    _finish(plugin._load_dialog)
+    _finish(plugin._load_dialog)
+    assert plugin._load_dialog is None
+    _clear_project()
+
+
+def test_icechunk_repositories_are_never_shared(plugin, iface, store_uri, tmp_path) -> None:
+    """Each repository has its own branches and snapshots; one selection cannot name both."""
+    import shutil
+
+    copy = tmp_path / "copy.icechunk"
+    shutil.copytree(store_uri, copy)
+    plugin.initGui()
+    _drop(plugin, iface, store_uri, str(copy))
+    assert plugin._load_dialog.windowTitle() == "Add Datacube Layer (1 of 2)"
+    _finish(plugin._load_dialog)
+    _finish(plugin._load_dialog)
 
 
 def test_all_layers_puts_every_variable_of_every_dataset_on_the_map(

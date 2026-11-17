@@ -23,10 +23,11 @@ import contextlib
 import importlib.util
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from qgis.core import Qgis, QgsMessageLog, QgsProject, QgsRasterLayer, QgsSettings
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QPushButton
 
@@ -146,6 +147,18 @@ def remote_dependencies() -> list[str]:
     return missing
 
 
+@dataclass(frozen=True)
+class _DialogJob:
+    """One load dialog to show for a drop, waiting its turn in the queue.
+
+    ``shared_with``: stores of the same structure that get whatever is added from
+    ``store``.
+    """
+
+    store: str
+    shared_with: tuple[str, ...] = ()
+
+
 class DatacubeViewerPlugin:
     """The object QGIS keeps for the lifetime of the plugin."""
 
@@ -163,6 +176,12 @@ class DatacubeViewerPlugin:
         self._options_factory = None
         #: Drop handler, held for the same reason as the options factory.
         self._drop_handler = None
+        #: Load dialogs still to show for dropped stores, and the one showing now.
+        #: Counted so the title can say "2 of 5"; reset when the queue runs dry.
+        self._dialog_jobs: list[_DialogJob] = []
+        self._current_job: _DialogJob | None = None
+        self._jobs_total = 0
+        self._jobs_started = 0
 
     # ------------------------------------------------------------ lifecycle
     def initGui(self) -> None:
@@ -369,6 +388,8 @@ class DatacubeViewerPlugin:
         with contextlib.suppress(TypeError):  # never connected, or already dropped
             QgsProject.instance().layerWasAdded.disconnect(self._on_layer_added)
 
+        self._dialog_jobs.clear()
+        self._current_job = None
         if self._load_dialog is not None:
             self._load_dialog.close()
             self._load_dialog = None
@@ -399,6 +420,7 @@ class DatacubeViewerPlugin:
             self._load_dialog = DatacubeLoadDialog(self.iface.mainWindow())
             self._load_dialog.layersRequested.connect(self._on_layers_requested)
             self._load_dialog.finished.connect(self._on_dialog_closed)
+            self._load_dialog.skipRemainingRequested.connect(self._skip_remaining)
         self._load_dialog.show()
         self._load_dialog.raise_()
         self._load_dialog.activateWindow()
@@ -406,34 +428,113 @@ class DatacubeViewerPlugin:
     def open_dropped(self, stores: Sequence[DroppedStore]) -> None:
         """Open the stores of one drop onto QGIS, each as its kind's drop action says.
 
-        "all-layers" stores go straight onto the map. "open-dialog" stores share the
-        one load dialog: the first is connected to, and every further one is put at
-        the top of its Location list, since each needs its own choice of variables.
+        "all-layers" stores go straight onto the map. "open-dialog" stores go to the
+        load dialog: one shared dialog when they match and "One dialog for matching
+        files" is on, otherwise one dialog each, in turn.
         """
-        to_dialog = [store.path for store in stores if store.action == "open-dialog"]
         made: list[QgsRasterLayer] = []
         for store in stores:
             if store.action == "all-layers":
                 made.extend(self.add_all_layers(store.path, store.kind))
         if made:
             self._reveal(made)
+        to_dialog = [store for store in stores if store.action == "open-dialog"]
         if to_dialog:
-            self._open_in_dialog(to_dialog)
+            self._queue_dialogs(self._plan_dialogs(to_dialog))
 
-    def _open_in_dialog(self, paths: Sequence[str]) -> None:
-        self.show_load_dialog()
-        if self._load_dialog is None:  # dependency dialog shown instead
-            return
-        first, others = paths[0], tuple(paths[1:])
-        self._load_dialog.open_location(first, others)
-        if others:
+    def _plan_dialogs(self, stores: Sequence[DroppedStore]) -> list[_DialogJob]:
+        """The dialogs a drop's "open-dialog" stores need, in the order to show them."""
+        from .gui import shares_matching_dialog
+
+        paths = [store.path for store in stores]
+        if len(paths) == 1:
+            return [_DialogJob(paths[0])]
+        if shares_matching_dialog():
+            obstacle = self._sharing_obstacle(stores)
+            if obstacle is None:
+                return [_DialogJob(paths[0], shared_with=tuple(paths[1:]))]
             self.iface.messageBar().pushMessage(
                 PLUGIN_NAME,
-                f"Opened {os.path.basename(first)}. The other {len(others)} dropped "
-                "store(s) are at the top of the dialog's Location list.",
+                f"Opening the {len(paths)} dropped stores one after another: {obstacle}.",
                 level=Qgis.Info,
-                duration=8,
+                duration=10,
             )
+        return [_DialogJob(path) for path in paths]
+
+    def _sharing_obstacle(self, stores: Sequence[DroppedStore]) -> str | None:
+        """Why the stores cannot share one dialog, or None when they can.
+
+        Opens and describes every store, on the GUI thread: dropped stores are local,
+        and describing needs PROJ, which may only be entered from the main thread.
+        Fifty local NetCDF files take about a quarter of a second.
+        """
+        from .core import describe_store, first_structure_difference, open_store
+
+        if any(store.kind == "icechunk" for store in stores):
+            return "Icechunk repositories each have their own branches and snapshots"
+        described = []
+        for store in stores:
+            try:
+                described.append(describe_store(open_store(store.path, kind=store.kind)))  # type: ignore[arg-type]
+            except DatacubeError as exc:
+                return f"{os.path.basename(store.path)} could not be opened ({exc})"
+            except Exception as exc:
+                return f"{os.path.basename(store.path)} could not be opened ({exc!r})"
+        found = first_structure_difference(described)
+        if found is None:
+            return None
+        index, difference = found
+        first, other = (os.path.basename(stores[i].path) for i in (0, index))
+        return f"{other} {difference}, unlike {first}"
+
+    def _queue_dialogs(self, jobs: Sequence[_DialogJob]) -> None:
+        """Add dialogs to the queue. A drop while one is showing waits behind it."""
+        self._dialog_jobs.extend(jobs)
+        self._jobs_total += len(jobs)
+        if self._current_job is None:
+            self._start_next_dialog()
+        else:
+            self._update_drop_note()
+
+    def _start_next_dialog(self) -> None:
+        if not self._dialog_jobs:
+            self._current_job = None
+            self._jobs_total = self._jobs_started = 0
+            return
+        job = self._dialog_jobs.pop(0)
+        self.show_load_dialog()
+        if self._load_dialog is None:  # dependency dialog shown instead
+            self._dialog_jobs.clear()
+            self._current_job = None
+            self._jobs_total = self._jobs_started = 0
+            return
+        self._current_job = job
+        self._jobs_started += 1
+        self._update_drop_note()
+        self._load_dialog.open_location(job.store)
+        if job.shared_with:
+            self.iface.messageBar().pushMessage(
+                PLUGIN_NAME,
+                f"The {len(job.shared_with) + 1} dropped stores have the same structure. "
+                "What you add from the dialog is added from each of them.",
+                level=Qgis.Info,
+                duration=10,
+            )
+
+    def _update_drop_note(self) -> None:
+        job, dialog = self._current_job, self._load_dialog
+        if job is None or dialog is None:
+            return
+        parts = []
+        if self._jobs_total > 1:
+            parts.append(f"{self._jobs_started} of {self._jobs_total}")
+        if job.shared_with:
+            parts.append(f"for {len(job.shared_with) + 1} stores")
+        dialog.set_drop_note(", ".join(parts) or None, can_skip=bool(self._dialog_jobs))
+
+    def _skip_remaining(self) -> None:
+        """Skip Remaining: forget the queued dialogs. The dialog closes by itself."""
+        self._dialog_jobs.clear()
 
     def add_all_layers(self, store_uri: str, kind: str | None = None) -> list[QgsRasterLayer]:
         """Put every variable of every dataset on the map, one group per dataset.
@@ -485,7 +586,18 @@ class DatacubeViewerPlugin:
         )
 
     def _on_dialog_closed(self, *_args) -> None:
-        self._load_dialog = None
+        """Let the finished dialog go, and show the next queued one, if any.
+
+        Deleted rather than only dropped: a queue of fifty dialogs would otherwise
+        leave fifty hidden ones parented to the main window. The next one waits for
+        the event loop, so the old one has finished closing before it appears.
+        """
+        dialog, self._load_dialog = self._load_dialog, None
+        if dialog is not None:
+            dialog.deleteLater()
+        if self._current_job is not None:
+            self._current_job = None
+            QTimer.singleShot(0, self._start_next_dialog)
 
     def _on_layers_requested(self, uris: Sequence[LayerUri]) -> None:
         """The dialog's Add layer: put the layers on the map, then open the sliders.
@@ -495,9 +607,60 @@ class DatacubeViewerPlugin:
         and a panel that opens then is the one ``_add_cube_dock`` keeps hidden at
         startup.
         """
-        made = self.add_layers(uris)
+        job = self._current_job
+        requested = tuple(uris)
+        # Only while the dialog still shows the store the job is for: someone who
+        # picked another store from the Location list is no longer adding for all.
+        shared = (
+            job is not None
+            and bool(job.shared_with)
+            and bool(requested)
+            and all(uri.store_uri == job.store for uri in requested)
+        )
+        made = self._add_shared(requested, job) if shared else self.add_layers(requested)  # type: ignore[arg-type]
         if made:
             self._reveal(made)
+
+    def _add_shared(self, uris: tuple[LayerUri, ...], job: _DialogJob) -> list[QgsRasterLayer]:
+        """Add the dialog's selection from the dialog's store and from each sharing it.
+
+        The same URIs with only the store swapped: the stores were checked to have
+        the same datasets, variables, axes and levels. Each store gets its own group,
+        and the outcome is one message, not one per store.
+        """
+        made: list[QgsRasterLayer] = []
+        failures: list[str] = []
+        for store in (job.store, *job.shared_with):
+            requests = tuple(replace(uri, store_uri=store) for uri in uris)
+            layers, failed = self._create_layers(requests)
+            made.extend(layers)
+            failures.extend(f"{os.path.basename(store)}: {detail}" for detail in failed)
+        self._report_shared(made, failures, 1 + len(job.shared_with))
+        return made
+
+    def _report_shared(self, made: list[QgsRasterLayer], failures: list[str], stores: int) -> None:
+        if not made:
+            self.iface.messageBar().pushMessage(
+                PLUGIN_NAME,
+                "Could not load layers: " + ("; ".join(failures[:5]) or "unknown error"),
+                level=Qgis.Critical,
+                duration=0,
+            )
+            return
+        what = f"Loaded {len(made)} layers from {stores} stores"
+        self._log(what, Qgis.Info)
+        if failures:
+            shown = "; ".join(failures[:5]) + (
+                f"; and {len(failures) - 5} more" if len(failures) > 5 else ""
+            )
+            self.iface.messageBar().pushMessage(
+                PLUGIN_NAME,
+                f"{what}, but {len(failures)} failed: {shown}",
+                level=Qgis.Warning,
+                duration=0,
+            )
+            return
+        self.iface.messageBar().pushMessage(PLUGIN_NAME, what, level=Qgis.Success, duration=6)
 
     def _reveal(self, made: Sequence[QgsRasterLayer]) -> None:
         """Open the sliders on new layers someone just asked to look at, if wanted."""
@@ -525,11 +688,18 @@ class DatacubeViewerPlugin:
 
         Returns the layers that made it onto the map, in request order.
         """
-        from .provider import create_layer
-
         requests = tuple(uris)
         if not requests:
             return []
+        made, failures = self._create_layers(requests)
+        self._report(made, failures, requests[0])
+        return made
+
+    def _create_layers(
+        self, requests: tuple[LayerUri, ...]
+    ) -> tuple[list[QgsRasterLayer], list[str]]:
+        """:meth:`add_layers` without the message: the layers placed, and what failed."""
+        from .provider import create_layer
 
         grouped = len(requests) > 1
         made: list[QgsRasterLayer] = []
@@ -550,8 +720,7 @@ class DatacubeViewerPlugin:
 
         if made:
             self._place(made, requests[0], grouped=grouped and len(made) > 1)
-        self._report(made, failures, requests[0])
-        return made
+        return made, failures
 
     def _fix_stretch(self, layer: QgsRasterLayer) -> None:
         """Stretch the layer over the whole cube rather than over one slice.

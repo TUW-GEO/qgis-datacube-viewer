@@ -127,6 +127,9 @@ class DatacubeLoadDialog(QDialog):
     #: leaves the dialog open so several loads can be done from one store in a row;
     #: Add closes it.
     layersRequested = pyqtSignal(tuple)
+    #: Skip Remaining was pressed: the dialog closes, and the stores still queued
+    #: from the same drop are not opened. Emitted before the dialog closes.
+    skipRemainingRequested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None, initial: LayerUri | None = None):
         super().__init__(parent)
@@ -206,6 +209,12 @@ class DatacubeLoadDialog(QDialog):
         self._add_button = self._buttons.addButton("Add", QDialogButtonBox.AcceptRole)
         self._apply_button = self._buttons.addButton("Apply", QDialogButtonBox.AcceptRole)
         self._buttons.addButton(QDialogButtonBox.Close)
+        # Only while a drop of several stores is being worked through; see
+        # set_drop_note. ActionRole, so it neither accepts nor rejects by itself.
+        self._skip_button = self._buttons.addButton("Skip Remaining", QDialogButtonBox.ActionRole)
+        self._skip_button.setToolTip("Close, and do not open the other dropped stores")
+        self._skip_button.clicked.connect(self._on_skip_remaining)
+        self._skip_button.hide()
         self._add_button.setDefault(True)
         self._add_button.clicked.connect(self._on_add_and_close)
         self._apply_button.clicked.connect(self._on_add)
@@ -590,20 +599,28 @@ class DatacubeLoadDialog(QDialog):
             return
         self._connect(uri)
 
-    def open_location(self, uri: str, others: tuple[str, ...] = ()) -> None:
+    def open_location(self, uri: str) -> None:
         """Connect to ``uri`` as if typed in and Connect pressed. Drops onto QGIS land here.
 
         Unlike Connect, this does not wait for a connect already in flight: a store
         dropped while another is opening is the user changing their mind, and the
-        worker drops the superseded result. ``others`` (the rest of a multi-store
-        drop) go to the top of the Location list, unopened, so each is one click
-        away; they are remembered as recent only once actually opened.
+        worker drops the superseded result.
         """
-        for other in reversed(others):
-            if other != uri and self._uri_combo.findText(other) < 0:
-                self._uri_combo.insertItem(0, other)
         self._uri_combo.setCurrentText(uri)
         self._connect(uri)
+
+    def set_drop_note(self, note: str | None, can_skip: bool = False) -> None:
+        """Say in the title which part of a multi-store drop this dialog is for.
+
+        ``note`` goes after the title in parentheses ("2 of 5", "for 50 stores");
+        None puts the plain title back. ``can_skip`` shows Skip Remaining.
+        """
+        self.setWindowTitle(f"Add Datacube Layer ({note})" if note else "Add Datacube Layer")
+        self._skip_button.setVisible(can_skip)
+
+    def _on_skip_remaining(self) -> None:
+        self.skipRemainingRequested.emit()
+        self.reject()
 
     def _connect(self, uri: str) -> None:
         if uri != self._connected_uri:
@@ -968,11 +985,23 @@ class DatacubeLoadDialog(QDialog):
         the worker discard its result, so nothing calls back into a dialog that is
         being torn down.
         """
+        self._stop_routing()
+        super().closeEvent(event)
+
+    def done(self, result: int) -> None:
+        """Add and Close end the dialog through here, not through closeEvent.
+
+        The same cleanup, so a dialog that is deleted once it has finished (the
+        plugin does that) has no result still on its way into it.
+        """
+        self._stop_routing()
+        super().done(result)
+
+    def _stop_routing(self) -> None:
         self._closing = True
         self._preview_timer.stop()
         self._worker.cancel()
         self._preview_worker.cancel()
-        super().closeEvent(event)
 
     def _on_preview_ready(self, result: Any) -> None:
         self._set_preview(result)
