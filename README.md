@@ -244,6 +244,20 @@ hover for the full text, or right-click to copy it.
 | --- | --- |
 | ![The Add Datacube Layer dialog, with a preview](docs/img/load-dialog.png) | ![The axis sliders for the sensor and time axes, and the Icechunk version slider](docs/img/sliders.png) |
 
+### Colour range
+
+A layer added from the dialog gets one colour range, fitted to the whole cube. It
+stays fixed while you move the sliders, so the same colour means the same value in
+every slice, and a dry month looks darker than a wet one.
+
+Tick **Rescale colours to each slice** to stretch every slice to its own range
+instead, with the algorithm the layer already uses (min/max, std dev or cumulative
+cut). Each slice keeps its full contrast, and the numbers in the Layers panel's
+legend change as you move. The colours then no longer compare across slices.
+**Rescale colours to whole cube** goes back to the range over the whole cube.
+
+![With per-slice rescaling off the legend's range stays fixed as the time slider moves; with it on, the range follows each slice](docs/img/rescale-colours.gif)
+
 ## Developing
 
 Layout:

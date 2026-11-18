@@ -6,6 +6,9 @@
 * ``time-slider.gif``  the whole QGIS window, with the map redrawing while the time
                        slider steps through a year, and the plugin's toolbar buttons,
                        axis sliders and Version section boxed and labelled
+* ``rescale-colours.gif``  what "Rescale colours to each slice" does: a year with
+                       it off (the legend's range stays put), then with it on (the
+                       range follows each slice)
 
 ``buttons.png`` is the toolbar icon strip, cut from the icon artwork, and not made
 here.
@@ -16,7 +19,7 @@ QGIS environment) with zarr, icechunk and Pillow, against the demo stores from
 snapshot, so a copy of it, in a temporary directory, gets one more commit and a tag
 to give the Version slider a history to show. ``data/`` itself is not touched.
 
-The GIF is taken from a real QGIS: the script starts the ``qgis`` executable next
+The GIFs are taken from a real QGIS: the script starts the ``qgis`` executable next
 to its Python (``--qgis`` to point elsewhere) headless, with a throwaway profile and
 no other plugins, and runs itself inside it through ``--code``. There it loads the
 plugin and adds the layer as the Add dialog does, which opens the slider sidebar.
@@ -24,6 +27,7 @@ plugin and adds the layer as the Add dialog does, which opens the slider sidebar
 Usage::
 
     QT_QPA_PLATFORM=offscreen python scripts/make_screenshots.py [--out docs/img]
+    QT_QPA_PLATFORM=offscreen python scripts/make_screenshots.py --only rescale-colours
 
 The look follows the platform style QGIS runs with, so images made on Linux and on
 Windows differ in fonts and widget chrome.
@@ -46,6 +50,8 @@ from pathlib import Path
 _GIF_ENV = "DATACUBE_SCREENSHOT_GIF"
 _STORE_ENV = "DATACUBE_SCREENSHOT_STORE"
 _ROOT_ENV = "DATACUBE_SCREENSHOT_ROOT"
+#: Which GIF the copy inside QGIS records: a key of _RECORDERS.
+_KIND_ENV = "DATACUBE_SCREENSHOT_KIND"
 
 ROOT = Path(os.environ.get(_ROOT_ENV) or Path(__file__).resolve().parent.parent)
 sys.path.insert(0, str(ROOT))
@@ -56,8 +62,8 @@ from qgis.core import (
     QgsMapSettings,
     QgsRasterLayer,
 )
-from qgis.PyQt.QtCore import QObject, QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen
+from qgis.PyQt.QtCore import QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
+from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen, QPolygonF
 from qgis.PyQt.QtWidgets import QMainWindow, QWidget
 
 #: The store as typed into the dialog. ``~`` is expanded by the plugin, and keeps
@@ -67,6 +73,8 @@ DIALOG_STORE = "~/code/qgis-datacube-viewer/data/cube.zarr"
 INDICES = {"sensor": 0, "time": 5}
 VARIABLE = "soil_moisture"
 GIF_FRAME_MS = 450
+#: How long a frame that explains a state change stays up.
+GIF_HOLD_MS = 2200
 #: QGIS window size for the GIF: room for the panels, the map and the sidebar.
 GIF_WINDOW = (1280, 800)
 GIF_SIDEBAR_WIDTH = 430
@@ -259,9 +267,9 @@ def to_pil(image: QImage):
     return Image.frombytes("RGBA", (rgba.width(), rgba.height()), raw).convert("RGB")
 
 
-def shot_gif(qgis: str, store: Path, out: Path, scratch: Path) -> None:
-    """Run this script inside a headless QGIS to record the GIF from its window."""
-    profiles = scratch / "profiles"
+def shot_gif(qgis: str, kind: str, store: Path, target: Path, scratch: Path) -> None:
+    """Run this script inside a headless QGIS to record GIF ``kind`` from its window."""
+    profiles = scratch / f"profiles-{kind}"
     ini = profiles / "default" / "QGIS" / "QGIS3.ini"
     ini.parent.mkdir(parents=True)
     # No "new version available" bar, whatever the release calendar says.
@@ -270,12 +278,18 @@ def shot_gif(qgis: str, store: Path, out: Path, scratch: Path) -> None:
     env = dict(os.environ)
     env.update(
         {
-            _GIF_ENV: str(out / "time-slider.gif"),
+            _GIF_ENV: str(target),
+            _KIND_ENV: kind,
             _STORE_ENV: str(store),
             _ROOT_ENV: str(ROOT),
             "QT_QPA_PLATFORM": env.get("QT_QPA_PLATFORM", "offscreen"),
         }
     )
+    if env["QT_QPA_PLATFORM"] == "offscreen":
+        # QGIS will not start without a DISPLAY, but given the desktop's it still
+        # talks to that X server, and hangs whenever the server does not answer
+        # (a locked screen, say). One that does not exist passes the check.
+        env["DISPLAY"] = ":9999"
     command = [
         qgis,
         "--noplugins",
@@ -285,9 +299,11 @@ def shot_gif(qgis: str, store: Path, out: Path, scratch: Path) -> None:
         "--code",
         str(Path(__file__).resolve()),
     ]
+    if target.exists():
+        target.unlink()
     result = subprocess.run(command, env=env, timeout=600, check=False)
-    if result.returncode != 0 or not (out / "time-slider.gif").exists():
-        raise SystemExit(f"QGIS did not record the GIF (exit code {result.returncode})")
+    if result.returncode != 0 or not target.exists():
+        raise SystemExit(f"QGIS did not record {target.name} (exit code {result.returncode})")
 
 
 def window_rect(widget: QWidget, window: QWidget) -> QRect:
@@ -344,75 +360,189 @@ def annotate(image: QImage, notes: list[tuple[QRect, str, str]]) -> None:
             label = QRectF(box.left() - gap - width, middle - height / 2, width, height)
             joint = (label.right(), box.left())
         painter.drawLine(int(joint[0]), int(middle), int(joint[1]), int(middle))
+        # Arrowhead on the box, pointing into it.
+        tip = box.left() if side == "left" else box.right()
+        back = -11 if side == "left" else 11
         painter.setPen(Qt.NoPen)
         painter.setBrush(ACCENT)
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(tip, middle),
+                    QPointF(tip + back, middle - 6),
+                    QPointF(tip + back, middle + 6),
+                ]
+            )
+        )
         painter.drawRoundedRect(label, height / 2, height / 2)
         painter.setPen(QColor("white"))
         painter.drawText(label, Qt.AlignCenter, text)
     painter.end()
 
 
-def _record_gif_in_qgis() -> None:
-    """The half that runs inside QGIS: load the plugin, add the layer, step time."""
-    from qgis.utils import iface
+class _Session:
+    """QGIS with the plugin loaded and one layer added, as after Add in the dialog."""
 
-    import datacube_viewer
-    from datacube_viewer.layeruri import LayerUri, per_variable
+    def __init__(self, store: str):
+        from qgis.utils import iface
 
-    target = Path(os.environ[_GIF_ENV])
-    window = iface.mainWindow()
-    window.resize(*GIF_WINDOW)
+        import datacube_viewer
+        from datacube_viewer.layeruri import LayerUri, per_variable
 
-    plugin = datacube_viewer.classFactory(iface)
-    plugin.initGui()
-    uri = LayerUri(store_uri=os.environ[_STORE_ENV], bands=(VARIABLE,), indices=INDICES)
-    # What Add in the dialog does: the layer, its stretch, and the sidebar opening.
-    plugin._on_layers_requested(per_variable(uri))
+        self.iface = iface
+        self.window = iface.mainWindow()
+        self.window.resize(*GIF_WINDOW)
 
-    dock = plugin._cube_dock
-    if dock is None or dock.isHidden():
-        raise RuntimeError("the slider sidebar did not open")
-    window.resizeDocks([dock], [GIF_SIDEBAR_WIDTH], Qt.Horizontal)
-    versions = dock.versions()
-    if not versions.isHidden() and not pump(lambda: versions._slider.isEnabled()):
-        raise RuntimeError("the Icechunk history never arrived")
+        self.plugin = datacube_viewer.classFactory(iface)
+        self.plugin.initGui()
+        uri = LayerUri(store_uri=store, bands=(VARIABLE,), indices=INDICES)
+        # What Add in the dialog does: the layer, its stretch, and the sidebar opening.
+        self.plugin._on_layers_requested(per_variable(uri))
 
-    # The "Loaded ..." notice would sit over the top of the map in every frame.
-    iface.messageBar().clearWidgets()
-    canvas = iface.mapCanvas()
-    canvas.zoomToFullExtent()
-    scrubber = dock.scrubber()
-    row = next(r for r in scrubber._rows if r.axis.name == "time")
+        self.dock = self.plugin._cube_dock
+        if self.dock is None or self.dock.isHidden():
+            raise RuntimeError("the slider sidebar did not open")
+        self.window.resizeDocks([self.dock], [GIF_SIDEBAR_WIDTH], Qt.Horizontal)
+        self.versions = self.dock.versions()
+        if not self.versions.isHidden() and not pump(lambda: self.versions._slider.isEnabled()):
+            raise RuntimeError("the Icechunk history never arrived")
+        self.scrubber = self.dock.scrubber()
+        self.layer = self.scrubber.layer()
+        self.time = next(r for r in self.scrubber._rows if r.axis.name == "time")
 
+        # The "Loaded ..." notice would sit over the top of the map in every frame.
+        iface.messageBar().clearWidgets()
+        self.canvas = iface.mapCanvas()
+        self.canvas.zoomToFullExtent()
+
+    def show_time(self, index: int) -> None:
+        """Move the time slider as a click would, and wait for the map to redraw."""
+        self.time.set_index(index)
+        self.scrubber._apply_now()
+        self.redraw()
+
+    def redraw(self) -> None:
+        self.canvas.refresh()
+        settle(0.2)
+        if not pump(lambda: not self.canvas.isDrawing(), timeout=30):
+            raise RuntimeError("the canvas never finished drawing")
+        settle(0.2)
+
+    def frame(self, notes: list[tuple[QRect, str, str]]):
+        image = self.window.grab().toImage()
+        annotate(image, notes)
+        return to_pil(image)
+
+    def rect(self, widget: QWidget) -> QRect:
+        return window_rect(widget, self.window)
+
+    def legend_rect(self) -> QRect:
+        """The layer's legend rows in the Layers panel: band name and colour bar."""
+        from qgis.core import QgsProject
+
+        view = self.iface.layerTreeView()
+        node = QgsProject.instance().layerTreeRoot().findLayer(self.layer.id())
+        # The view shows a proxy of the layer tree model: ask it in its own indices.
+        proxy = view.model()
+        parent = proxy.mapFromSource(view.layerTreeModel().node2index(node))
+        view.expand(parent)
+        settle(0.1)
+        rect = QRect()
+        for row in range(proxy.rowCount(parent)):
+            cell = view.visualRect(proxy.index(row, 0, parent))
+            rect = rect.united(
+                QRect(view.viewport().mapTo(self.window, cell.topLeft()), cell.size())
+            )
+        if rect.isNull():
+            raise RuntimeError("the layer has no legend rows to point at")
+        return rect
+
+
+def _record_time_slider(session: _Session, target: Path) -> None:
+    """Step through the year, with the plugin's controls boxed and labelled."""
     frames = []
-    for index in range(row.axis.size):
-        row.set_index(index)
-        scrubber._apply_now()
-        canvas.refresh()
-        settle(0.2)
-        if not pump(lambda: not canvas.isDrawing(), timeout=30):
-            raise RuntimeError(f"the canvas never finished drawing time index {index}")
-        settle(0.2)
-        image = window.grab().toImage()
+    for index in range(session.time.axis.size):
+        session.show_time(index)
         notes = [
             (
-                toolbar_buttons_rect(plugin._toolbar, window),
+                toolbar_buttons_rect(session.plugin._toolbar, session.window),
                 "Add layer · Time Travel · Slider sidebar",
                 "right",
             ),
-            (window_rect(scrubber._body, window), "Step through sensor, time, …", "left"),
+            (session.rect(session.scrubber._body), "Step through sensor, time, …", "left"),
         ]
-        if not versions.isHidden():
+        if not session.versions.isHidden():
             notes.append(
-                (window_rect(versions, window), "Icechunk branches, tags, snapshots", "left")
+                (session.rect(session.versions), "Icechunk branches, tags, snapshots", "left")
             )
-        annotate(image, notes)
-        frames.append(to_pil(image))
-
+        frames.append(session.frame(notes))
     save_gif(frames, target)
 
 
-def save_gif(frames: list, target: Path) -> None:
+def _record_rescale_colours(session: _Session, target: Path) -> None:
+    """The year twice: with one colour range for the cube, then one per slice.
+
+    Off is the default for a freshly added layer (its range is fitted to the whole
+    cube), so the map gets darker and lighter with the data while the legend's
+    numbers stand still. On, every slice is stretched to its own range: the map
+    keeps its contrast and the legend's numbers move instead.
+    """
+    box = session.scrubber._restretch
+    if box.isChecked():
+        raise RuntimeError("Rescale colours to each slice should start off for a new layer")
+
+    def box_rect() -> QRect:
+        # The check box and its text, not the full width of the sidebar it sits in.
+        return QRect(box.mapTo(session.window, QPoint(0, 0)), box.sizeHint())
+
+    frames, durations = [], []
+
+    def shoot(notes, ms: int) -> None:
+        frames.append(session.frame(notes))
+        durations.append(ms)
+
+    session.show_time(0)
+    shoot([(box_rect(), "Off by default", "left")], GIF_HOLD_MS)
+    for index in range(session.time.axis.size):
+        session.show_time(index)
+        shoot(
+            [
+                (box_rect(), "Rescale colours to each slice: off", "left"),
+                (session.legend_rect(), "Colour range stays fixed", "right"),
+            ],
+            GIF_FRAME_MS,
+        )
+
+    session.show_time(0)
+    box.setChecked(True)  # what a click does: toggled -> rescale the slice on screen
+    session.redraw()
+    shoot(
+        [
+            (box_rect(), "Switched on", "left"),
+            (session.legend_rect(), "Range fitted to this slice", "right"),
+        ],
+        GIF_HOLD_MS,
+    )
+    for index in range(session.time.axis.size):
+        session.show_time(index)
+        shoot(
+            [
+                (box_rect(), "Rescale colours to each slice: on", "left"),
+                (session.legend_rect(), "Colour range follows each slice", "right"),
+            ],
+            GIF_FRAME_MS,
+        )
+    durations[-1] = GIF_HOLD_MS
+    save_gif(frames, target, durations)
+
+
+_RECORDERS = {
+    "time-slider": _record_time_slider,
+    "rescale-colours": _record_rescale_colours,
+}
+
+
+def save_gif(frames: list, target: Path, durations: list[int] | None = None) -> None:
     """Write ``frames`` (RGB) as a looping GIF that does not flicker.
 
     GIF has 256 colours per frame. Quantizing each frame on its own gives each a
@@ -434,7 +564,7 @@ def save_gif(frames: list, target: Path) -> None:
         target,
         save_all=True,
         append_images=indexed[1:],
-        duration=GIF_FRAME_MS,
+        duration=durations or GIF_FRAME_MS,
         loop=0,
         optimize=True,
     )
@@ -445,7 +575,8 @@ def _run_inside_qgis() -> None:
     import traceback
 
     try:
-        _record_gif_in_qgis()
+        recorder = _RECORDERS[os.environ[_KIND_ENV]]
+        recorder(_Session(os.environ[_STORE_ENV]), Path(os.environ[_GIF_ENV]))
     except BaseException:
         traceback.print_exc()
         sys.stdout.flush()
@@ -453,6 +584,14 @@ def _run_inside_qgis() -> None:
     sys.stdout.flush()
     # os._exit rather than quitting QGIS: no "save the project?" on the way out.
     os._exit(0)
+
+
+OUTPUTS = {
+    "load-dialog": "load-dialog.png",
+    "sliders": "sliders.png",
+    "time-slider": "time-slider.gif",
+    "rescale-colours": "rescale-colours.gif",
+}
 
 
 def main() -> None:
@@ -464,6 +603,7 @@ def main() -> None:
         default=str(Path(sys.executable).with_name("qgis")),
         help="QGIS executable for the GIF (default: the one next to this Python)",
     )
+    parser.add_argument("--only", nargs="+", choices=OUTPUTS, help="make just these (default: all)")
     args = parser.parse_args()
     if not shutil.which(args.qgis):
         raise SystemExit(f"{args.qgis} not found: pass --qgis")
@@ -480,16 +620,32 @@ def main() -> None:
 
     register_provider()
 
+    wanted = set(args.only or OUTPUTS)
     with tempfile.TemporaryDirectory() as scratch:
         versioned = Path(scratch) / "cube.icechunk"
-        make_history(args.data / "cube.icechunk", versioned)
+        if wanted & {"sliders", "time-slider"}:
+            make_history(args.data / "cube.icechunk", versioned)
+        out = args.out.resolve()
 
-        shot_dialog(args.out)
-        shot_sliders(versioned, args.out)
-        shot_gif(args.qgis, versioned, args.out.resolve(), Path(scratch))
+        if "load-dialog" in wanted:
+            shot_dialog(args.out)
+        if "sliders" in wanted:
+            shot_sliders(versioned, args.out)
+        if "time-slider" in wanted:
+            shot_gif(args.qgis, "time-slider", versioned, out / "time-slider.gif", Path(scratch))
+        if "rescale-colours" in wanted:
+            # Plain Zarr: no Version section, so the check box sits where the eye goes.
+            shot_gif(
+                args.qgis,
+                "rescale-colours",
+                args.data / "cube.zarr",
+                out / "rescale-colours.gif",
+                Path(scratch),
+            )
 
-    for name in ("load-dialog.png", "sliders.png", "time-slider.gif"):
-        print(args.out / name)
+    for name in OUTPUTS:
+        if name in wanted:
+            print(args.out / OUTPUTS[name])
 
 
 if os.environ.get(_GIF_ENV):
