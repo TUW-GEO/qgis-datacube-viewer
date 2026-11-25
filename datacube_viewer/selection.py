@@ -168,6 +168,40 @@ def _validate_bands(
     return out
 
 
+def _validate_subset(dataset: DatasetInfo, uri: LayerUri) -> list[Issue]:
+    out: list[Issue] = []
+    known = {axis.name: axis for axis in dataset.axes}
+    for name, steps in uri.subset.items():
+        axis = known.get(name)
+        if axis is None:
+            out.append(
+                Issue(
+                    "warning",
+                    "subset",
+                    f"{dataset.path!r} has no dimension {name!r}; its subset will be ignored.",
+                )
+            )
+            continue
+        if not steps:
+            out.append(
+                Issue(
+                    "error",
+                    "subset",
+                    f"The subset of {name!r} keeps nothing.",
+                    hint=f"Tick at least one {name} value.",
+                )
+            )
+        elif not all(0 <= step < axis.size for step in steps):
+            out.append(
+                Issue(
+                    "error",
+                    "subset",
+                    f"The subset of {name!r} reaches outside the axis (0..{axis.size - 1}).",
+                )
+            )
+    return out
+
+
 def _validate_indices(dataset: DatasetInfo, uri: LayerUri) -> list[Issue]:
     out: list[Issue] = []
     known = {axis.name: axis for axis in dataset.axes}
@@ -188,6 +222,15 @@ def _validate_indices(dataset: DatasetInfo, uri: LayerUri) -> list[Issue]:
                     "error",
                     "indices",
                     f"Index {index} is out of range for {name!r} (0..{axis.size - 1}).",
+                )
+            )
+        elif uri.subset.get(name) and index not in uri.subset[name]:
+            out.append(
+                Issue(
+                    "error",
+                    "indices",
+                    f"{axis.label_at(index)} is outside the subset of {name!r}.",
+                    hint="Pick a slice inside the subset, or widen the subset.",
                 )
             )
     unset = [axis.name for axis in dataset.axes if axis.name not in uri.indices]
@@ -310,6 +353,7 @@ def validate(store: StoreInfo, uri: LayerUri, combine: bool = True) -> list[Issu
 
     issues += _validate_crs(dataset, uri)
     issues += _validate_bands(dataset, uri.bands, combine)
+    issues += _validate_subset(dataset, uri)
     issues += _validate_indices(dataset, uri)
     issues += _validate_levels(dataset, uri)
 

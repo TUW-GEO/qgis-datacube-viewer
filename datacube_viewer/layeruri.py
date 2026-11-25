@@ -97,6 +97,11 @@ class LayerUri:
     bands: tuple[str, ...] = ()
     #: One index per non-spatial dimension, e.g. ``{"time": 0}``.
     indices: Mapping[str, int] = field(default_factory=dict)
+    #: The steps the layer may visit along each non-spatial dimension, e.g.
+    #: ``{"time": (3, 4, 5), "sensor": (0, 2)}``: the cube panel's sliders step
+    #: through these and the whole-cube colour range is taken over them. A
+    #: dimension left out is whole. See :func:`.core.model.axis_steps`.
+    subset: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
     resampling: Resampling = "average"
     level_strategy: LevelStrategy = "auto"
     level_name: str | None = None
@@ -139,6 +144,8 @@ class LayerUri:
         if self.indices:
             joined = ",".join(f"{k}={int(v)}" for k, v in sorted(self.indices.items()))
             parts.append(f"index={_encode(joined)}")
+        if self.subset:
+            parts.append(f"subset={_encode(encode_subset(self.subset))}")
         parts.append(f"resampling={self.resampling}")
         parts.append(f"levels={self.level_strategy}")
         if self.level_name:
@@ -179,6 +186,62 @@ def per_variable(uri: LayerUri) -> tuple[LayerUri, ...]:
     if len(uri.bands) <= 1:
         return (uri,)
     return tuple(replace(uri, bands=(name,)) for name in uri.bands)
+
+
+def encode_steps(steps: tuple[int, ...]) -> str:
+    """``(0, 1, 2, 3, 7, 9, 10)`` as ``0..3;7;9..10``: runs inclusive, ``;`` between."""
+    ordered = sorted({int(step) for step in steps})
+    runs: list[str] = []
+    start = 0
+    for position in range(1, len(ordered) + 1):
+        if position < len(ordered) and ordered[position] == ordered[position - 1] + 1:
+            continue
+        first, last = ordered[start], ordered[position - 1]
+        runs.append(str(first) if first == last else f"{first}..{last}")
+        start = position
+    return ";".join(runs)
+
+
+def _parse_steps(name: str, text: str) -> tuple[int, ...]:
+    out: set[int] = set()
+    for chunk in text.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        first, sep, last = chunk.partition("..")
+        try:
+            low = int(first)
+            high = int(last) if sep else low
+        except ValueError as exc:
+            raise UriError(
+                f"Subset of {name!r} must be indices and 'first..last' runs, got {chunk!r}."
+            ) from exc
+        if low < 0 or high < low:
+            raise UriError(f"Subset of {name!r} has an empty or negative run {chunk!r}.")
+        out.update(range(low, high + 1))
+    return tuple(sorted(out))
+
+
+def encode_subset(subset: Mapping[str, tuple[int, ...]]) -> str:
+    """Serialise a subset as ``dim=steps,dim=steps``, sorted, like the indices.
+
+    See :func:`encode_steps` for one axis's steps.
+    """
+    return ",".join(f"{name}={encode_steps(steps)}" for name, steps in sorted(subset.items()))
+
+
+def decode_subset(text: str) -> dict[str, tuple[int, ...]]:
+    """Parse :func:`encode_subset`. Raises :class:`UriError` on malformed input."""
+    out: dict[str, tuple[int, ...]] = {}
+    for chunk in (text or "").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        name, sep, value = chunk.partition("=")
+        if not sep:
+            raise UriError(f"Malformed subset entry {chunk!r}; expected 'dim=first..last'.")
+        out[name.strip()] = _parse_steps(name.strip(), value)
+    return out
 
 
 def _parse_ref(text: str) -> RefSpec:
@@ -295,6 +358,7 @@ def decode_uri(uri: str) -> LayerUri:
         pin_snapshot=_parse_bool(fields.get("pin", "")),
         bands=bands,
         indices=_parse_indices(fields.get("index", "")),
+        subset=decode_subset(fields.get("subset", "")),
         resampling=resampling,  # type: ignore[arg-type]
         level_strategy=strategy,  # type: ignore[arg-type]
         level_name=fields.get("level") or None,

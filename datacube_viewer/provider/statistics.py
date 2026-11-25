@@ -53,7 +53,7 @@ from qgis.core import (
 )
 
 from .. import settings
-from ..core import AxisInfo, DatacubeError, DatasetInfo, DatasetReader
+from ..core import AxisInfo, AxisSubset, DatacubeError, DatasetInfo, DatasetReader, axis_steps
 from ..core.geometry import Window
 from ..layeruri import CLIP_LABELS_PROPERTY, RANGE_INFO_PROPERTY, STRETCH_METHOD_PROPERTY
 from .context import axes_for_bands
@@ -575,8 +575,13 @@ def plan_cube(
     method: StretchMethod,
     budget: int,
     full_scan: bool = False,
+    subset: AxisSubset | None = None,
 ) -> ScanPlan:
     """Pick the slices a cube-wide range is read from.
+
+    The cube is the layer's ``subset`` of each axis (see
+    :func:`~datacube_viewer.core.model.axis_steps`), the whole axis where it has none:
+    the slices outside it are never visited, nor counted.
 
     * ``full_scan``: every slice, every pixel. Exact, and as slow as the cube is big.
     * Exact within ``budget``: every slice if the whole cube fits; else as many
@@ -589,34 +594,32 @@ def plan_cube(
       sensors is ten thousand slices.
     """
     base = dict(indices or {})
-    walk = [axis for axis in axes if axis.size > 1]
+    steps = {axis.name: axis_steps(axis, subset) for axis in axes}
+    walk = [axis for axis in axes if len(steps[axis.name]) > 1]
     if not walk:
         return plan_slice(dataset, bands, base, method, budget)
     names = [axis.name for axis in walk]
-    sizes = [axis.size for axis in walk]
+    sizes = [len(steps[name]) for name in names]
     total = int(np.prod(sizes, dtype=np.int64))
+
+    def at(coords) -> dict[str, int]:
+        """The slice at ``coords``, positions within each axis's steps."""
+        return {**base, **{n: int(steps[n][int(c)]) for n, c in zip(names, coords)}}
 
     def spread(count: int) -> tuple[dict[str, int], ...]:
         positions = np.unique(np.linspace(0, total - 1, count).round().astype(np.int64))
-        out = []
-        for position in positions:
-            coords = np.unravel_index(int(position), sizes)
-            out.append({**base, **{n: int(c) for n, c in zip(names, coords)}})
-        return tuple(out)
+        return tuple(at(np.unravel_index(int(position), sizes)) for position in positions)
 
     if full_scan:
-        every = tuple(
-            {**base, **dict(zip(names, combo))}
-            for combo in itertools.product(*(range(size) for size in sizes))
-        )
+        every = tuple(at(combo) for combo in itertools.product(*(range(size) for size in sizes)))
         return ScanPlan(every, None, total)
 
     if not method.exact:
         visits: list[dict[str, int]] = [base]
-        for axis in walk:
-            count = min(CUBE_SLICES_PER_AXIS, axis.size)
-            for position in np.linspace(0, axis.size - 1, count).round().astype(int):
-                visit = {**base, axis.name: int(position)}
+        for name, size in zip(names, sizes):
+            count = min(CUBE_SLICES_PER_AXIS, size)
+            for position in np.linspace(0, size - 1, count).round().astype(int):
+                visit = {**base, name: int(steps[name][int(position)])}
                 if visit not in visits:
                     visits.append(visit)
         return ScanPlan(tuple(visits), ESTIMATE_PIXELS, total)
@@ -720,11 +723,12 @@ def cube_scan(
     full_scan: bool = False,
     progress: Callable[[float], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    subset: AxisSubset | None = None,
 ) -> RangeScan:
-    """The range across the whole cube, per band. See :func:`plan_cube`."""
+    """The range across the whole cube (or its ``subset``), per band. See :func:`plan_cube`."""
     method = method or StretchMethod.from_settings()
     budget = budget or settings.exact_budget_pixels()
-    plan = plan_cube(reader.dataset, bands, axes, indices, method, budget, full_scan)
+    plan = plan_cube(reader.dataset, bands, axes, indices, method, budget, full_scan, subset)
     return scan_ranges(reader, bands, plan, method, progress, cancelled)
 
 
@@ -736,9 +740,10 @@ def cube_ranges(
     method: StretchMethod | None = None,
     budget: int | None = None,
     full_scan: bool = False,
+    subset: AxisSubset | None = None,
 ) -> tuple[tuple[float, float] | None, ...]:
     """Per-band ``(low, high)`` across the whole cube. None where unknown."""
-    return cube_scan(reader, bands, axes, indices, method, budget, full_scan).ranges
+    return cube_scan(reader, bands, axes, indices, method, budget, full_scan, subset=subset).ranges
 
 
 def refresh_legend(layer: QgsRasterLayer) -> bool:
@@ -999,7 +1004,9 @@ def fit_scan(layer: QgsRasterLayer, full_scan: bool = False) -> tuple[RangeScan,
     view = context.view()
     axes = axes_for_bands(view.dataset, view.bands)
     method = layer_method(layer)
-    scan = cube_scan(view.reader, view.bands, axes, view.indices, method, full_scan=full_scan)
+    scan = cube_scan(
+        view.reader, view.bands, axes, view.indices, method, full_scan=full_scan, subset=view.subset
+    )
     return scan, bool(axes)
 
 

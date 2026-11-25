@@ -52,10 +52,15 @@ def variable_entry(name: str, long_name: str = "") -> SearchEntry:
     return SearchEntry("variable", name, 0, described, f"{name} {long_name}".strip())
 
 
-def axis_entries(name: str, labels: Sequence[str]) -> list[SearchEntry]:
+def axis_entries(
+    name: str, labels: Sequence[str], indices: Sequence[int] | None = None
+) -> list[SearchEntry]:
+    """One entry per label. ``indices`` gives each label's index along the axis,
+    for a subset of it; without, the labels are the whole axis in order."""
+    positions = range(len(labels)) if indices is None else indices
     return [
-        SearchEntry("axis", name, index, f"{name}: {label}", f"{name} {label}")
-        for index, label in enumerate(labels)
+        SearchEntry("axis", name, int(index), f"{name}: {label}", f"{name} {label}")
+        for index, label in zip(positions, labels)
     ]
 
 

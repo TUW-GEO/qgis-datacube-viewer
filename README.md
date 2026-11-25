@@ -217,6 +217,15 @@ from the dialog. To stop that, untick **Automatically open slider sidebar** unde
 **Settings → Options → Datacube Viewer**, and open the panel from the toolbar or
 **Raster → Datacube Viewer → Datacube Panel** when you want it.
 
+To work with part of a cube, set a **Subset** under each axis in the **Add Datacube
+Layer** dialog. A time axis, or any axis of numbers, gets a range slider: drag its
+ends to keep, say, one year of a decade. An axis of named values, such as sensors,
+gets a tick box per value; untick the ones to leave out. The layer then only shows
+what the subsets keep: the panel's sliders step through those slices alone, the
+search offers only them, and the colour range fitted to the whole cube is fitted to
+them (see [Colour range](#colour-range)). The subset is saved with the layer, in its
+source (`subset=time=12..23,sensor=0;2`).
+
 For a slow or remote store, untick **Redraw while dragging** in the panel: the layer
 is then redrawn once, when you let go of the handle, rather than for slices on the
 way past. Its default is under **Settings → Options → Datacube Viewer** too.
@@ -250,8 +259,8 @@ hover for the full text, or right-click to copy it.
 
 ### Colour range
 
-A layer added from the dialog gets one colour range, fitted to the whole cube. It
-stays fixed while you move the sliders, so the same colour means the same value in
+A layer added from the dialog gets one colour range, fitted to the whole cube (or to
+its subset, if you set one). It stays fixed while you move the sliders, so the same colour means the same value in
 every slice, and a dry month looks darker than a wet one.
 
 By default the range is the exact minimum and maximum, read from every pixel at full

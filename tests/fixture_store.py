@@ -391,12 +391,16 @@ def write_small_netcdf(
     steps: int = 3,
     first_day: float = 0.0,
     x0: float = 500_000.0,
+    sensors: tuple[str, ...] = (),
 ) -> str:
     """Write a small georeferenced NetCDF cube: ``variables`` over (time, y, x).
 
     For tests of several dropped files. The defaults make files of the same
     structure; ``first_day`` and ``x0`` move them in time and space without changing
-    it, and ``variables`` and ``steps`` change it.
+    it, and ``variables`` and ``steps`` change it. ``sensors`` adds a leading string
+    axis, making the variables (sensor, time, y, x). Every slice is filled with one
+    value, ``1000 * sensor + time`` plus the variable's position, so a range read
+    over a subset names exactly which slices it saw.
     """
     import netCDF4
     import pyproj
@@ -419,9 +423,19 @@ def write_small_netcdf(
         crs = ds.createVariable("spatial_ref", "i4", ())
         crs.grid_mapping_name = "transverse_mercator"
         crs.crs_wkt = crs.spatial_ref = pyproj.CRS.from_user_input(CONV_EPSG).to_wkt()
+        if sensors:
+            ds.createDimension("sensor", len(sensors))
+            sensor = ds.createVariable("sensor", str, ("sensor",))
+            sensor[:] = np.array(sensors, dtype=object)
+            levels = 1000.0 * np.arange(len(sensors))[:, None] + np.arange(steps)[None, :]
+            cube = np.broadcast_to(levels[:, :, None, None], (len(sensors), steps, ny, nx))
         for index, name in enumerate(variables):
-            var = ds.createVariable(name, "f4", ("time", "y", "x"))
-            var[:] = np.arange(steps * ny * nx, dtype="float32").reshape(steps, ny, nx) + index
+            if sensors:
+                var = ds.createVariable(name, "f4", ("sensor", "time", "y", "x"))
+                var[:] = cube.astype("float32") + index
+            else:
+                var = ds.createVariable(name, "f4", ("time", "y", "x"))
+                var[:] = np.arange(steps * ny * nx, dtype="float32").reshape(steps, ny, nx) + index
             var.grid_mapping = "spatial_ref"
     return str(path)
 

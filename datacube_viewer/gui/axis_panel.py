@@ -59,7 +59,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from ..core import AxisInfo, DatacubeError, DatasetInfo
+from ..core import AxisInfo, DatacubeError, DatasetInfo, nearest_step
 from ..core.search import SearchEntry, axis_entries, variable_entry
 from ..layeruri import (
     INDEX_PROPERTY,
@@ -219,9 +219,20 @@ class AxisSliderRow:
     all live in the same ``QGridLayout`` rather than in a nested layout each.
     """
 
-    def __init__(self, axis: AxisInfo, chunk_length: int, grid: QGridLayout, row: int):
+    def __init__(
+        self,
+        axis: AxisInfo,
+        chunk_length: int,
+        grid: QGridLayout,
+        row: int,
+        steps: Sequence[int] | None = None,
+    ):
         self.axis = axis
         self.chunk_length = chunk_length
+        #: The indices the slider visits, in order: the layer's subset of the
+        #: axis, or all of it. The slider's own value is a position in here.
+        self.steps = tuple(steps) if steps is not None else tuple(range(axis.size))
+        count = len(self.steps)
 
         name = QLabel(f"<b>{axis.name}</b>")
         name.setToolTip(self._axis_tooltip())
@@ -232,14 +243,14 @@ class AxisSliderRow:
         self.previous.setToolTip(f"Previous {axis.name} slice")
 
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(0, max(axis.size - 1, 0))
+        self.slider.setRange(0, max(count - 1, 0))
         self.slider.setSingleStep(1)
-        self.slider.setPageStep(max(axis.size // 10, 1))
-        self.slider.setEnabled(axis.size > 1)
+        self.slider.setPageStep(max(count // 10, 1))
+        self.slider.setEnabled(count > 1)
         self.slider.setToolTip(self._axis_tooltip())
         # Ticks only while they stay readable; a 4000-step time axis drawn with
         # ticks is a grey smear that hides the handle.
-        if 2 <= axis.size <= 40:
+        if 2 <= count <= 40:
             self.slider.setTickPosition(QSlider.TicksBelow)
             self.slider.setTickInterval(1)
 
@@ -263,8 +274,14 @@ class AxisSliderRow:
         grid.addWidget(self.slider, row + 1, 1)
         grid.addWidget(self.next, row + 1, 2)
 
+    @property
+    def is_subset(self) -> bool:
+        return len(self.steps) < self.axis.size
+
     def _axis_tooltip(self) -> str:
         bits = [f"{self.axis.size} slice(s) along {self.axis.name}"]
+        if self.is_subset:
+            bits[0] += f", {len(self.steps)} of them in this layer's subset"
         if self.axis.units:
             bits.append(f"units: {self.axis.units}")
         if self.axis.calendar:
@@ -277,18 +294,30 @@ class AxisSliderRow:
         return "\n".join(bits)
 
     def index(self) -> int:
-        return int(self.slider.value())
+        """The index along the axis the handle is on (not its position in the subset)."""
+        if not self.steps:
+            return 0
+        return self.steps[max(0, min(int(self.slider.value()), len(self.steps) - 1))]
 
     def set_index(self, index: int) -> None:
-        self.slider.setValue(max(0, min(int(index), self.axis.size - 1)))
+        """Put the handle on ``index``, or on the nearest step of the subset to it."""
+        if self.steps:
+            self.slider.setValue(self.steps.index(nearest_step(self.steps, int(index))))
+
+    def step(self, delta: int) -> None:
+        """Move the handle ``delta`` steps along the subset, stopping at its ends."""
+        self.slider.setValue(self.slider.value() + delta)
 
     def refresh_labels(self) -> None:
         index = self.index()
+        position = int(self.slider.value())
         self.value.setText(self.axis.label_at(index))
         self.value.setToolTip(self.axis.label_at(index))
-        self.position.setText(f"{index + 1} / {self.axis.size}")
-        self.previous.setEnabled(index > 0)
-        self.next.setEnabled(index < self.axis.size - 1)
+        self.position.setText(f"{position + 1} / {len(self.steps)}")
+        if self.is_subset:
+            self.position.setToolTip(f"Subset of {len(self.steps)} of {self.axis.size} steps")
+        self.previous.setEnabled(position > 0)
+        self.next.setEnabled(position < len(self.steps) - 1)
 
 
 class AxisScrubber(QWidget):
@@ -475,7 +504,9 @@ class AxisScrubber(QWidget):
                 line.setFrameShape(QFrame.HLine)
                 line.setFrameShadow(QFrame.Sunken)
                 grid.addWidget(line, position * 3 - 1, 0, 1, 3)
-            row = AxisSliderRow(axis, axis_chunk_length(dataset, axis), grid, position * 3)
+            row = AxisSliderRow(
+                axis, axis_chunk_length(dataset, axis), grid, position * 3, self._steps(axis)
+            )
             row.slider.valueChanged.connect(self._on_slider_moved)
             # Releasing the handle, or a click on a step button, is an unambiguous
             # "I mean this one" — no reason to make the user wait out the debounce.
@@ -527,8 +558,8 @@ class AxisScrubber(QWidget):
         dataset = self._dataset()
         entries: list[SearchEntry] = []
         for row in self._rows:
-            labels = [row.axis.label_at(i) for i in range(row.axis.size)]
-            entries += axis_entries(row.axis.name, labels)
+            labels = [row.axis.label_at(i) for i in row.steps]
+            entries += axis_entries(row.axis.name, labels, row.steps)
         variables = dataset.base.variables
         for name in dataset.variable_names:
             info = variables.get(name)
@@ -620,6 +651,11 @@ class AxisScrubber(QWidget):
 
     def _dataset(self) -> DatasetInfo:
         return self._provider.context.dataset
+
+    def _steps(self, axis: AxisInfo) -> tuple[int, ...]:
+        """The indices along ``axis`` the layer visits: its subset, or every one."""
+        context = getattr(self._provider, "context", None)
+        return context.view().steps(axis) if context is not None else tuple(range(axis.size))
 
     def _bands(self) -> tuple[str, ...]:
         """The variables this layer actually renders."""
@@ -758,7 +794,7 @@ class AxisScrubber(QWidget):
         self._debounce.start()
 
     def _step(self, row: AxisSliderRow, delta: int) -> None:
-        row.set_index(row.index() + delta)
+        row.step(delta)
         self._apply_now()
 
     def _apply_now(self) -> None:
@@ -903,7 +939,10 @@ class DatacubeDock(QgsDockWidget):
             for axis, index in current.dataProvider().indices().items()
             if axis in wanted
         }
-        self.variableRequested.emit(replace(uri, bands=(name,), indices=indices), current)
+        subset = {axis: steps for axis, steps in uri.subset.items() if axis in wanted}
+        self.variableRequested.emit(
+            replace(uri, bands=(name,), indices=indices, subset=subset), current
+        )
 
     def _on_ref_switched(self, layer) -> None:
         if layer is not None and layer is self._scrubber.layer():

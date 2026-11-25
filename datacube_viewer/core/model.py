@@ -7,7 +7,7 @@ to build, safe to keep on a widget, and trivially comparable in tests.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
@@ -220,6 +220,56 @@ class AxisInfo:
         if self.standard_name == "time" or self.name.lower() in {"time", "t"}:
             return True
         return bool(self.units and " since " in self.units)
+
+    @property
+    def is_categorical(self) -> bool:
+        """Whether the steps are named things (sensors, bands) rather than a scale.
+
+        A time axis, or one whose labels are all numbers (depth, wavelength), is a
+        scale whose subset is a range. An axis labelled with words is a set of
+        categories whose subset is any combination of them. No labels at all says
+        nothing, and a range is the safe reading.
+        """
+        if not self.labels or self.is_time:
+            return False
+        return not all(_is_number(label) for label in self.labels)
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+#: The steps a layer may visit along each non-spatial axis, as sorted index tuples.
+#: An axis it leaves out is whole. See :func:`axis_steps`.
+AxisSubset = Mapping[str, tuple[int, ...]]
+
+
+def axis_steps(axis: AxisInfo, subset: AxisSubset | None = None) -> tuple[int, ...]:
+    """The indices along ``axis`` that ``subset`` keeps, in order.
+
+    Every index when the subset does not mention the axis. Lenient, like
+    ``default_indices``, for a subset carried over to a snapshot with fewer steps:
+    indices past the end are dropped, and a subset left with none is the whole axis
+    rather than an axis with nothing on it. Asking for an impossible subset is
+    caught earlier, by validation.
+    """
+    whole = tuple(range(axis.size))
+    wanted = (subset or {}).get(axis.name)
+    if wanted is None:
+        return whole
+    kept = tuple(sorted({int(i) for i in wanted if 0 <= int(i) < axis.size}))
+    return kept or whole
+
+
+def nearest_step(steps: Sequence[int], index: int) -> int:
+    """The member of ``steps`` closest to ``index``; the lower one on a tie."""
+    if not steps:
+        return int(index)
+    return min(steps, key=lambda step: (abs(step - index), step))
 
 
 # ------------------------------------------------------------------------- levels

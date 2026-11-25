@@ -18,11 +18,12 @@ from __future__ import annotations
 import difflib
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from ..core import (
     AxisIndexError,
     AxisInfo,
+    AxisSubset,
     CrsInfo,
     DatacubeError,
     DatasetInfo,
@@ -33,11 +34,13 @@ from ..core import (
     RefSpec,
     StoreHandle,
     StoreInfo,
+    axis_steps,
     describe_store,
+    nearest_step,
     open_store,
 )
 from ..core.reader import LevelStrategy, ReaderConfig, Resampling
-from ..layeruri import LayerUri
+from ..layeruri import LayerUri, encode_steps
 
 #: Colour interpretation is guessed from variable names so an RGB store renders as
 #: an image on first load instead of as three grey bands the user must wire up.
@@ -73,6 +76,12 @@ class LayerView:
     ref: RefSpec
     #: The layer's nodata override (``LayerUri.nodata``); the reader applies it.
     nodata: tuple[float, ...] | None = None
+    #: The steps the layer visits per axis (``LayerUri.subset``); see :meth:`steps`.
+    subset: AxisSubset = field(default_factory=dict)
+
+    def steps(self, axis: AxisInfo) -> tuple[int, ...]:
+        """The indices along ``axis`` this layer visits: its subset, or all of them."""
+        return axis_steps(axis, self.subset)
 
     def band_index(self, band_no: int) -> str:
         """Map a 1-based QGIS band number to a variable name."""
@@ -115,11 +124,15 @@ def choose_bands(dataset: DatasetInfo, requested: tuple[str, ...] = ()) -> tuple
 
 
 def default_indices(
-    dataset: DatasetInfo, requested: Mapping[str, int] | None = None
+    dataset: DatasetInfo,
+    requested: Mapping[str, int] | None = None,
+    subset: AxisSubset | None = None,
 ) -> dict[str, int]:
-    """One index per non-spatial axis, clamped into range; unknown axes are dropped.
+    """One index per non-spatial axis, fitted into ``subset``; unknown axes are dropped.
 
-    Lenient on purpose, for state carried over rather than asked for: a snapshot
+    An axis left out of ``requested`` starts at the first step of its subset (0 when
+    the axis is whole), and an index outside the subset moves to the nearest step in
+    it. Lenient on purpose, for state carried over rather than asked for: a snapshot
     switch keeps the indices of the snapshot before, and an older snapshot of a
     growing store has fewer steps. What a caller asks for is checked first, by
     :func:`index_error`.
@@ -127,39 +140,107 @@ def default_indices(
     requested = requested or {}
     out: dict[str, int] = {}
     for axis in dataset.axes:
-        value = int(requested.get(axis.name, 0))
-        out[axis.name] = max(0, min(value, axis.size - 1))
+        steps = axis_steps(axis, subset)
+        value = requested.get(axis.name)
+        if not steps:  # an axis of length 0: nothing to pick, as before
+            out[axis.name] = 0
+        else:
+            out[axis.name] = steps[0] if value is None else nearest_step(steps, int(value))
     return out
 
 
-def index_error(dataset: DatasetInfo, requested: Mapping[str, int]) -> DatacubeError | None:
+def _unknown_axes(dataset: DatasetInfo, requested: Mapping[str, object]) -> DatacubeError | None:
+    """A :class:`NoSuchAxisError` for the names in ``requested`` ``dataset`` lacks."""
+    names = [axis.name for axis in dataset.axes]
+    unknown = [name for name in requested if name not in names]
+    if not unknown:
+        return None
+    have = ", ".join(f"{axis.name} ({axis.size})" for axis in dataset.axes) or "none"
+    guesses = [
+        f"{name!r} -> {close[0]!r}"
+        for name in unknown
+        if (close := difflib.get_close_matches(name, names, n=1))
+    ]
+    return NoSuchAxisError(
+        f"No axis {', '.join(map(repr, unknown))} in dataset "
+        f"'{dataset.path or '/'}'. Its axes: {have}.",
+        hint=f"Did you mean {', '.join(guesses)}?" if guesses else None,
+    )
+
+
+def index_error(
+    dataset: DatasetInfo,
+    requested: Mapping[str, int],
+    subset: AxisSubset | None = None,
+) -> DatacubeError | None:
     """Why ``dataset`` cannot show the slice ``requested``, or None when it can.
 
     A name it has no axis for (a typo, or a store changed since a project was saved)
-    is a :class:`NoSuchAxisError`, an index outside its axis an
-    :class:`AxisIndexError`. Axes left out of ``requested`` are fine: they start at 0.
+    is a :class:`NoSuchAxisError`, an index outside its axis or outside the layer's
+    ``subset`` an :class:`AxisIndexError`. Axes left out of ``requested`` are fine:
+    they start at the first step.
     """
-    names = [axis.name for axis in dataset.axes]
-    unknown = [name for name in requested if name not in names]
-    if unknown:
-        have = ", ".join(f"{axis.name} ({axis.size})" for axis in dataset.axes) or "none"
-        guesses = [
-            f"{name!r} -> {close[0]!r}"
-            for name in unknown
-            if (close := difflib.get_close_matches(name, names, n=1))
-        ]
-        return NoSuchAxisError(
-            f"No axis {', '.join(map(repr, unknown))} in dataset "
-            f"'{dataset.path or '/'}'. Its axes: {have}.",
-            hint=f"Did you mean {', '.join(guesses)}?" if guesses else None,
-        )
-    outside = [
-        f"Index {int(requested[axis.name])} is outside axis '{axis.name}', which has "
-        f"{axis.size} steps (0 to {axis.size - 1})."
-        for axis in dataset.axes
-        if axis.name in requested and not 0 <= int(requested[axis.name]) < axis.size
-    ]
+    if (unknown := _unknown_axes(dataset, requested)) is not None:
+        return unknown
+    outside = []
+    for axis in dataset.axes:
+        if axis.name not in requested:
+            continue
+        index = int(requested[axis.name])
+        if not 0 <= index < axis.size:
+            outside.append(
+                f"Index {index} is outside axis '{axis.name}', which has "
+                f"{axis.size} steps (0 to {axis.size - 1})."
+            )
+        elif index not in axis_steps(axis, subset):
+            outside.append(
+                f"Index {index} on axis '{axis.name}' is outside the layer's subset "
+                f"of it ({_describe_steps(axis_steps(axis, subset))})."
+            )
     return AxisIndexError(" ".join(outside)) if outside else None
+
+
+def _describe_steps(steps: Sequence[int]) -> str:
+    return f"{len(steps)} step(s): {encode_steps(tuple(steps)).replace(';', ', ')}"
+
+
+def subset_error(dataset: DatasetInfo, subset: AxisSubset) -> DatacubeError | None:
+    """Why ``dataset`` cannot take ``subset``, or None when it can.
+
+    An axis it does not have is a :class:`NoSuchAxisError`; an axis with nothing
+    left in it, or with steps past its end, an :class:`AxisIndexError`.
+    """
+    if (unknown := _unknown_axes(dataset, subset)) is not None:
+        return unknown
+    problems = []
+    for axis in dataset.axes:
+        steps = subset.get(axis.name)
+        if steps is None:
+            continue
+        if not steps:
+            problems.append(f"The subset of axis '{axis.name}' keeps no steps.")
+        elif max(steps) >= axis.size or min(steps) < 0:
+            problems.append(
+                f"The subset of axis '{axis.name}' goes up to index {max(steps)}, but the "
+                f"axis has {axis.size} steps (0 to {axis.size - 1})."
+            )
+    return AxisIndexError(" ".join(problems)) if problems else None
+
+
+def normalise_subset(dataset: DatasetInfo, subset: AxisSubset | None) -> dict[str, tuple[int, ...]]:
+    """``subset`` as the steps actually kept, minus axes it leaves whole.
+
+    Written back onto the layer's URI, so a project file records what the layer
+    shows and an axis subset to all of its steps does not clutter the source.
+    """
+    out: dict[str, tuple[int, ...]] = {}
+    for axis in dataset.axes:
+        if axis.name not in (subset or {}):
+            continue
+        steps = axis_steps(axis, subset)
+        if len(steps) < axis.size:
+            out[axis.name] = steps
+    return out
 
 
 def axes_for_bands(dataset: DatasetInfo, bands: Sequence[str]) -> tuple[AxisInfo, ...]:
@@ -244,7 +325,10 @@ class LayerContext:
         handle = open_store(uri.store_uri, uri.effective_ref, kind=uri.kind)  # type: ignore[arg-type]
         store = describe_store(handle, crs_override=uri.crs_override)
         dataset = pick_dataset(store, uri.dataset)
-        if check_indices and (error := index_error(dataset, uri.indices)) is not None:
+        if check_indices and (
+            (error := subset_error(dataset, uri.subset))
+            or (error := index_error(dataset, uri.indices, uri.subset))
+        ):
             raise error
 
         self._handle = handle
@@ -252,7 +336,8 @@ class LayerContext:
         self._dataset = dataset
         self._reader = DatasetReader(handle, dataset, self._config, uri.nodata)
         self._bands = choose_bands(dataset, uri.bands)
-        self._indices = default_indices(dataset, uri.indices)
+        subset = normalise_subset(dataset, uri.subset)
+        self._indices = default_indices(dataset, uri.indices, subset)
         # Write back what was actually resolved, so encode() round-trips the real
         # state rather than the user's abbreviated request.
         self._uri = replace(
@@ -261,6 +346,7 @@ class LayerContext:
             snapshot_id=handle.snapshot_id,
             bands=self._bands,
             indices=dict(self._indices),
+            subset=subset,
         )
 
     @classmethod
@@ -285,6 +371,7 @@ class LayerContext:
                 snapshot_id=self._handle.snapshot_id,
                 ref=self._uri.ref,
                 nodata=self._uri.nodata,
+                subset=dict(self._uri.subset),
             )
 
     # -- accessors --------------------------------------------------------
@@ -363,9 +450,10 @@ class LayerContext:
         """Move to another slice. Raises :func:`index_error`'s error, and stays on the
         current slice, when the dataset cannot show it."""
         with self._lock:
-            if (error := index_error(self._dataset, indices)) is not None:
+            subset = self._uri.subset
+            if (error := index_error(self._dataset, indices, subset)) is not None:
                 raise error
-            resolved = default_indices(self._dataset, indices)
+            resolved = default_indices(self._dataset, indices, subset)
             self._indices = resolved
             self._uri = replace(self._uri, indices=dict(resolved))
 
@@ -379,7 +467,7 @@ class LayerContext:
 
     def set_dataset(self, path: str) -> None:
         with self._lock:
-            self._load(replace(self._uri, dataset=path, bands=(), indices={}))
+            self._load(replace(self._uri, dataset=path, bands=(), indices={}, subset={}))
 
     def reload(self) -> None:
         """Re-resolve the ref and drop caches — the explicit 'the branch moved' action."""

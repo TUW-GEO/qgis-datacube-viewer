@@ -128,7 +128,14 @@ class StretchService(QObject):
         axes = axes_for_bands(view.dataset, view.bands)
         method = layer_method(layer)
         plan = plan_cube(
-            view.dataset, view.bands, axes, view.indices, method, exact_budget_pixels(), full_scan
+            view.dataset,
+            view.bands,
+            axes,
+            view.indices,
+            method,
+            exact_budget_pixels(),
+            full_scan,
+            view.subset,
         )
         layer_id = layer.id()
         self._cancel(self._fits, layer_id)

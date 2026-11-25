@@ -765,6 +765,16 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
                 for name, index in sorted(view.indices.items())
             )
             rows.append(row("Slice", html.escape(picked)))
+        # The context keeps only axes the dataset has in the subset.
+        subset = [(dataset.axis(name), steps) for name, steps in sorted(view.subset.items())]
+        if subset:
+            kept = "; ".join(
+                f"{axis.name}: {len(steps)} of {axis.size} "
+                f"({axis.label_at(steps[0])} … {axis.label_at(steps[-1])})"
+                for axis, steps in subset
+                if axis is not None
+            )
+            rows.append(row("Subset", html.escape(kept)))
 
         levels = [
             "<tr><th align='left'>Level</th><th align='left'>Size</th>"

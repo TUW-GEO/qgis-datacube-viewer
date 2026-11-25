@@ -40,6 +40,7 @@ from .geometry import Affine, BBox, Window, bounds_from_window, window_from_boun
 from .inspect import describe_store, inspect_store, parse_multiscales
 from .model import (
     AxisInfo,
+    AxisSubset,
     CrsInfo,
     DatasetInfo,
     LevelInfo,
@@ -48,6 +49,8 @@ from .model import (
     SnapshotInfo,
     StoreInfo,
     VariableInfo,
+    axis_steps,
+    nearest_step,
     select_level,
 )
 from .reader import DatasetReader, ReadRequest, ReadResult
@@ -78,6 +81,7 @@ __all__ = [
     "Affine",
     "AxisIndexError",
     "AxisInfo",
+    "AxisSubset",
     "BBox",
     "CrsBundle",
     "CrsInfo",
@@ -106,6 +110,7 @@ __all__ = [
     "VariableInfo",
     "Window",
     "axis_entries",
+    "axis_steps",
     "bounds_from_window",
     "clear_cache",
     "describe_crs",
@@ -118,6 +123,7 @@ __all__ = [
     "install_command",
     "is_externally_managed",
     "list_refs",
+    "nearest_step",
     "open_store",
     "parse_multiscales",
     "parse_uri",
