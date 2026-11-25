@@ -62,7 +62,14 @@ server=False
 ; supportsQt6=True
 
 hasProcessingProvider=no
-changelog=0.3.0
+changelog=0.3.1
+    - Fix: scaled variables (CF scale_factor / add_offset) show physical
+      values everywhere, not only on the map. Statistics, the colour range
+      and Identify no longer work on the stored integers.
+    - Fix: "average" and "bilinear" resampling no longer blend fill values
+      into neighbouring pixels, which could turn the edge of a no-data area
+      into values that passed as data.
+  0.3.0
     - Drag and drop: a Zarr store, NetCDF file or Icechunk repository dragged
       onto QGIS opens in the Add Datacube Layer dialog, already connected.
       Under Settings > Options > Datacube Viewer > Drag-and-drop behavior, each
