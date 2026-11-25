@@ -20,6 +20,7 @@ layer still exists and still shows what the task was started for.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from functools import partial
 
@@ -64,6 +65,8 @@ class ScanTask(QgsTask):
         self._on_done = on_done
         self.scan: RangeScan | None = None
         self.error: str = ""
+        #: When the work was asked for, queueing included: what the user waits on.
+        self.requested_at = time.monotonic()
 
     def run(self) -> bool:
         # Nothing may escape: an exception out of a QgsTask is a crash, not a traceback.
@@ -145,6 +148,17 @@ class StretchService(QObject):
 
     def is_fitting(self, layer: QgsRasterLayer | None) -> bool:
         return layer is not None and layer.id() in self._fits
+
+    def fit_status(self, layer: QgsRasterLayer | None) -> tuple[float, float] | None:
+        """``(seconds waited, percent done)`` of ``layer``'s running fit, or None.
+
+        Polled from the main thread: ``QgsTask.progressChanged`` is emitted on the
+        worker thread, and the task's progress is safe to read from any.
+        """
+        task = self._fits.get(layer.id()) if layer is not None else None
+        if task is None:
+            return None
+        return time.monotonic() - task.requested_at, float(task.progress())
 
     def _fit_done(
         self,

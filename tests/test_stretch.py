@@ -324,3 +324,75 @@ def test_the_service_marks_a_slice_past_the_range(layer, service) -> None:
     finally:
         service.forget(layer.id())
         QgsProject.instance().takeMapLayer(layer)
+
+
+# ---------------------------------------------------------- progress in the panel
+class _FakeService:
+    """The parts of StretchService the cube panel uses, with a fit status to set."""
+
+    def __init__(self) -> None:
+        from qgis.PyQt.QtCore import QObject, pyqtSignal
+
+        class Signals(QObject):
+            rangeChanged = pyqtSignal(str)
+            fitStarted = pyqtSignal(str)
+            clippingChanged = pyqtSignal(str)
+
+        self._signals = Signals()
+        self.rangeChanged = self._signals.rangeChanged
+        self.fitStarted = self._signals.fitStarted
+        self.clippingChanged = self._signals.clippingChanged
+        self.status: tuple[float, float] | None = None
+
+    def fit_status(self, layer):
+        return self.status
+
+    def is_fitting(self, layer) -> bool:
+        return self.status is not None
+
+    def clip_flags(self, layer):
+        return None
+
+
+def test_the_panel_shows_a_fit_s_progress_only_after_a_second(layer) -> None:
+    from datacube_viewer.gui.axis_panel import AxisScrubber
+
+    service = _FakeService()
+    panel = AxisScrubber(None, service)
+    try:
+        service.status = (0.2, 0.0)
+        panel.set_layer(layer)
+        assert panel._fit_progress.isHidden(), "a quick fit never flashes a bar"
+        assert panel._progress_timer.isActive()
+
+        service.status = (1.2, 0.0)
+        panel._update_fit_progress()
+        assert not panel._fit_progress.isHidden()
+        assert panel._fit_progress.maximum() == 0, "busy until progress is reported"
+
+        service.status = (3.0, 42.0)
+        panel._update_fit_progress()
+        assert (panel._fit_progress.maximum(), panel._fit_progress.value()) == (100, 42)
+
+        service.status = None
+        service.rangeChanged.emit(layer.id())
+        assert panel._fit_progress.isHidden()
+        assert not panel._progress_timer.isActive()
+    finally:
+        panel.deleteLater()
+
+
+def test_the_service_reports_a_running_fit(layer, qgis_app) -> None:
+    from datacube_viewer.gui import StretchService
+
+    class Manager:
+        def addTask(self, task) -> None:  # never runs: the fit stays pending
+            self.task = task
+
+    service = StretchService(task_manager=Manager())
+    assert service.fit_status(layer) is None
+    assert service.fit(layer)
+    waited, percent = service.fit_status(layer)
+    assert waited >= 0 and percent == 0
+    service.unload()
+    assert service.fit_status(layer) is None

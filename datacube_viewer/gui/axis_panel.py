@@ -51,6 +51,7 @@ from qgis.PyQt.QtWidgets import (
     QGridLayout,
     QLabel,
     QMenu,
+    QProgressBar,
     QSizePolicy,
     QSlider,
     QToolButton,
@@ -86,6 +87,12 @@ from .version_panel import REF_SWITCHES, VersionPanel
 #: handle. While the handle is dragged with "Redraw while dragging" on, it is also
 #: the shortest time between two reads.
 DEBOUNCE_MS = 180
+
+#: How long a background colour range fit runs before the panel shows its progress
+#: bar, so a quick one never flashes one up.
+FIT_PROGRESS_DELAY_S = 1.0
+#: How often the bar is updated while it is up.
+FIT_PROGRESS_POLL_MS = 200
 
 
 #: Overview size for the restretch sample. Deliberately small: this is recomputed
@@ -401,6 +408,17 @@ class AxisScrubber(QWidget):
         self._fit_cube.setMenu(menu)
         self._outer.addWidget(self._fit_cube)
 
+        # The background fit of the selected layer, once it has kept the user
+        # waiting for FIT_PROGRESS_DELAY_S. Polled: see StretchService.fit_status.
+        self._fit_progress = QProgressBar()
+        self._fit_progress.setFormat("Computing the colour range… %p%")
+        self._fit_progress.setToolTip("Runs in the background; the QGIS task bar can cancel it.")
+        self._fit_progress.setVisible(False)
+        self._outer.addWidget(self._fit_progress)
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(FIT_PROGRESS_POLL_MS)
+        self._progress_timer.timeout.connect(self._update_fit_progress)
+
         self._status = QLabel()
         self._status.setWordWrap(True)
         self._outer.addWidget(self._status)
@@ -441,6 +459,7 @@ class AxisScrubber(QWidget):
             self._live.setVisible(False)
             self._restretch.setVisible(False)
             self._fit_cube.setVisible(False)
+            self._update_fit_progress()
             return
 
         self._body = QWidget(self)
@@ -484,6 +503,7 @@ class AxisScrubber(QWidget):
 
         self._load_from_layer()
         self._search.set_entries(self._search_entries())
+        self._update_fit_progress()
 
         if not self._rows:
             bands = self._bands()
@@ -697,6 +717,26 @@ class AxisScrubber(QWidget):
                 finally:
                     self._loading = False
             self._describe()
+            self._update_fit_progress()
+
+    def _update_fit_progress(self) -> None:
+        """Show, advance or hide the progress bar of the selected layer's fit."""
+        status = self._stretch.fit_status(self._layer) if self._stretch is not None else None
+        if status is None:
+            self._progress_timer.stop()
+            self._fit_progress.setVisible(False)
+            return
+        if not self._progress_timer.isActive():
+            self._progress_timer.start()
+        waited, percent = status
+        if waited < FIT_PROGRESS_DELAY_S:
+            return
+        if percent <= 0:
+            self._fit_progress.setRange(0, 0)  # busy: no progress reported yet
+        else:
+            self._fit_progress.setRange(0, 100)
+            self._fit_progress.setValue(int(percent))
+        self._fit_progress.setVisible(True)
 
     # ------------------------------------------------------------------- moving
     def _on_slider_moved(self, _value: int) -> None:
