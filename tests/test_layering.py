@@ -31,6 +31,7 @@ QGIS_FREE_MODULES = [
     "datacube_viewer.core.model",
     "datacube_viewer.core.netcdf_nodes",
     "datacube_viewer.core.nodes",
+    "datacube_viewer.core.profile",
     "datacube_viewer.core.zarr_nodes",
     "datacube_viewer.core.reader",
     "datacube_viewer.core.store",

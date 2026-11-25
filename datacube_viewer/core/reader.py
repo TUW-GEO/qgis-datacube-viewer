@@ -350,6 +350,55 @@ class DatasetReader:
             return _apply_scaling(source, info), valid
         return source, valid
 
+    def read_along(
+        self,
+        variable: str,
+        axis: str,
+        col: int,
+        row: int,
+        indices: Mapping[str, int] | None = None,
+        level: LevelInfo | None = None,
+    ) -> np.ndarray:
+        """Every value of one pixel along one non-spatial axis, in physical units.
+
+        ``col``/``row`` index ``level`` (the base by default). Every other
+        non-spatial axis stays at its index in ``indices`` (0 when absent), as in
+        :meth:`read`. Returns float64 with NaN where the value is nodata, scaled
+        where the variable declares a scale. One read touching every chunk along
+        ``axis`` at that pixel; bypasses the decoded-window cache, which holds
+        2-D windows.
+        """
+        level = level or self.dataset.base
+        info = self.variable_info(variable, level)
+        position = info.axis_index(axis)
+        if position is None:
+            raise ReadError(f"Variable {variable!r} has no {axis!r} axis: {info.dims}")
+        if not (0 <= col < level.width and 0 <= row < level.height):
+            raise ReadError(
+                f"Pixel ({col}, {row}) is outside level {level.name!r} "
+                f"({level.width}x{level.height})."
+            )
+        idx, _ = self._index_tuple(info, level, Window(col, row, 1, 1), indices or {})
+        picked: list[Any] = []
+        for i, part in enumerate(idx):
+            if i == position:
+                picked.append(slice(None))
+            elif isinstance(part, slice):  # the 1-pixel y or x slice
+                picked.append(part.start)
+            else:
+                picked.append(part)
+        try:
+            source = np.asarray(self._array(level, variable)[tuple(picked)]).reshape(-1)
+        except Exception as exc:
+            raise ReadError(
+                f"Failed to read {variable!r} along {axis!r} from level {level.name!r}: {exc}"
+            ) from exc
+        valid = _source_validity(source, info, self.nodata)
+        values = (_apply_scaling(source, info) if info.needs_scaling else source).astype(np.float64)
+        if valid is not None:
+            values[~valid] = np.nan
+        return values
+
     def read(self, request: ReadRequest) -> ReadResult:
         """Read ``request`` and return pixels already on the requested grid."""
         if request.width <= 0 or request.height <= 0:

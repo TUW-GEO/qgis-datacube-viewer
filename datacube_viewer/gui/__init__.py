@@ -45,6 +45,15 @@ from .drop import (
 from .load_dialog import DatacubeLoadDialog
 from .options import DatacubeOptionsFactory, DatacubeOptionsPage
 from .preview import PreviewResult, render_thumbnail, to_image
+from .profile_panel import (
+    MENU_TITLE,
+    ProfileDock,
+    ProfileMapTool,
+    default_axis,
+    layers_at,
+    populate_menu,
+    profile_axes,
+)
 from .snapshot_dialog import SnapshotDialog
 from .stretch_tasks import StretchService
 from .version_panel import REF_SWITCHES, VersionPanel, is_versioned_layer, switch_ref
@@ -55,6 +64,7 @@ __all__ = [
     "DROP_KINDS",
     "INHERIT",
     "LIVE_REDRAW_KEY",
+    "MENU_TITLE",
     "REF_SWITCHES",
     "SHARE_MATCHING_KEY",
     "AttributePanel",
@@ -67,6 +77,8 @@ __all__ = [
     "DependencyDialog",
     "DroppedStore",
     "PreviewResult",
+    "ProfileDock",
+    "ProfileMapTool",
     "SnapshotDialog",
     "StoreWorker",
     "StretchService",
@@ -79,6 +91,7 @@ __all__ = [
     "batch_action_key",
     "batch_choices",
     "batch_setting",
+    "default_axis",
     "drop_action",
     "drop_action_key",
     "drop_actions",
@@ -87,7 +100,10 @@ __all__ = [
     "has_axes_to_scrub",
     "is_datacube_layer",
     "is_versioned_layer",
+    "layers_at",
     "opens_automatically",
+    "populate_menu",
+    "profile_axes",
     "redraws_while_dragging",
     "render_thumbnail",
     "set_batch_action",

@@ -189,6 +189,9 @@ class DatacubeViewerPlugin:
         self._options_factory = None
         #: Drop handler, held for the same reason as the options factory.
         self._drop_handler = None
+        #: Timeseries dock and its map tool. See gui.profile_panel.
+        self._profile_dock = None
+        self._profile_tool = None
         #: Background colour range work: the fit after a layer is added, and the
         #: clipping indicator. See gui.stretch_tasks.
         self._stretch = None
@@ -241,6 +244,7 @@ class DatacubeViewerPlugin:
 
         self._stretch = StretchService(self.iface.mainWindow())
         self._add_cube_dock()
+        self._add_profile_dock()
         self._add_options_page()
         self._add_drop_handler()
 
@@ -299,6 +303,61 @@ class DatacubeViewerPlugin:
         self._actions.append(toggle)
         if self._toolbar is not None:
             self._toolbar.addAction(toggle)
+
+    def _add_profile_dock(self) -> None:
+        """Add the Timeseries dock, its map tool and the canvas right-click entry.
+
+        The dock starts hidden, like the cube dock, and opens on the first pixel
+        picked. The right-click entry rides on ``contextMenuAboutToShow``, which
+        the canvas emits for any map tool that shows a context menu (Pan, and the
+        Plot Pixel tool itself), so no tool has to be switched to get at it.
+        """
+        from .gui import ProfileDock, ProfileMapTool
+
+        canvas = self.iface.mapCanvas()
+        self._profile_dock = ProfileDock(self.iface, self.iface.mainWindow())
+        self._profile_dock.message.connect(self._on_profile_message)
+        self.iface.addDockWidget(Qt.BottomDockWidgetArea, self._profile_dock)
+        self._profile_dock.hide()
+
+        icon = _icon("timeseries.png")
+        toggle = self._profile_dock.toggleViewAction()
+        toggle.setIcon(icon)
+        toggle.setText("Timeseries Panel")
+        toggle.setToolTip("Show the pixel timeseries picked on the map")
+        self.iface.addPluginToRasterMenu(PLUGIN_NAME, toggle)
+        self._actions.append(toggle)
+
+        self._profile_tool = ProfileMapTool(canvas, self._profile_dock)
+        pick = QAction(icon, "Plot Pixel", self.iface.mainWindow())
+        pick.setCheckable(True)
+        pick.setToolTip(
+            "Click a datacube layer to add the pixel's values along an axis to the "
+            "Timeseries panel. Right-click for the choice of layer and axis."
+        )
+        pick.triggered.connect(lambda: canvas.setMapTool(self._profile_tool))
+        self._profile_tool.setAction(pick)
+        self.iface.addPluginToRasterMenu(PLUGIN_NAME, pick)
+        self._actions.append(pick)
+        if self._toolbar is not None:
+            self._toolbar.addAction(pick)
+
+        canvas.contextMenuAboutToShow.connect(self._on_canvas_menu)
+
+    def _on_canvas_menu(self, menu, event) -> None:
+        """Offer the timeseries of the pixel under a right-click, per layer and axis."""
+        from .gui import layers_at, populate_menu
+
+        if self._profile_dock is None:
+            return
+        point = event.mapPoint()
+        layers = layers_at(self.iface.mapCanvas(), point, self.iface.activeLayer())
+        populate_menu(menu, layers, lambda layer, axis: self._profile_dock.pick(layer, axis, point))
+
+    def _on_profile_message(self, text: str, error: bool) -> None:
+        self.iface.messageBar().pushMessage(
+            PLUGIN_NAME, text, level=Qgis.Warning if error else Qgis.Info, duration=6
+        )
 
     def _on_layer_added(self, layer) -> None:
         """Re-apply a slice recorded in a project file, if there is one."""
@@ -415,6 +474,18 @@ class DatacubeViewerPlugin:
 
         with contextlib.suppress(TypeError):  # never connected, or already dropped
             QgsProject.instance().layerWasAdded.disconnect(self._on_layer_added)
+        with contextlib.suppress(TypeError):
+            self.iface.mapCanvas().contextMenuAboutToShow.disconnect(self._on_canvas_menu)
+
+        if self._profile_tool is not None:
+            if self.iface.mapCanvas().mapTool() is self._profile_tool:
+                self.iface.mapCanvas().unsetMapTool(self._profile_tool)
+            self._profile_tool = None
+        if self._profile_dock is not None:
+            self._profile_dock.teardown()
+            self.iface.removeDockWidget(self._profile_dock)
+            self._profile_dock.deleteLater()
+            self._profile_dock = None
 
         if self._stretch is not None:
             self._stretch.unload()

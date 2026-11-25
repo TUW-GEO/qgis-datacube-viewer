@@ -171,13 +171,13 @@ qgis
 
 ## Usage
 
-The plugin adds three buttons to the toolbar, and the same entries under
+The plugin adds four buttons to the toolbar, and the same entries under
 **Raster → Datacube Viewer**:
 
-| <img src="datacube_viewer/icons/open_cube.png" width="64" alt="Add Datacube Layer icon"> | <img src="datacube_viewer/icons/history.png" width="64" alt="Time Travel icon"> | <img src="datacube_viewer/icons/cube_sliders.png" width="64" alt="Datacube Panel icon"> |
-| :---: | :---: | :---: |
-| **Add Datacube Layer…** | **Time Travel…** | **Datacube Panel** |
-| Load a datacube. | Choose an Icechunk snapshot. | Toggle the slider sidebar. |
+| <img src="datacube_viewer/icons/open_cube.png" width="64" alt="Add Datacube Layer icon"> | <img src="datacube_viewer/icons/history.png" width="64" alt="Time Travel icon"> | <img src="datacube_viewer/icons/cube_sliders.png" width="64" alt="Datacube Panel icon"> | <img src="datacube_viewer/icons/timeseries.png" width="64" alt="Plot Pixel icon"> |
+| :---: | :---: | :---: | :---: |
+| **Add Datacube Layer…** | **Time Travel…** | **Datacube Panel** | **Plot Pixel** |
+| Load a datacube. | Choose an Icechunk snapshot. | Toggle the slider sidebar. | Plot a pixel along an axis. |
 
 You can also drag a Zarr store, a NetCDF file (`.nc`, `.nc4`, `.cdf`) or an Icechunk
 repository from your file manager onto QGIS: onto the map, the Layers panel or
@@ -297,6 +297,32 @@ compare across slices. **Rescale colours to whole cube** goes back to the range 
 the whole cube.
 
 ![With per-slice rescaling off the legend's range stays fixed as the time slider moves; with it on, the range follows each slice](docs/img/rescale-colours.gif)
+
+### Timeseries
+
+Right-click a datacube layer on the map and choose **Datacube Viewer: Show
+Timeseries**, then an axis (**Along time**, **Along sensor**, ...). The values of the
+pixel under the click, through every step of that axis, are added to the
+**Datacube Timeseries** panel, and a marker in the line's colour and shape shows the
+pixel on the map. Each pick adds another line, so you can compare places
+one by one. Where several datacube layers cover the click, the menu lists each, with
+the selected layer first. The menu shows with the Pan tool and with **Plot Pixel**
+(in the toolbar and under **Raster → Datacube Viewer**), which also adds the pixel
+under a left click along the axis the panel is showing.
+
+The other axes stay where the layer's sliders are when you pick, and the list under
+the plot says where (**Held at**, for example `sensor=2`). Values are read at full
+resolution, like Identify, with scale factors applied; nodata steps leave a gap in
+the line. A time axis is spaced by date, so a gap in acquisitions shows as one; a
+numeric axis is spaced by value; other axes, such as sensor names, step evenly.
+
+In the plot, hover to read every line's value at that step, scroll to zoom the
+horizontal axis, drag to pan and double-click to see everything again. Untick a
+series to hide it, and **Remove** or **Clear** to take it off the plot and the map.
+The plot holds up to eight lines, so the colours stay distinguishable. Series along
+different axes are kept apart: **Axis** switches which ones are plotted.
+**Export** copies the values to the clipboard or saves them as CSV (one row per
+series and step), or saves the plot as an image.
 
 ## Developing
 

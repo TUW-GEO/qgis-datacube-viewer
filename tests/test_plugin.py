@@ -79,9 +79,17 @@ class FakeIface(QObject):
         self.options_factories: list[object] = []
         self.drop_handlers: list[object] = []
         self.active = None
+        # A real canvas: the timeseries dock places markers on it and the plugin
+        # connects to its contextMenuAboutToShow, which unload must undo.
+        from qgis.gui import QgsMapCanvas
+
+        self._canvas = QgsMapCanvas(window)
 
     def mainWindow(self):
         return self._window
+
+    def mapCanvas(self):
+        return self._canvas
 
     def messageBar(self):
         return self._bar
@@ -180,7 +188,6 @@ def test_a_python_too_old_for_zarr_is_reported_as_such(monkeypatch) -> None:
 def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
     plugin.initGui()
     assert is_registered()
-    assert len(iface.raster_menu) == 4
     assert [action.text() for _, action in iface.raster_menu] == [
         "Add Datacube Layer…",
         "Time Travel…",
@@ -188,6 +195,8 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
         # The dock's own toggleViewAction, reused rather than a second action with
         # its own checked state to keep in sync.
         "Datacube Panel",
+        "Timeseries Panel",
+        "Plot Pixel",
     ]
     # The plugin owns a named toolbar rather than borrowing the shared Raster one,
     # so it stays distinguishable from the other GeoZarr plugins. Installing
@@ -199,6 +208,7 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
         "Add Datacube Layer…",
         "Time Travel…",
         "Datacube Panel",
+        "Plot Pixel",
     ]
 
 
@@ -211,14 +221,56 @@ def test_unload_removes_the_ui(plugin, iface) -> None:
     assert plugin._toolbar is None
     assert iface.docks == []
     assert plugin._cube_dock is None
+    assert plugin._profile_dock is None
+    assert plugin._profile_tool is None
+
+
+def test_right_clicking_a_cube_offers_its_timeseries(plugin, iface, tmp_path) -> None:
+    """The canvas menu gets the entry, and picking it fills the timeseries dock."""
+    from qgis.PyQt.QtWidgets import QMenu
+
+    from datacube_viewer.gui import MENU_TITLE
+    from datacube_viewer.provider import create_layer
+    from tests.fixture_store import write_small_netcdf
+
+    plugin.initGui()
+    plugin._profile_dock._run_inline = True
+    path = write_small_netcdf(tmp_path / "cube.nc")
+    layer = create_layer(LayerUri(store_uri=path, bands=("temperature",), kind="netcdf"))
+    canvas = iface.mapCanvas()
+    canvas.setDestinationCrs(layer.crs())
+    canvas.setLayers([layer])
+
+    def right_click(point):
+        from qgis.gui import QgsMapMouseEvent
+        from qgis.PyQt.QtCore import QEvent, QPoint, Qt
+
+        event = QgsMapMouseEvent(canvas, QEvent.MouseButtonPress, QPoint(1, 1), Qt.RightButton)
+        event.setMapPoint(point)
+        menu = QMenu()
+        canvas.contextMenuAboutToShow.emit(menu, event)
+        return menu
+
+    menu = right_click(layer.extent().center())
+    sub = next(a.menu() for a in menu.actions() if a.text() == MENU_TITLE)
+    sub.actions()[0].trigger()
+    assert plugin._profile_dock.series_count() == 1
+
+    outside = layer.extent().center()
+    outside.setX(outside.x() + 10 * layer.extent().width())
+    assert right_click(outside).actions() == []
+    plugin.unload()
+    assert right_click(layer.extent().center()).actions() == []  # nothing left connected
 
 
 def test_init_gui_adds_the_cube_dock_hidden(plugin, iface) -> None:
     """The panel must not force itself open on every QGIS launch."""
     plugin.initGui()
-    assert len(iface.docks) == 1
+    assert len(iface.docks) == 2
     assert plugin._cube_dock is not None
     assert plugin._cube_dock.isHidden()
+    assert plugin._profile_dock is not None
+    assert plugin._profile_dock.isHidden()
 
 
 def test_the_cube_dock_follows_the_selected_layer(plugin, iface, store_uri: str) -> None:
