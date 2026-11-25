@@ -212,7 +212,9 @@ which one you are at ("2 of 5"); **Add** or **Close** moves on to the next, and
 **Skip Remaining** stops. Stores dropped while this runs are added to the end.
 
 Sliders in a dock panel step through the non-spatial axes of the cube (time, sensor,
-...) and redraw the layer as you drag. The panel opens by itself when you add a layer
+...) and redraw the layer as you drag. Hold **Ctrl** while dragging to go one slice
+at a time, at 12 pixels per slice (set under **Settings → Options → Datacube
+Viewer**), which reaches every day of a long daily axis. The panel opens by itself when you add a layer
 from the dialog. To stop that, untick **Automatically open slider sidebar** under
 **Settings → Options → Datacube Viewer**, and open the panel from the toolbar or
 **Raster → Datacube Viewer → Datacube Panel** when you want it.

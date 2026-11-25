@@ -1,4 +1,8 @@
-"""A range slider with a playhead: which steps to keep, and which one to open on.
+"""The datacube sliders: drags that reach every step, and Ctrl+drag to go slowly.
+
+:class:`CubeSlider`, a ``QSlider``, is one axis of the cube panel. :class:`CubeRangeSlider`
+picks which steps to keep in the loading dialog, and which one to open on. Both
+follow a drag in steps, and slow it down while Ctrl is held (see below).
 
 :class:`CubeRangeSlider` is QGIS's own ``QgsRangeSlider`` with two additions. The
 painting of the groove, the range and both handles, the hover highlight, the value
@@ -38,7 +42,7 @@ from qgis.core import QgsSettings
 from qgis.gui import QgsRangeSlider
 from qgis.PyQt.QtCore import QEvent, QPoint, QPointF, QRect, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QMouseEvent, QPainter, QPalette, QPen, QPolygonF
-from qgis.PyQt.QtWidgets import QStyle, QStyleOptionSlider
+from qgis.PyQt.QtWidgets import QSlider, QStyle, QStyleOptionSlider
 
 #: Settings key: pixels of travel per step while Ctrl is held. Settings → Options →
 #: Datacube Viewer writes it.
@@ -73,6 +77,83 @@ MARKER_SIZE = 7
 
 #: Half-width of the playhead line's grab zone in the groove.
 LINE_GRAB = 3
+
+
+def _drag_steps(travel: float, moved: int, normal: float, fine: float, ctrl: bool) -> float:
+    """``travel`` after the pointer moved ``moved`` pixels, in steps, fractions kept.
+
+    Steps rather than pixels: whole pixels would skip steps on an axis with more
+    steps than pixels. Accumulated move by move, so pressing or letting go of Ctrl
+    carries on from where things are.
+    """
+    per_step = max(normal, fine) if ctrl else normal
+    return travel + moved / per_step
+
+
+@dataclass
+class _HandleDrag:
+    """A drag of a ``CubeSlider`` handle, followed in steps rather than pixels."""
+
+    #: The value when the drag started.
+    start: int
+    #: Pixels per step while Ctrl is held, from the setting when the drag began.
+    fine: float
+    last_x: int
+    #: How far the pointer has moved, in steps, fractions kept.
+    travel: float = 0.0
+
+
+class CubeSlider(QSlider):
+    """A horizontal ``QSlider`` whose handle drags reach every step, with Ctrl+drag fine mode.
+
+    Only the drag of the handle is done here. The press and the release still go to
+    ``QSlider``, so ``isSliderDown``, ``sliderPressed`` and ``sliderReleased`` mean
+    what they always do, and a click on the groove, the keys and the wheel are left
+    as they are.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Horizontal, parent)
+        self._drag: _HandleDrag | None = None
+
+    def _pixels_per_step(self) -> float:
+        """How far the handle moves per step, as the style lays it out."""
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        style = self.style()
+        groove = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderGroove, self)
+        handle = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
+        travel = groove.width() - handle.width()
+        return max(travel, 1) / max(self.maximum() - self.minimum(), 1)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        super().mousePressEvent(event)
+        if event.button() == Qt.LeftButton and self.isSliderDown():
+            self._drag = _HandleDrag(self.sliderPosition(), fine_pixels_per_step(), event.pos().x())
+        else:
+            self._drag = None
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        drag = self._drag
+        if drag is None or not self.isSliderDown() or not event.buttons() & Qt.LeftButton:
+            super().mouseMoveEvent(event)
+            return
+        event.accept()
+        drag.travel = _drag_steps(
+            drag.travel,
+            event.pos().x() - drag.last_x,
+            self._pixels_per_step(),
+            drag.fine,
+            bool(event.modifiers() & Qt.ControlModifier),
+        )
+        drag.last_x = event.pos().x()
+        value = drag.start + round(drag.travel)
+        self.setSliderPosition(max(self.minimum(), min(value, self.maximum())))
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag = None
+        super().mouseReleaseEvent(event)
 
 
 @dataclass
@@ -289,13 +370,13 @@ class CubeRangeSlider(QgsRangeSlider):
         event.accept()
         moved = event.pos().x() - drag.last_x
         drag.last_x = event.pos().x()
-        # Steps rather than pixels, with the fraction kept: whole pixels would
-        # skip steps on an axis with more steps than pixels. Accumulated move by
-        # move, so pressing or letting go of Ctrl carries on from where things are.
-        per_step = self._pixels_per_step()
-        if event.modifiers() & Qt.ControlModifier:
-            per_step = max(per_step, drag.fine)
-        drag.travel += moved / per_step
+        drag.travel = _drag_steps(
+            drag.travel,
+            moved,
+            self._pixels_per_step(),
+            drag.fine,
+            bool(event.modifiers() & Qt.ControlModifier),
+        )
         self._apply(drag, round(drag.travel))
 
     def _apply(self, drag: _Drag, steps: int) -> None:

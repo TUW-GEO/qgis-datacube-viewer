@@ -109,8 +109,9 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
             "\n".join(
                 (
                     "How far the pointer travels for one step while Ctrl is held on",
-                    "the subset slider of the Add Datacube Layer dialog. More pixels",
-                    "per step is slower and finer.",
+                    "a slider: an axis of the Datacube Panel, or the subset slider of",
+                    "the Add Datacube Layer dialog. More pixels per step is slower and",
+                    "finer.",
                     "",
                     f"Default: {DEFAULT_FINE_PIXELS_PER_STEP}.",
                 )

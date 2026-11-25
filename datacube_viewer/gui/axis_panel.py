@@ -79,6 +79,7 @@ from ..provider.statistics import (
     stretch_is_effective,
 )
 from .attribute_panel import AttributePanel
+from .cube_slider import CubeSlider
 from .search import FuzzySearchBox
 from .version_panel import REF_SWITCHES, VersionPanel
 
@@ -242,7 +243,7 @@ class AxisSliderRow:
         self.previous.setAutoRepeat(True)
         self.previous.setToolTip(f"Previous {axis.name} slice")
 
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = CubeSlider()
         self.slider.setRange(0, max(count - 1, 0))
         self.slider.setSingleStep(1)
         self.slider.setPageStep(max(count // 10, 1))
@@ -291,6 +292,10 @@ class AxisSliderRow:
                 f"chunked {self.chunk_length} slices deep, so a step that crosses a "
                 f"chunk boundary decodes {self.chunk_length} slices"
             )
+        bits.append(
+            "Ctrl+drag: fine, a few pixels per slice (how many is set in "
+            "Settings → Options → Datacube Viewer)"
+        )
         return "\n".join(bits)
 
     def index(self) -> int:

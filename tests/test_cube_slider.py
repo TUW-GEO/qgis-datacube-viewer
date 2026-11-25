@@ -18,6 +18,7 @@ from datacube_viewer.gui.cube_slider import (
     DEFAULT_FINE_PIXELS_PER_STEP,
     MARKER_SIZE,
     CubeRangeSlider,
+    CubeSlider,
     fine_pixels_per_step,
     set_fine_pixels_per_step,
 )
@@ -233,3 +234,88 @@ def test_ctrl_drag_follows_the_setting(long_slider) -> None:
     long_slider.setCurrent(2000)
     seen = crawl(long_slider, marker(long_slider), 4 * 30, long_slider.current)
     assert seen[-1] - seen[0] == 4
+
+
+# ------------------------------------------------------- the panel's slider
+@pytest.fixture
+def axis_slider(qgis_app):
+    """A ``CubeSlider`` on a long axis: several steps per pixel."""
+    widget = CubeSlider()
+    widget.setRange(0, 4999)
+    widget.resize(420, widget.sizeHint().height())
+    widget.show()
+    QgsApplication.processEvents()
+    yield widget
+    widget.close()
+    widget.deleteLater()
+    QgsApplication.processEvents()
+
+
+def knob(widget):
+    """The centre of a ``CubeSlider``'s handle."""
+    from qgis.PyQt.QtWidgets import QStyle, QStyleOptionSlider
+
+    option = QStyleOptionSlider()
+    widget.initStyleOption(option)
+    rect = widget.style().subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderHandle, widget)
+    return rect.center().x(), rect.center().y()
+
+
+def test_a_panel_drag_follows_the_pointer(axis_slider) -> None:
+    axis_slider.setValue(2000)
+    x, y = knob(axis_slider)
+    drag(axis_slider, (x, y), (x + 50, y))
+    assert axis_slider.value() == pytest.approx(2000 + 50 / per_step(axis_slider), abs=1)
+
+
+def test_ctrl_makes_a_panel_drag_visit_every_step(axis_slider) -> None:
+    assert per_step(axis_slider) < 1, "the fixture is meant to have several steps per pixel"
+    axis_slider.setValue(2000)
+    pixels = 6 * DEFAULT_FINE_PIXELS_PER_STEP
+    seen = crawl(axis_slider, knob(axis_slider), pixels, axis_slider.value, Qt.ControlModifier)
+    steps = [b - a for a, b in zip(seen, seen[1:])]
+    assert set(steps) <= {0, 1}, f"skipped steps: {steps}"
+    assert seen[-1] - seen[0] == 6
+
+
+def test_letting_go_of_ctrl_on_the_panel_does_not_jump(axis_slider) -> None:
+    axis_slider.setValue(2000)
+    x, y = knob(axis_slider)
+    send(axis_slider, QEvent.MouseButtonPress, x, y)
+    send(axis_slider, QEvent.MouseMove, x + 24, y, modifiers=Qt.ControlModifier)
+    assert axis_slider.value() == 2002
+    send(axis_slider, QEvent.MouseMove, x + 25, y)
+    assert axis_slider.value() == 2002 + round(1 / per_step(axis_slider))
+    send(axis_slider, QEvent.MouseButtonRelease, x + 25, y)
+
+
+def test_a_panel_drag_still_reads_as_a_drag(axis_slider) -> None:
+    """The panel waits for the release, and redraws at once on it."""
+    events, down = [], []
+    axis_slider.sliderPressed.connect(lambda: events.append("pressed"))
+    axis_slider.sliderReleased.connect(lambda: events.append("released"))
+    axis_slider.valueChanged.connect(lambda _v: down.append(axis_slider.isSliderDown()))
+    axis_slider.setValue(2000)
+    down.clear()
+    x, y = knob(axis_slider)
+    drag(axis_slider, (x, y), (x + 30, y), modifiers=Qt.ControlModifier)
+    assert events == ["pressed", "released"]
+    assert down and all(down), "values change while the handle is down"
+    assert axis_slider.value() == 2000 + round(30 / DEFAULT_FINE_PIXELS_PER_STEP)
+
+
+def test_a_panel_drag_stops_at_the_ends(axis_slider) -> None:
+    axis_slider.setValue(4995)
+    x, y = knob(axis_slider)
+    drag(axis_slider, (x, y), (x + 200, y))
+    assert axis_slider.value() == 4999
+
+
+def test_a_click_on_the_panel_groove_is_left_to_qt(axis_slider) -> None:
+    axis_slider.setPageStep(100)
+    axis_slider.setValue(2000)
+    x, y = knob(axis_slider)
+    send(axis_slider, QEvent.MouseButtonPress, x + 150, y)
+    send(axis_slider, QEvent.MouseButtonRelease, x + 150, y)
+    assert axis_slider.value() != 2000
+    assert not axis_slider.isSliderDown()

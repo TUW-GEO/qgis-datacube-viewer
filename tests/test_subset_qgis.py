@@ -15,6 +15,7 @@ import pytest
 
 pytest.importorskip("qgis.core")
 
+from datacube_viewer.gui.cube_slider import CubeSlider
 from datacube_viewer.layeruri import LayerUri, decode_uri
 
 pytestmark = pytest.mark.gui
@@ -250,6 +251,7 @@ def _row(scrubber, name):
 def test_the_sliders_span_only_the_subset(scrubber) -> None:
     time_row, sensor_row = _row(scrubber, "time"), _row(scrubber, "sensor")
     assert (time_row.slider.minimum(), time_row.slider.maximum()) == (0, 2)
+    assert isinstance(time_row.slider, CubeSlider), "Ctrl+drag works in the panel too"
     assert (sensor_row.slider.minimum(), sensor_row.slider.maximum()) == (0, 1)
     assert (time_row.index(), sensor_row.index()) == (3, 2)
     assert time_row.position.text() == "2 / 3"
