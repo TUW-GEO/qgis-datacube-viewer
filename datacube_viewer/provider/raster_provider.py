@@ -47,8 +47,9 @@ from ..core import BBox, DatacubeError, RefSpec, describe_crs
 from ..core.model import resolve_nodata
 from ..core.reader import ReadRequest
 from ..layeruri import PROVIDER_KEY, LayerUri, decode_uri
+from ..settings import reader_config
 from .context import LayerContext, LayerView
-from .statistics import SliceStatisticsCache, slice_statistics
+from .statistics import SliceStatisticsCache, slice_statistics, statistics_pixels
 
 # --------------------------------------------------------------------- dtype map
 _NUMPY_TO_QGIS: dict[str, Any] = {
@@ -186,7 +187,7 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
         # factory (which it reports as "provider is not available" and no detail).
         try:
             self._parsed = decode_uri(uri)
-            self._context = LayerContext(self._parsed)
+            self._context = LayerContext(self._parsed, reader_config())
         except DatacubeError as exc:
             self._fail("Cannot open store", exc.detailed)
         except Exception as exc:
@@ -327,6 +328,30 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
         if info.needs_scaling:
             return Qgis.DataType.Float32
         return self.sourceDataType(bandNo)
+
+    def bandScale(self, bandNo: int) -> float:
+        """The variable's CF ``scale_factor``, as stored in the file.
+
+        Metadata only, as with QGIS's GDAL provider: ``block()`` already returns
+        scaled values (see :meth:`dataType`), so nothing applies it a second time.
+        """
+        view = self._view()
+        if view is None:
+            return 1.0
+        try:
+            return self._variable(view, bandNo).scale_factor
+        except (IndexError, KeyError):
+            return 1.0
+
+    def bandOffset(self, bandNo: int) -> float:
+        """The variable's CF ``add_offset``, as stored. See :meth:`bandScale`."""
+        view = self._view()
+        if view is None:
+            return 0.0
+        try:
+            return self._variable(view, bandNo).add_offset
+        except (IndexError, KeyError):
+            return 0.0
 
     def generateBandName(self, bandNo: int) -> str:
         view = self._view()
@@ -647,12 +672,16 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
             return QgsRasterBandStats()
 
         band = view.bands[bandNo - 1]
-        key = (bandNo, band, tuple(sorted(view.indices.items())), view.snapshot_id)
+        try:
+            pixels = statistics_pixels(view.reader, int(sampleSize or 0))
+        except Exception:
+            pixels = None
+        key = (bandNo, band, tuple(sorted(view.indices.items())), view.snapshot_id, pixels)
         cached = self._stats.get(key)
         if cached is not None:
             return cached
         try:
-            computed = slice_statistics(view.reader, band, bandNo, view.indices)
+            computed = slice_statistics(view.reader, band, bandNo, view.indices, pixels)
         except Exception as exc:
             self._fail("Statistics failed", f"{type(exc).__name__}: {exc}")
             return QgsRasterBandStats()

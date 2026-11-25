@@ -55,6 +55,20 @@ INDEX_PROPERTY = f"{PROVIDER_KEY}/indices"
 #: checkbox, and persisted so the choice is per variable and survives a save.
 RESTRETCH_PROPERTY = f"{PROVIDER_KEY}/restretch"
 
+#: Layer custom property holding how this layer's colour range is derived (method
+#: and accuracy, as JSON). Needed because a range fixed across the cube sets the
+#: min/max origin to "user defined", which has no room left for the method.
+#: See ``provider.statistics.layer_method``.
+STRETCH_METHOD_PROPERTY = f"{PROVIDER_KEY}/stretch_method"
+
+#: Layer custom property describing the fixed range: whether it is exact and how
+#: many slices it was read from, as JSON. Shown in the cube panel.
+RANGE_INFO_PROPERTY = f"{PROVIDER_KEY}/range_info"
+
+#: Layer custom property holding the legend labels the clipping indicator wrote,
+#: so it never overwrites a label the user typed. See ``provider.statistics``.
+CLIP_LABELS_PROPERTY = f"{PROVIDER_KEY}/clip_labels"
+
 LEVEL_STRATEGIES: tuple[LevelStrategy, ...] = ("auto", "manual", "base", "coarsest")
 
 

@@ -19,14 +19,18 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
+    QFormLayout,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from .. import PLUGIN_NAME
+from .. import PLUGIN_NAME, settings
 from .axis_panel import (
     opens_automatically,
     redraws_while_dragging,
@@ -152,7 +156,124 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(2, 1)
         layout.addWidget(drops)
+        layout.addWidget(self._build_range_group())
+        layout.addWidget(self._build_resampling_group())
         layout.addStretch(1)
+
+    def _build_range_group(self) -> QGroupBox:
+        group = QGroupBox("Colour range of new layers")
+        group.setToolTip(
+            "\n".join(
+                (
+                    "How a new layer's colour range is derived. Written into the layer's",
+                    "own Symbology → Min/Max value settings, where it can be changed per",
+                    "layer; those win over this default.",
+                )
+            )
+        )
+        form = QFormLayout(group)
+
+        self._limits = QComboBox()
+        for value, label in (
+            ("minmax", "Min / max"),
+            ("cumulative_cut", "Cumulative count cut"),
+            ("stddev", "Mean ± standard deviation"),
+        ):
+            self._limits.addItem(label, value)
+        self._limits.setCurrentIndex(self._limits.findData(settings.stretch_limits()))
+        self._limits.currentIndexChanged.connect(self._sync_range_widgets)
+        form.addRow("Method", self._limits)
+
+        lower, upper = settings.cumulative_cut()
+        self._cut_lower = QDoubleSpinBox()
+        self._cut_upper = QDoubleSpinBox()
+        for box, value in ((self._cut_lower, lower), (self._cut_upper, upper)):
+            box.setRange(0.0, 100.0)
+            box.setDecimals(1)
+            box.setSuffix(" %")
+            box.setValue(value * 100.0)
+        cut_row = QHBoxLayout()
+        cut_row.addWidget(self._cut_lower)
+        cut_row.addWidget(QLabel("to"))
+        cut_row.addWidget(self._cut_upper)
+        self._cut_label = QLabel("Cut")
+        form.addRow(self._cut_label, cut_row)
+
+        self._std_dev = QDoubleSpinBox()
+        self._std_dev.setRange(0.1, 100.0)
+        self._std_dev.setDecimals(2)
+        self._std_dev.setSuffix(" σ")
+        self._std_dev.setValue(settings.std_dev_factor())
+        self._std_dev_label = QLabel("Std dev factor")
+        form.addRow(self._std_dev_label, self._std_dev)
+
+        self._accuracy = QComboBox()
+        self._accuracy.addItem("Exact: every pixel", "exact")
+        self._accuracy.addItem("Estimated: a sample of 250 000 pixels per slice", "estimated")
+        self._accuracy.setCurrentIndex(self._accuracy.findData(settings.stretch_accuracy()))
+        self._accuracy.currentIndexChanged.connect(self._sync_range_widgets)
+        form.addRow("Accuracy", self._accuracy)
+
+        self._budget = QSpinBox()
+        self._budget.setRange(1, 100_000)
+        self._budget.setSuffix(" million pixels")
+        self._budget.setValue(settings.exact_budget_pixels() // 1_000_000)
+        self._budget.setToolTip(
+            "\n".join(
+                (
+                    "Most an exact range reads, so loading a long time series stays quick.",
+                    "",
+                    "A cube that fits is read whole. Past it the range is read from as",
+                    "many whole slices as fit, spread evenly through the cube, and the",
+                    "colour bar shows ≤ / ≥ at an end where the slice on screen goes past",
+                    "the range. A full scan, from the load dialog or the cube panel,",
+                    "ignores it.",
+                    "",
+                    "Also caps an exact range of a single slice: a larger slice is sampled.",
+                )
+            )
+        )
+        self._budget_label = QLabel("Exact up to")
+        form.addRow(self._budget_label, self._budget)
+        self._sync_range_widgets()
+        return group
+
+    def _sync_range_widgets(self) -> None:
+        limits = self._limits.currentData()
+        for widget in (self._cut_label, self._cut_lower, self._cut_upper):
+            widget.setEnabled(limits == "cumulative_cut")
+        for widget in (self._std_dev_label, self._std_dev):
+            widget.setEnabled(limits == "stddev")
+        exact = self._accuracy.currentData() == "exact"
+        for widget in (self._budget_label, self._budget):
+            widget.setEnabled(exact)
+
+    def _build_resampling_group(self) -> QGroupBox:
+        group = QGroupBox("Resampling")
+        form = QFormLayout(group)
+        self._bilinear = QComboBox()
+        for value, label in (
+            ("any", "Any neighbour with weight is data (as GDAL)"),
+            ("half", "At least half the weight is data"),
+            ("all", "Every neighbour with weight is data"),
+        ):
+            self._bilinear.addItem(label, value)
+        self._bilinear.setCurrentIndex(self._bilinear.findData(settings.bilinear_validity()))
+        self._bilinear.setToolTip(
+            "\n".join(
+                (
+                    "For bilinear resampling next to nodata: when a pixel interpolated",
+                    "from nodata and data neighbours counts as data. Its value always",
+                    "comes from the data neighbours alone.",
+                    "",
+                    "Any: data reaches as far as it can, as in GDAL.",
+                    "Half: about as far as nearest neighbour would show it.",
+                    "Every: never next to a gap; edges shrink by a pixel.",
+                )
+            )
+        )
+        form.addRow("Bilinear next to nodata", self._bilinear)
+        return group
 
     def apply(self) -> None:
         set_opens_automatically(self._auto_open.isChecked())
@@ -162,6 +283,22 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
         for kind, combo in self._batch_actions.items():
             set_batch_action(kind, combo.currentData())
         set_shares_matching_dialog(self._share_matching.isChecked())
+
+        lower, upper = self._cut_lower.value() / 100.0, self._cut_upper.value() / 100.0
+        if lower >= upper:
+            lower, upper = settings.DEFAULT_CUT_LOWER, settings.DEFAULT_CUT_UPPER
+        settings.set_stretch_defaults(
+            self._limits.currentData(),
+            self._accuracy.currentData(),
+            (lower, upper),
+            self._std_dev.value(),
+            self._budget.value(),
+        )
+        settings.set_bilinear_validity(self._bilinear.currentData())
+
+        from ..provider import apply_reader_settings
+
+        apply_reader_settings()
 
 
 class DatacubeOptionsFactory(QgsOptionsWidgetFactory):

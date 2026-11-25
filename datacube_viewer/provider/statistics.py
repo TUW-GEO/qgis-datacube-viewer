@@ -23,33 +23,55 @@ the Layer Properties histogram, and the "Load min/max values" button. So:
   one derived from the whole axis does not move, so slices stay comparable and
   nothing flickers. Per-slice rescaling is then a deliberate choice rather than the
   default — see ``gui.axis_panel.should_restretch``.
+
+How a range is derived is a :class:`StretchMethod`: the limits (min/max,
+cumulative cut, mean ± std dev) and the accuracy. "Exact" reads every pixel at
+full resolution, up to a pixel budget (Settings → Options → Datacube Viewer); past
+it a cube-wide range reads a subset of the slices and says so, and the colour bar
+marks a slice that goes past the range (:func:`mark_clipping`). A full scan
+ignores the budget. "Estimated" reads a sample the size of QGIS's own estimate.
 """
 
 from __future__ import annotations
 
+import itertools
+import json
+import math
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass, fields
 
 import numpy as np
 from qgis.core import (
     Qgis,
+    QgsColorRampLegendNodeSettings,
     QgsContrastEnhancement,
+    QgsNumericFormatContext,
     QgsRasterBandStats,
     QgsRasterLayer,
     QgsRasterMinMaxOrigin,
 )
 
-from ..core import AxisInfo, DatacubeError, DatasetReader
+from .. import settings
+from ..core import AxisInfo, DatacubeError, DatasetInfo, DatasetReader
+from ..core.geometry import Window
+from ..layeruri import CLIP_LABELS_PROPERTY, RANGE_INFO_PROPERTY, STRETCH_METHOD_PROPERTY
 from .context import axes_for_bands
 
-#: Overview size for a statistics sample. A stretch is a display decision, not a
-#: measurement, and QGIS's own statistics default to "Estimated" for the same
-#: reason. Small enough that a remote store does not stall the load.
-SAMPLE_SIZE = 192
+#: Sample size for an "estimated" range, per band and slice. QGIS's own
+#: (``QgsRasterLayer::SAMPLE_SIZE``), so "Estimate (faster)" means the same here.
+ESTIMATE_PIXELS = 250_000
 
-#: How many positions to visit per axis when sampling the whole cube. Per axis,
-#: not per combination: a cube with a 3650-day time axis and 3 sensors has 10950
-#: slices, and reading even one percent of them at load time is not acceptable.
+#: Pixels per window when an exact scan walks the base level, so memory stays
+#: bounded however large a slice is.
+_TILE_PIXELS = 4_000_000
+
+#: Values a cumulative cut keeps for its percentiles: 64 MB of float32.
+_PERCENTILE_VALUES = 16_000_000
+
+#: Positions per axis for an estimated cube range, and the fewest slices a
+#: sampled exact one visits. Per axis, not per combination: a cube with a 3650-day
+#: time axis and 3 sensors has 10950 slices.
 CUBE_SLICES_PER_AXIS = 5
 
 #: Cap on remembered statistics. Keyed per band *and* slice, so a long scrub would
@@ -211,64 +233,512 @@ def current_stretch(layer: QgsRasterLayer) -> tuple[float, float] | None:
     return float(low), float(high)
 
 
-def _limits_from(values: np.ndarray, origin: QgsRasterMinMaxOrigin) -> tuple[float, float]:
-    """Apply the layer's *own* chosen algorithm to a sample of the current slice.
+# ------------------------------------------------------------------- the method
+LIMIT_MIN_MAX = _limit("MinimumMaximum", "MinMax")
 
-    Honouring ``origin.limits()`` rather than always taking min/max matters: someone
-    who set a 2-98 cumulative cut to tame outliers does not want plain min/max back
-    every time they nudge the slider.
+_LIMIT_NAMES = {
+    "minmax": ("MinimumMaximum", "MinMax"),
+    "cumulative_cut": ("CumulativeCut", "CumulativeCut"),
+    "stddev": ("StdDev", "StdDev"),
+}
+
+
+def _limits_member(name: str):
+    """The typed limits value for ``name``; ``setLimits`` refuses a plain int."""
+    modern, legacy = _LIMIT_NAMES[name]
+    enum = getattr(Qgis, "RasterRangeLimit", None)
+    if enum is not None and hasattr(enum, modern):
+        return getattr(enum, modern)
+    return getattr(QgsRasterMinMaxOrigin, legacy)
+
+
+def _accuracy_member(exact: bool):
+    enum = getattr(Qgis, "RasterRangeAccuracy", None)
+    if enum is not None:
+        return enum.Exact if exact else enum.Estimated
+    return QgsRasterMinMaxOrigin.Exact if exact else QgsRasterMinMaxOrigin.Estimated
+
+
+@dataclass(frozen=True)
+class StretchMethod:
+    """How a colour range is derived from the data: the limits and the accuracy.
+
+    The same fields as QGIS's ``QgsRasterMinMaxOrigin`` (Symbology → Min/Max value
+    settings), which is where a layer keeps them while its range is derived. A
+    range fixed across the cube is recorded there as "user defined", which leaves no
+    room for the method, so the layer also carries it in
+    :data:`~datacube_viewer.layeruri.STRETCH_METHOD_PROPERTY`. See
+    :func:`layer_method`.
     """
-    limits = int(origin.limits()) if origin is not None else -1
-    if limits == LIMIT_STD_DEV:
-        factor = float(origin.stdDevFactor())
-        mean, deviation = float(values.mean()), float(values.std())
-        return mean - factor * deviation, mean + factor * deviation
-    if limits == LIMIT_CUMULATIVE_CUT:
-        lower = float(origin.cumulativeCutLower()) * 100.0
-        upper = float(origin.cumulativeCutUpper()) * 100.0
-        low, high = np.percentile(values.astype("float64"), (lower, upper))
-        return float(low), float(high)
-    return float(values.min()), float(values.max())
+
+    #: "minmax", "cumulative_cut" or "stddev".
+    limits: str = "minmax"
+    #: Cumulative cut bounds, as fractions.
+    cut_lower: float = 0.02
+    cut_upper: float = 0.98
+    std_dev_factor: float = 2.0
+    #: "exact": every pixel (within the read budget unless a full scan was asked
+    #: for). "estimated": a sample of :data:`ESTIMATE_PIXELS` per slice.
+    accuracy: str = "exact"
+
+    @property
+    def exact(self) -> bool:
+        return self.accuracy == "exact"
+
+    @classmethod
+    def from_settings(cls) -> StretchMethod:
+        """The plugin-wide default, from Settings → Options → Datacube Viewer."""
+        lower, upper = settings.cumulative_cut()
+        return cls(
+            limits=settings.stretch_limits(),
+            cut_lower=lower,
+            cut_upper=upper,
+            std_dev_factor=settings.std_dev_factor(),
+            accuracy=settings.stretch_accuracy(),
+        )
+
+    @classmethod
+    def from_origin(cls, origin: QgsRasterMinMaxOrigin, fallback: StretchMethod) -> StretchMethod:
+        """Read the method off a min/max origin. ``fallback`` fills a "user defined" one."""
+        limits = int(origin.limits())
+        name = {
+            LIMIT_MIN_MAX: "minmax",
+            LIMIT_CUMULATIVE_CUT: "cumulative_cut",
+            LIMIT_STD_DEV: "stddev",
+        }.get(limits, fallback.limits)
+        exact = int(origin.statAccuracy()) == int(_accuracy_member(True))
+        return cls(
+            limits=name,
+            cut_lower=float(origin.cumulativeCutLower()),
+            cut_upper=float(origin.cumulativeCutUpper()),
+            std_dev_factor=float(origin.stdDevFactor()),
+            accuracy="exact" if exact else "estimated",
+        )
+
+    def to_origin(self, origin: QgsRasterMinMaxOrigin | None) -> QgsRasterMinMaxOrigin:
+        """A copy of ``origin`` carrying this method. Extent and the rest are kept."""
+        out = QgsRasterMinMaxOrigin(origin) if origin is not None else QgsRasterMinMaxOrigin()
+        out.setLimits(_limits_member(self.limits))
+        out.setStatAccuracy(_accuracy_member(self.exact))
+        out.setCumulativeCutLower(self.cut_lower)
+        out.setCumulativeCutUpper(self.cut_upper)
+        out.setStdDevFactor(self.std_dev_factor)
+        return out
+
+    def encode(self) -> str:
+        return json.dumps(asdict(self), sort_keys=True)
+
+    @classmethod
+    def decode(cls, text: object) -> StretchMethod | None:
+        try:
+            data = json.loads(str(text))
+            method = cls(**{f.name: data[f.name] for f in fields(cls)})
+        except (TypeError, ValueError, KeyError):
+            return None
+        if method.limits not in settings.STRETCH_LIMITS:
+            return None
+        if method.accuracy not in settings.STRETCH_ACCURACIES:
+            return None
+        return method
+
+    def describe(self) -> str:
+        """Short, for the cube panel: "min/max, exact"."""
+        if self.limits == "cumulative_cut":
+            what = f"{self.cut_lower * 100:g}–{self.cut_upper * 100:g} % cut"
+        elif self.limits == "stddev":
+            what = f"mean ± {self.std_dev_factor:g} σ"
+        else:
+            what = "min/max"
+        return f"{what}, {self.accuracy}"
+
+
+def layer_method(layer: QgsRasterLayer) -> StretchMethod:
+    """How this layer's colour range is derived.
+
+    A derived min/max origin (anything but "user defined") is authoritative: it is
+    what the user last chose in Symbology. Otherwise the method recorded on the
+    layer when its range was fixed, and failing that the plugin default.
+    """
+    stored = StretchMethod.decode(layer.customProperty(STRETCH_METHOD_PROPERTY, ""))
+    fallback = stored or StretchMethod.from_settings()
+    renderer = layer.renderer()
+    origin = renderer.minMaxOrigin() if renderer is not None else None
+    if origin is not None and int(origin.limits()) != LIMIT_NOT_SET:
+        return StretchMethod.from_origin(origin, fallback)
+    return fallback
+
+
+def assign_method(layer: QgsRasterLayer, method: StretchMethod) -> None:
+    """Record ``method`` on the layer, in its min/max origin and its own property.
+
+    A fixed ("user defined") range stays fixed: only the accuracy and the cut and
+    std dev parameters are written into its origin then.
+    """
+    layer.setCustomProperty(STRETCH_METHOD_PROPERTY, method.encode())
+    renderer = layer.renderer()
+    if renderer is None:
+        return
+    current = renderer.minMaxOrigin()
+    origin = method.to_origin(current)
+    if current is not None and int(current.limits()) == LIMIT_NOT_SET:
+        origin.setLimits(_not_set())
+    renderer.setMinMaxOrigin(origin)
+
+
+# --------------------------------------------------------------------- scanning
+class ScanCancelled(Exception):
+    """A background range scan was cancelled."""
+
+
+class RangeAccumulator:
+    """Streaming statistics over any number of reads, exact up to percentiles.
+
+    Min, max, mean and standard deviation are exact however much is read. A
+    cumulative cut needs the values themselves; up to :data:`_PERCENTILE_VALUES`
+    of them are kept, and past that every other one is dropped (and
+    :attr:`decimated` says so), which keeps memory bounded on a full scan.
+    """
+
+    def __init__(self, keep_values: bool = False):
+        self.low = math.inf
+        self.high = -math.inf
+        self.count = 0
+        self.total = 0.0
+        self.squares = 0.0
+        self.decimated = False
+        self._keep = keep_values
+        self._parts: list[np.ndarray] = []
+        self._kept = 0
+        self._stride = 1
+
+    def add(self, values: np.ndarray) -> None:
+        values = np.asarray(values).ravel()
+        if values.dtype.kind == "f":
+            values = values[np.isfinite(values)]
+        if values.size == 0:
+            return
+        work = values.astype(np.float64, copy=False)
+        self.low = min(self.low, float(work.min()))
+        self.high = max(self.high, float(work.max()))
+        self.count += int(work.size)
+        self.total += float(work.sum())
+        self.squares += float(np.square(work).sum())
+        if not self._keep:
+            return
+        # A copy, never a view: the reader may hand out arrays it still owns.
+        part = np.array(values[:: self._stride], dtype=np.float32)
+        self._parts.append(part)
+        self._kept += part.size
+        while self._kept > _PERCENTILE_VALUES:
+            merged = np.concatenate(self._parts)[::2]
+            self._parts = [merged]
+            self._kept = int(merged.size)
+            self._stride *= 2
+            self.decimated = True
+
+    @property
+    def mean(self) -> float:
+        return self.total / self.count if self.count else math.nan
+
+    @property
+    def std(self) -> float:
+        if not self.count:
+            return math.nan
+        variance = self.squares / self.count - self.mean**2
+        return math.sqrt(max(variance, 0.0))
+
+    @property
+    def extremes(self) -> tuple[float, float] | None:
+        return (self.low, self.high) if self.count else None
+
+    def limits(self, method: StretchMethod) -> tuple[float, float] | None:
+        """The colour range ``method`` derives, or None when there is none to show.
+
+        A flat result is None too: min == max would divide by zero in the renderer,
+        which paints the whole layer one colour and looks like a broken slider.
+        """
+        if not self.count:
+            return None
+        if method.limits == "stddev":
+            spread = method.std_dev_factor * self.std
+            low, high = self.mean - spread, self.mean + spread
+        elif method.limits == "cumulative_cut" and self._parts:
+            values = np.concatenate(self._parts)
+            low, high = np.percentile(values, (method.cut_lower * 100, method.cut_upper * 100))
+        else:
+            low, high = self.low, self.high
+        low, high = float(low), float(high)
+        if not (math.isfinite(low) and math.isfinite(high)) or high <= low:
+            return None
+        return low, high
+
+
+def _check(cancelled: Callable[[], bool] | None) -> None:
+    if cancelled is not None and cancelled():
+        raise ScanCancelled
+
+
+def _long_side(level, pixels: int) -> int:
+    """Overview size (its long side) holding about ``pixels`` pixels."""
+    long, short = max(level.width, level.height), max(min(level.width, level.height), 1)
+    return max(int(math.sqrt(pixels * long / short)), 1)
+
+
+def _scan_slice(
+    reader: DatasetReader,
+    band: str,
+    indices: Mapping[str, int],
+    accumulator: RangeAccumulator,
+    max_pixels: int | None,
+    cancelled: Callable[[], bool] | None = None,
+) -> bool:
+    """Feed one band of one slice into ``accumulator``. True if every pixel was read.
+
+    Every pixel means the base level, in windows of about :data:`_TILE_PIXELS`, so
+    memory stays bounded however large the slice. Past ``max_pixels`` it is a
+    nearest-neighbour overview instead: a sample of real values, never averages,
+    which would pull the extremes in.
+    """
+    level = reader.dataset.base
+    if max_pixels is None or level.pixel_count <= max_pixels:
+        rows = max(1, _TILE_PIXELS // max(level.width, 1))
+        for row in range(0, level.height, rows):
+            _check(cancelled)
+            window = Window(0, row, level.width, min(rows, level.height - row))
+            values, valid = reader.read_window(band, window, indices, level)
+            accumulator.add(values[valid] if valid is not None else values)
+        return True
+    result = reader.read_overview(
+        (band,),
+        max_size=_long_side(level, max_pixels),
+        indices=dict(indices),
+        resampling="nearest",
+    )
+    if not result.empty:
+        accumulator.add(result.data[0][result.mask])
+    return False
+
+
+@dataclass(frozen=True)
+class ScanPlan:
+    """Which slices a range is read from, and how much of each."""
+
+    visits: tuple[Mapping[str, int], ...]
+    #: Pixels read per band per slice; None reads every pixel.
+    max_pixels: int | None
+    #: Slices in the cube (1 for a single slice).
+    slices_total: int
+
+
+@dataclass(frozen=True)
+class RangeScan:
+    """What a scan found, per band."""
+
+    #: The colour range the method derives. None where there is none to show.
+    ranges: tuple[tuple[float, float] | None, ...]
+    #: Plain min/max of what was read, for the clipping indicator.
+    extremes: tuple[tuple[float, float] | None, ...]
+    #: Whether every pixel of every slice went in (and the cut kept every value).
+    exact: bool
+    slices_read: int
+    slices_total: int
+
+    def info(self) -> dict[str, object]:
+        """For :data:`~datacube_viewer.layeruri.RANGE_INFO_PROPERTY`."""
+        return {
+            "exact": self.exact,
+            "slices_read": self.slices_read,
+            "slices_total": self.slices_total,
+        }
+
+
+def plan_slice(
+    dataset: DatasetInfo,
+    bands: Sequence[str],
+    indices: Mapping[str, int],
+    method: StretchMethod,
+    budget: int,
+) -> ScanPlan:
+    """Read one slice: every pixel while it fits ``budget``, else a sample of it."""
+    if not method.exact:
+        return ScanPlan((dict(indices),), ESTIMATE_PIXELS, 1)
+    per_band = max(budget // max(len(bands), 1), 1)
+    cap = None if dataset.base.pixel_count <= per_band else per_band
+    return ScanPlan((dict(indices),), cap, 1)
+
+
+def plan_cube(
+    dataset: DatasetInfo,
+    bands: Sequence[str],
+    axes: Sequence[AxisInfo],
+    indices: Mapping[str, int] | None,
+    method: StretchMethod,
+    budget: int,
+    full_scan: bool = False,
+) -> ScanPlan:
+    """Pick the slices a cube-wide range is read from.
+
+    * ``full_scan``: every slice, every pixel. Exact, and as slow as the cube is big.
+    * Exact within ``budget``: every slice if the whole cube fits; else as many
+      whole slices as fit, spread evenly through the cube; and when not even
+      :data:`CUBE_SLICES_PER_AXIS` whole slices fit, that many slices, each sampled
+      down so the total stays inside the budget.
+    * Estimated: :data:`CUBE_SLICES_PER_AXIS` positions along each axis, the
+      others held where they are, each sampled to :data:`ESTIMATE_PIXELS`. Per axis
+      rather than over every combination: a decade of daily data across three
+      sensors is ten thousand slices.
+    """
+    base = dict(indices or {})
+    walk = [axis for axis in axes if axis.size > 1]
+    if not walk:
+        return plan_slice(dataset, bands, base, method, budget)
+    names = [axis.name for axis in walk]
+    sizes = [axis.size for axis in walk]
+    total = int(np.prod(sizes, dtype=np.int64))
+
+    def spread(count: int) -> tuple[dict[str, int], ...]:
+        positions = np.unique(np.linspace(0, total - 1, count).round().astype(np.int64))
+        out = []
+        for position in positions:
+            coords = np.unravel_index(int(position), sizes)
+            out.append({**base, **{n: int(c) for n, c in zip(names, coords)}})
+        return tuple(out)
+
+    if full_scan:
+        every = tuple(
+            {**base, **dict(zip(names, combo))}
+            for combo in itertools.product(*(range(size) for size in sizes))
+        )
+        return ScanPlan(every, None, total)
+
+    if not method.exact:
+        visits: list[dict[str, int]] = [base]
+        for axis in walk:
+            count = min(CUBE_SLICES_PER_AXIS, axis.size)
+            for position in np.linspace(0, axis.size - 1, count).round().astype(int):
+                visit = {**base, axis.name: int(position)}
+                if visit not in visits:
+                    visits.append(visit)
+        return ScanPlan(tuple(visits), ESTIMATE_PIXELS, total)
+
+    per_slice = dataset.base.pixel_count * max(len(bands), 1)
+    if per_slice * total <= budget:
+        return ScanPlan(spread(total), None, total)
+    whole = budget // per_slice
+    if whole >= CUBE_SLICES_PER_AXIS:
+        return ScanPlan(spread(int(whole)), None, total)
+    count = min(CUBE_SLICES_PER_AXIS, total)
+    cap = max(budget // (count * max(len(bands), 1)), 1)
+    return ScanPlan(spread(count), cap, total)
+
+
+def scan_ranges(
+    reader: DatasetReader,
+    bands: Sequence[str],
+    plan: ScanPlan,
+    method: StretchMethod,
+    progress: Callable[[float], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> RangeScan:
+    """Carry out ``plan``. Safe off the main thread; raises :class:`ScanCancelled`.
+
+    One unreadable slice does not sink the range: it is skipped, and the result is
+    then no longer exact.
+    """
+    accumulators = [RangeAccumulator(method.limits == "cumulative_cut") for _ in bands]
+    complete = True
+    steps = max(len(plan.visits) * len(bands), 1)
+    done = 0
+    for visit in plan.visits:
+        for accumulator, band in zip(accumulators, bands):
+            _check(cancelled)
+            try:
+                complete &= _scan_slice(
+                    reader, band, visit, accumulator, plan.max_pixels, cancelled
+                )
+            except DatacubeError:
+                complete = False
+            done += 1
+            if progress is not None:
+                progress(100.0 * done / steps)
+    exact = (
+        complete
+        and len(plan.visits) == plan.slices_total
+        and not any(a.decimated for a in accumulators)
+    )
+    return RangeScan(
+        ranges=tuple(a.limits(method) for a in accumulators),
+        extremes=tuple(a.extremes for a in accumulators),
+        exact=exact,
+        slices_read=len(plan.visits),
+        slices_total=plan.slices_total,
+    )
+
+
+def slice_scan(
+    reader: DatasetReader,
+    bands: Sequence[str],
+    indices: Mapping[str, int],
+    method: StretchMethod | None = None,
+    budget: int | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> RangeScan:
+    """The range of the slice at ``indices``, per band."""
+    method = method or StretchMethod.from_settings()
+    budget = budget or settings.exact_budget_pixels()
+    plan = plan_slice(reader.dataset, bands, indices, method, budget)
+    return scan_ranges(reader, bands, plan, method, cancelled=cancelled)
 
 
 def slice_ranges(
     reader: DatasetReader,
     bands: Sequence[str],
     indices: Mapping[str, int],
-    origin: QgsRasterMinMaxOrigin | None = None,
-    sample: int = SAMPLE_SIZE,
+    method: StretchMethod | None = None,
+    budget: int | None = None,
 ) -> tuple[tuple[float, float] | None, ...]:
-    """Per-band ``(low, high)`` for the slice currently selected. None where unknown.
+    """Per-band ``(low, high)`` for the slice at ``indices``. None where unknown.
 
     Computed from this plugin's own reader, *not* from
     ``QgsRasterDataProvider.bandStatistics``. That method caches per
     ``(band, stats, extent, sampleSize)`` and knows nothing about our axis indices,
     so after a slice change it returns the previous slice's numbers -- and
     ``QgsRasterLayer.setContrastEnhancement()``, which goes through it, would
-    faithfully re-apply them. Measured on the cube fixture: the real range moves from
-    -20.5..-3.1 at time 0 to -11.1..6.4 at time 3 while bandStatistics reports the
-    first pair throughout. The cache is not reachable from Python, so going around it
-    is the only option rather than a preference.
+    faithfully re-apply them. The cache is not reachable from Python, so going
+    around it is the only option rather than a preference.
     """
-    if not bands:
-        return ()
-    result = reader.read_overview(tuple(bands), max_size=sample, indices=dict(indices))
-    out: list[tuple[float, float] | None] = []
-    for position in range(len(bands)):
-        plane = result.data[position]
-        values = plane[result.mask]
-        values = values[np.isfinite(values)]
-        if values.size == 0:
-            out.append(None)  # a wholly unwritten slice has no range to show
-            continue
-        low, high = _limits_from(values, origin)
-        if not (np.isfinite(low) and np.isfinite(high)) or high <= low:
-            # A flat slice would divide by zero in the renderer, which paints the
-            # whole layer one colour and looks exactly like the bug being fixed.
-            out.append(None)
-            continue
-        out.append((low, high))
-    return tuple(out)
+    return slice_scan(reader, bands, indices, method, budget).ranges
+
+
+def cube_scan(
+    reader: DatasetReader,
+    bands: Sequence[str],
+    axes: Sequence[AxisInfo],
+    indices: Mapping[str, int] | None = None,
+    method: StretchMethod | None = None,
+    budget: int | None = None,
+    full_scan: bool = False,
+    progress: Callable[[float], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> RangeScan:
+    """The range across the whole cube, per band. See :func:`plan_cube`."""
+    method = method or StretchMethod.from_settings()
+    budget = budget or settings.exact_budget_pixels()
+    plan = plan_cube(reader.dataset, bands, axes, indices, method, budget, full_scan)
+    return scan_ranges(reader, bands, plan, method, progress, cancelled)
+
+
+def cube_ranges(
+    reader: DatasetReader,
+    bands: Sequence[str],
+    axes: Sequence[AxisInfo],
+    indices: Mapping[str, int] | None = None,
+    method: StretchMethod | None = None,
+    budget: int | None = None,
+    full_scan: bool = False,
+) -> tuple[tuple[float, float] | None, ...]:
+    """Per-band ``(low, high)`` across the whole cube. None where unknown."""
+    return cube_scan(reader, bands, axes, indices, method, budget, full_scan).ranges
 
 
 def refresh_legend(layer: QgsRasterLayer) -> bool:
@@ -385,23 +855,6 @@ def _set_enhancement(layer, renderer, band, span, getter, setter) -> bool:
     return True
 
 
-def _finite(values: np.ndarray) -> np.ndarray:
-    return values[np.isfinite(values)]
-
-
-def _sample(
-    reader: DatasetReader,
-    band: str,
-    indices: Mapping[str, int],
-    sample: int = SAMPLE_SIZE,
-) -> np.ndarray:
-    """Valid pixels of one band at one slice, as a flat float64 array."""
-    result = reader.read_overview((band,), max_size=sample, indices=dict(indices))
-    plane = result.data[0]
-    values = plane[result.mask]
-    return _finite(values.astype("float64", copy=False))
-
-
 class SliceStatisticsCache:
     """Per-slice band statistics, memoised. Owned by one provider.
 
@@ -431,98 +884,64 @@ class SliceStatisticsCache:
             self._entries[key] = stats
 
 
+def statistics_pixels(reader: DatasetReader, sample_size: int) -> int | None:
+    """Pixels to read for a ``bandStatistics`` call with QGIS's ``sampleSize``.
+
+    QGIS passes 0 for "Actual (slower)" accuracy, which reads every pixel here as
+    long as the slice fits the exact-range budget; anything else is the sample size
+    it asked for (250 000 for "Estimate (faster)").
+    """
+    if sample_size > 0:
+        return int(sample_size)
+    budget = settings.exact_budget_pixels()
+    return None if reader.dataset.base.pixel_count <= budget else budget
+
+
 def slice_statistics(
     reader: DatasetReader,
     band: str,
     band_number: int,
     indices: Mapping[str, int],
-    sample: int = SAMPLE_SIZE,
+    max_pixels: int | None = ESTIMATE_PIXELS,
 ) -> QgsRasterBandStats:
     """Statistics for ``band`` at the currently selected slice.
 
-    Reports nothing gathered only when the slice holds no valid pixels at all, which
-    QGIS reads as "unknown" and answers by falling back to the data type's range.
+    ``max_pixels`` None reads every pixel; otherwise a nearest-neighbour sample of
+    about that many. Reports nothing gathered only when the slice holds no valid
+    pixels at all, which QGIS reads as "unknown" and answers by falling back to the
+    data type's range.
 
     A *constant* slice is a different case and is reported truthfully, min == max
     included. An unwritten Zarr slice usually lands here rather than in the branch
     above, because ``VariableInfo.nodata`` deliberately does not treat a fill value
     as nodata — 0 is a legitimate dark pixel. Suppressing that would be lying to the
     histogram; refusing to build a *stretch* out of a flat range is
-    :func:`slice_ranges`'s job, and it does.
+    :meth:`RangeAccumulator.limits`'s job, and it does.
     """
     stats = QgsRasterBandStats()
     stats.bandNumber = band_number
-    values = _sample(reader, band, indices, sample)
-    if values.size == 0:
+    accumulator = RangeAccumulator()
+    _scan_slice(reader, band, indices, accumulator, max_pixels)
+    if not accumulator.count:
         return stats
 
-    stats.minimumValue = float(values.min())
-    stats.maximumValue = float(values.max())
+    stats.minimumValue = accumulator.low
+    stats.maximumValue = accumulator.high
     stats.range = stats.maximumValue - stats.minimumValue
-    stats.mean = float(values.mean())
-    stats.stdDev = float(values.std())
-    stats.sum = float(values.sum())
-    stats.sumOfSquares = float(np.square(values).sum())
-    stats.elementCount = int(values.size)
+    stats.mean = accumulator.mean
+    stats.stdDev = accumulator.std
+    stats.sum = accumulator.total
+    stats.sumOfSquares = accumulator.squares
+    stats.elementCount = accumulator.count
     stats.statsGathered = _GATHERED
     return stats
 
 
-def cube_ranges(
-    reader: DatasetReader,
-    bands: Sequence[str],
-    axes: Sequence[AxisInfo],
-    indices: Mapping[str, int] | None = None,
-    slices_per_axis: int = CUBE_SLICES_PER_AXIS,
-    sample: int = SAMPLE_SIZE,
-) -> tuple[tuple[float, float] | None, ...]:
-    """Per-band ``(low, high)`` over a sample of the whole cube. None where unknown.
-
-    Each axis is walked independently, with the others held at ``indices``, rather
-    than over the Cartesian product of all axes. The product is unbounded in
-    practice — a decade of daily data across three sensors is ten thousand slices —
-    while the per-axis walk is ``slices_per_axis * len(axes)`` reads and still sees
-    the variation along every axis. It can miss a combination that is extreme only
-    jointly; the cost of being wrong is a stretch a little too narrow, which the
-    user can widen, and the alternative is a load that never finishes.
-    """
-    if not bands:
-        return ()
-    base = dict(indices or {})
-    visits: list[dict[str, int]] = [base]
-    for axis in axes:
-        if axis.size <= 1:
-            continue
-        count = min(slices_per_axis, axis.size)
-        for position in np.linspace(0, axis.size - 1, count).round().astype(int):
-            visits.append({**base, axis.name: int(position)})
-
-    seen: list[set[tuple]] = []
-    lows: list[float | None] = [None] * len(bands)
-    highs: list[float | None] = [None] * len(bands)
-    for visit in visits:
-        fingerprint = tuple(sorted(visit.items()))
-        if fingerprint in seen:
-            continue
-        seen.append(fingerprint)
-        for position, band in enumerate(bands):
-            try:
-                values = _sample(reader, band, visit, sample)
-            except DatacubeError:
-                continue  # one unreadable slice must not sink the whole stretch
-            if values.size == 0:
-                continue
-            low, high = float(values.min()), float(values.max())
-            lows[position] = low if lows[position] is None else min(lows[position], low)
-            highs[position] = high if highs[position] is None else max(highs[position], high)
-
-    out: list[tuple[float, float] | None] = []
-    for low, high in zip(lows, highs):
-        out.append((low, high) if low is not None and high is not None and high > low else None)
-    return tuple(out)
-
-
-def set_fixed_range(layer, ranges: Sequence[tuple[float, float] | None]) -> bool:
+def set_fixed_range(
+    layer,
+    ranges: Sequence[tuple[float, float] | None],
+    info: Mapping[str, object] | None = None,
+) -> bool:
     """Record ``ranges`` on the layer as a user-defined stretch. True if applied.
 
     "User-defined" is the point, not a side effect. It is what
@@ -532,16 +951,24 @@ def set_fixed_range(layer, ranges: Sequence[tuple[float, float] | None]) -> bool
     means nothing downstream quietly replaces a cube-wide stretch with a
     single-slice one, and the cube panel reads the very same flag to decide whether
     rescaling per slice is wanted.
+
+    The method the range was derived with is saved on the layer first (see
+    :func:`layer_method`), since the origin forgets it. ``info`` (see
+    :meth:`RangeScan.info`) says how exact the range is, for the cube panel.
     """
     if not any(span is not None for span in ranges):
         return False
     renderer = layer.renderer()
     if renderer is None:
         return False
+    method = layer_method(layer)
     applied = apply_stretch(layer, ranges)
     # Even when the numbers were already right, the algorithm may be one that
     # ignores them -- in which case fixing it is the whole point of being here.
     effective = _make_stretch_effective(layer)
+    layer.setCustomProperty(STRETCH_METHOD_PROPERTY, method.encode())
+    if info is not None:
+        layer.setCustomProperty(RANGE_INFO_PROPERTY, json.dumps(dict(info)))
     if not (applied or effective):
         return False
     origin = QgsRasterMinMaxOrigin(renderer.minMaxOrigin())
@@ -550,25 +977,147 @@ def set_fixed_range(layer, ranges: Sequence[tuple[float, float] | None]) -> bool
     return True
 
 
-def fit_to_cube(layer: QgsRasterLayer) -> bool:
-    """Stretch ``layer`` across its whole cube and fix the range there.
+def range_info(layer: QgsRasterLayer) -> dict[str, object] | None:
+    """What :func:`set_fixed_range` recorded about the layer's range, if anything."""
+    try:
+        data = json.loads(str(layer.customProperty(RANGE_INFO_PROPERTY, "")))
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
-    The loader's default and the panel's "whole cube" button are the same action,
-    so they are the same function. Both recompute rather than remembering the range
-    from load time, because a snapshot switch can change what the cube contains.
 
-    Returns False when there is nothing to do — a 2-D variable has no axis for the
-    stretch to drift along, so whatever QGIS worked out is already right.
+def fit_scan(layer: QgsRasterLayer, full_scan: bool = False) -> tuple[RangeScan, bool] | None:
+    """Plan and run the range scan :func:`fit_to_cube` applies. Blocking.
+
+    Returns the scan and whether the layer has a cube to span, or None for a layer
+    that is not a datacube layer.
     """
     provider = layer.dataProvider()
     context = getattr(provider, "context", None)
     if context is None:
-        return False
+        return None
     view = context.view()
     axes = axes_for_bands(view.dataset, view.bands)
-    if not axes:
+    method = layer_method(layer)
+    scan = cube_scan(view.reader, view.bands, axes, view.indices, method, full_scan=full_scan)
+    return scan, bool(axes)
+
+
+def apply_fit(layer: QgsRasterLayer, scan: RangeScan, has_axes: bool) -> bool:
+    """Apply a finished scan: fixed across a cube, derived for a single slice."""
+    if has_axes:
+        return set_fixed_range(layer, scan.ranges, scan.info())
+    layer.setCustomProperty(RANGE_INFO_PROPERTY, json.dumps(scan.info()))
+    return apply_stretch(layer, scan.ranges)
+
+
+def fit_to_cube(layer: QgsRasterLayer, full_scan: bool = False) -> bool:
+    """Stretch ``layer`` across its whole cube and fix the range there. Blocking.
+
+    The cube panel's "whole cube" button and the loader do the same, in the
+    background (``gui.stretch_tasks``). Both recompute rather than remembering the
+    range from load time, because a snapshot switch can change what the cube
+    contains.
+
+    Returns False when there is nothing to do — a 2-D variable has no axis for the
+    stretch to drift along, so whatever QGIS worked out is already right.
+    """
+    found = fit_scan(layer, full_scan)
+    if found is None or not found[1]:
         return False
-    return set_fixed_range(layer, cube_ranges(view.reader, view.bands, axes, view.indices))
+    return apply_fit(layer, found[0], True)
+
+
+# --------------------------------------------------------------------- clipping
+def clipping(
+    span: tuple[float, float] | None, extremes: tuple[float, float] | None
+) -> tuple[bool, bool]:
+    """Whether data reaches below and above the colour range ``span``."""
+    if span is None or extremes is None:
+        return False, False
+    low, high = span
+    tolerance = 1e-6 * max(1.0, abs(low), abs(high))
+    return extremes[0] < low - tolerance, extremes[1] > high + tolerance
+
+
+def _legend_settings_holder(layer: QgsRasterLayer):
+    """``(getter, setter)`` for the colour bar's legend settings, or None.
+
+    Single-band grey keeps them on the renderer, pseudocolour on its colour ramp
+    shader. A multiband composite has no colour bar.
+    """
+    renderer = layer.renderer()
+    if renderer is None:
+        return None
+    if hasattr(renderer, "legendSettings") and hasattr(renderer, "setLegendSettings"):
+        return renderer.legendSettings, renderer.setLegendSettings
+    shader = renderer.shader() if hasattr(renderer, "shader") else None
+    function = shader.rasterShaderFunction() if shader is not None else None
+    if function is not None and hasattr(function, "legendSettings"):
+        return function.legendSettings, function.setLegendSettings
+    return None
+
+
+def has_colour_bar(layer: QgsRasterLayer) -> bool:
+    """Whether the layer's legend is a colour bar the clipping indicator can mark."""
+    return _legend_settings_holder(layer) is not None
+
+
+def _format(settings_: QgsColorRampLegendNodeSettings, value: float) -> str:
+    numeric = settings_.numericFormat()
+    if numeric is not None:
+        return numeric.formatDouble(value, QgsNumericFormatContext())
+    return f"{value:g}"
+
+
+def mark_clipping(layer: QgsRasterLayer, flags: tuple[bool, bool]) -> bool:
+    """Show in the colour bar that the data goes past the colour range. True if changed.
+
+    The end that clips gets "≤ low" or "≥ high" instead of the bare number: those
+    colours stand for everything beyond. A label the user typed is never replaced;
+    only one this function wrote (remembered in
+    :data:`~datacube_viewer.layeruri.CLIP_LABELS_PROPERTY`) or an empty one.
+    """
+    holder = _legend_settings_holder(layer)
+    stretch = current_stretch(layer)
+    if holder is None or stretch is None:
+        return False
+    getter, setter = holder
+    current = getter()
+    fresh = (
+        QgsColorRampLegendNodeSettings(current)
+        if current is not None
+        else QgsColorRampLegendNodeSettings()
+    )
+    try:
+        ours = json.loads(str(layer.customProperty(CLIP_LABELS_PROPERTY, "{}")))
+    except ValueError:
+        ours = {}
+    if not isinstance(ours, dict):
+        ours = {}
+
+    below, above = flags
+    wanted = {
+        "min": f"≤ {_format(fresh, stretch[0])}" if below else "",
+        "max": f"≥ {_format(fresh, stretch[1])}" if above else "",
+    }
+    changed = False
+    for end, get, put in (
+        ("min", fresh.minimumLabel, fresh.setMinimumLabel),
+        ("max", fresh.maximumLabel, fresh.setMaximumLabel),
+    ):
+        label = get()
+        if label and label != ours.get(end, ""):
+            continue  # the user's own label
+        if label != wanted[end]:
+            put(wanted[end])
+            changed = True
+        ours[end] = wanted[end]
+    layer.setCustomProperty(CLIP_LABELS_PROPERTY, json.dumps(ours))
+    if changed:
+        setter(fresh)
+        refresh_legend(layer)
+    return changed
 
 
 def _not_set():

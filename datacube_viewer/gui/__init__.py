@@ -46,6 +46,7 @@ from .load_dialog import DatacubeLoadDialog
 from .options import DatacubeOptionsFactory, DatacubeOptionsPage
 from .preview import PreviewResult, render_thumbnail, to_image
 from .snapshot_dialog import SnapshotDialog
+from .stretch_tasks import StretchService
 from .version_panel import REF_SWITCHES, VersionPanel, is_versioned_layer, switch_ref
 from .worker import StoreWorker
 
@@ -68,6 +69,7 @@ __all__ = [
     "PreviewResult",
     "SnapshotDialog",
     "StoreWorker",
+    "StretchService",
     "VersionPanel",
     "apply_stretch",
     "attribute_sections",

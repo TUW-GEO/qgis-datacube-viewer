@@ -991,3 +991,38 @@ def test_the_instructions_name_a_shell_and_a_command(qgis_app) -> None:
         assert "icechunk" in dialog._install.command
     finally:
         dialog.deleteLater()
+
+
+def test_the_options_page_applies_the_colour_range_and_resampling_settings(plugin, iface) -> None:
+    from datacube_viewer import settings
+
+    plugin.initGui()
+    page = iface.options_factories[0].createWidget(None)
+    assert page._limits.currentData() == "minmax"
+    assert page._accuracy.currentData() == "exact"
+    assert page._bilinear.currentData() == "any"
+    page._limits.setCurrentIndex(page._limits.findData("cumulative_cut"))
+    page._cut_lower.setValue(5.0)
+    page._accuracy.setCurrentIndex(page._accuracy.findData("estimated"))
+    page._budget.setValue(20)
+    page._bilinear.setCurrentIndex(page._bilinear.findData("all"))
+    assert settings.stretch_limits() == "minmax", "nothing is saved before Apply"
+    page.apply()
+    assert settings.stretch_limits() == "cumulative_cut"
+    assert settings.cumulative_cut()[0] == pytest.approx(0.05)
+    assert settings.stretch_accuracy() == "estimated"
+    assert settings.exact_budget_pixels() == 20_000_000
+    assert settings.bilinear_validity() == "all"
+    page.deleteLater()
+
+
+def test_adding_a_layer_fits_its_colour_range_in_the_background(plugin, iface, store_uri) -> None:
+    from datacube_viewer.provider.statistics import LIMIT_NOT_SET, range_info
+
+    plugin.initGui()
+    plugin._stretch._wait_for_tasks = True
+    made = plugin.add_layers([LayerUri(store_uri=store_uri, dataset="conv", bands=("red",))])
+    assert len(made) == 1
+    assert int(made[0].renderer().minMaxOrigin().limits()) == LIMIT_NOT_SET
+    assert range_info(made[0])["exact"]
+    QgsProject.instance().removeMapLayer(made[0])

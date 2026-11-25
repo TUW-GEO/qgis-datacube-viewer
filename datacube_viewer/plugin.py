@@ -176,6 +176,9 @@ class DatacubeViewerPlugin:
         self._options_factory = None
         #: Drop handler, held for the same reason as the options factory.
         self._drop_handler = None
+        #: Background colour range work: the fit after a layer is added, and the
+        #: clipping indicator. See gui.stretch_tasks.
+        self._stretch = None
         #: Load dialogs still to show for dropped stores, and the one showing now.
         #: Counted so the title can say "2 of 5"; reset when the queue runs dry.
         self._dialog_jobs: list[_DialogJob] = []
@@ -221,6 +224,9 @@ class DatacubeViewerPlugin:
         for action in (add, travel):
             self._toolbar.addAction(action)
 
+        from .gui import StretchService
+
+        self._stretch = StretchService(self.iface.mainWindow())
         self._add_cube_dock()
         self._add_options_page()
         self._add_drop_handler()
@@ -264,7 +270,7 @@ class DatacubeViewerPlugin:
         """
         from .gui import DatacubeDock
 
-        self._cube_dock = DatacubeDock(self.iface, self.iface.mainWindow())
+        self._cube_dock = DatacubeDock(self.iface, self.iface.mainWindow(), self._stretch)
         self._cube_dock.historyRequested.connect(self.show_snapshot_dialog)
         self._cube_dock.variableRequested.connect(self.add_variable_next_to)
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self._cube_dock)
@@ -287,6 +293,8 @@ class DatacubeViewerPlugin:
 
         if not self._is_datacube_layer(layer):
             return
+        if self._stretch is not None:
+            self._stretch.watch(layer)
         recorded = layer.customProperty(INDEX_PROPERTY, "")
         if not recorded:
             return
@@ -394,6 +402,11 @@ class DatacubeViewerPlugin:
 
         with contextlib.suppress(TypeError):  # never connected, or already dropped
             QgsProject.instance().layerWasAdded.disconnect(self._on_layer_added)
+
+        if self._stretch is not None:
+            self._stretch.unload()
+            self._stretch.deleteLater()
+            self._stretch = None
 
         self._dialog_jobs.clear()
         self._current_job = None
@@ -658,11 +671,18 @@ class DatacubeViewerPlugin:
             and bool(requested)
             and all(uri.store_uri == job.store for uri in requested)
         )
-        made = self._add_shared(requested, job) if shared else self.add_layers(requested)  # type: ignore[arg-type]
+        full_scan = self._load_dialog is not None and self._load_dialog.full_scan_requested()
+        made = (
+            self._add_shared(requested, job, full_scan)  # type: ignore[arg-type]
+            if shared
+            else self.add_layers(requested, full_scan=full_scan)
+        )
         if made:
             self._reveal(made)
 
-    def _add_shared(self, uris: tuple[LayerUri, ...], job: _DialogJob) -> list[QgsRasterLayer]:
+    def _add_shared(
+        self, uris: tuple[LayerUri, ...], job: _DialogJob, full_scan: bool = False
+    ) -> list[QgsRasterLayer]:
         """Add the dialog's selection from the dialog's store and from each sharing it.
 
         The same URIs with only the store swapped: the stores were checked to have
@@ -673,7 +693,7 @@ class DatacubeViewerPlugin:
         failures: list[str] = []
         for store in (job.store, *job.shared_with):
             requests = tuple(replace(uri, store_uri=store) for uri in uris)
-            layers, failed = self._create_layers(requests)
+            layers, failed = self._create_layers(requests, full_scan)
             made.extend(layers)
             failures.extend(f"{os.path.basename(store)}: {detail}" for detail in failed)
         self._report_shared(made, failures, 1 + len(job.shared_with))
@@ -714,7 +734,7 @@ class DatacubeViewerPlugin:
         """Put one layer on the map. Kept for callers that have a single URI."""
         self.add_layers((uri,))
 
-    def add_layers(self, uris: Sequence[LayerUri]) -> list[QgsRasterLayer]:
+    def add_layers(self, uris: Sequence[LayerUri], full_scan: bool = False) -> list[QgsRasterLayer]:
         """Put one layer on the map per URI, grouped when there is more than one.
 
         The dialog hands over one URI per variable (see ``layeruri.per_variable``),
@@ -727,17 +747,20 @@ class DatacubeViewerPlugin:
         variable is broken, loading the rest and saying which one failed is more
         useful than loading nothing.
 
+        ``full_scan`` reads every pixel of every slice for the colour range, however
+        long that takes, instead of staying inside the exact-range budget.
+
         Returns the layers that made it onto the map, in request order.
         """
         requests = tuple(uris)
         if not requests:
             return []
-        made, failures = self._create_layers(requests)
+        made, failures = self._create_layers(requests, full_scan)
         self._report(made, failures, requests[0])
         return made
 
     def _create_layers(
-        self, requests: tuple[LayerUri, ...]
+        self, requests: tuple[LayerUri, ...], full_scan: bool = False
     ) -> tuple[list[QgsRasterLayer], list[str]]:
         """:meth:`add_layers` without the message: the layers placed, and what failed."""
         from .provider import create_layer
@@ -756,14 +779,14 @@ class DatacubeViewerPlugin:
                 failures.append(f"{uri.bands[0] if uri.bands else uri.summary}: {detail}")
                 self._log(f"Layer creation failed for {uri.summary}: {detail}", Qgis.Critical)
                 continue
-            self._fix_stretch(layer)
+            self._fix_stretch(layer, full_scan)
             made.append(layer)
 
         if made:
             self._place(made, requests[0], grouped=grouped and len(made) > 1)
         return made, failures
 
-    def _fix_stretch(self, layer: QgsRasterLayer) -> None:
+    def _fix_stretch(self, layer: QgsRasterLayer, full_scan: bool = False) -> None:
         """Stretch the layer over the whole cube rather than over one slice.
 
         Left to itself, QGIS computes the contrast enhancement from whichever slice
@@ -778,21 +801,20 @@ class DatacubeViewerPlugin:
         replaces it, and the cube panel's "Rescale colours to each slice" starts off
         and becomes a deliberate choice.
 
-        Best-effort: a store that cannot be sampled still gets its layer, with
-        whatever stretch QGIS worked out by itself.
+        In the background (see gui.stretch_tasks): an exact range reads every pixel
+        it covers. The layer shows QGIS's own first estimate until it is done.
+        Best-effort: a store that cannot be read still gets its layer.
         """
-        from .provider import fit_to_cube
+        if self._stretch is None:
+            from .provider import fit_to_cube
 
-        try:
-            fitted = fit_to_cube(layer)
-        except DatacubeError as exc:
-            self._log(f"Could not sample {layer.name()} for a stretch: {exc.detailed}", Qgis.Info)
+            try:
+                fit_to_cube(layer, full_scan)
+            except Exception as exc:
+                self._log(f"Could not sample {layer.name()} for a stretch: {exc!r}", Qgis.Info)
             return
-        except Exception as exc:
-            self._log(f"Could not sample {layer.name()} for a stretch: {exc!r}", Qgis.Info)
-            return
-        if fitted:
-            self._log(f"Stretched {layer.name()} across its full cube", Qgis.Info)
+        self._stretch.fit(layer, full_scan)
+        self._stretch.watch(layer)
 
     def _place(self, layers: list[QgsRasterLayer], uri: LayerUri, grouped: bool) -> None:
         """Add the layers to the project, in a group if there is more than one."""

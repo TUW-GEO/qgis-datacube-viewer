@@ -488,3 +488,37 @@ def test_bilinear_renormalises_over_valid_corners() -> None:
     out, ok = _bilinear(data, np.array([0]), np.array([0]), half, half, valid)
     np.testing.assert_allclose(out, [[10.0]])
     assert ok.all()  # three of four corners, 75 % of the weight
+
+
+@pytest.mark.parametrize(
+    ("rule", "expected"),
+    [("any", True), ("half", True), ("all", False)],
+)
+def test_bilinear_validity_rules(rule, expected) -> None:
+    """One invalid corner of four, at the centre: 75 % of the weight is data."""
+    data = np.array([[10.0, 10.0], [10.0, 1e6]], dtype=np.float32)
+    valid = np.array([[True, True], [True, False]])
+    half = np.array([0.5], dtype=np.float32)
+    out, ok = _bilinear(data, np.array([0]), np.array([0]), half, half, valid, rule)
+    np.testing.assert_allclose(out, [[10.0]])
+    assert bool(ok[0, 0]) is expected
+
+
+def test_bilinear_any_rule_reaches_a_lone_valid_corner() -> None:
+    data = np.array([[10.0, 0.0], [0.0, 0.0]], dtype=np.float32)
+    valid = np.array([[True, False], [False, False]])
+    quarter = np.array([0.75], dtype=np.float32)
+    _, ok_any = _bilinear(data, np.array([0]), np.array([0]), quarter, quarter, valid, "any")
+    _, ok_half = _bilinear(data, np.array([0]), np.array([0]), quarter, quarter, valid, "half")
+    assert ok_any.all() and not ok_half.any()
+
+
+def test_read_window_returns_native_physical_pixels(handle, store) -> None:
+    from datacube_viewer.core.geometry import Window
+
+    plain = store.dataset("plain")
+    reader = DatasetReader(handle, plain)
+    values, valid = reader.read_window("dn", Window(0, 0, 48, 48))
+    assert values.shape == (48, 48) and values.dtype == np.float32
+    np.testing.assert_allclose(values[0], np.arange(48) * 3 * 0.1 + 5.0, rtol=1e-6)
+    assert valid is None, "every pixel of plain/dn is written"

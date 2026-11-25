@@ -34,6 +34,11 @@ from .store import StoreHandle
 
 Resampling = Literal["nearest", "average", "bilinear"]
 LevelStrategy = Literal["auto", "manual", "base", "coarsest"]
+#: When a bilinear output pixel next to nodata counts as data: when any of its
+#: corners with weight is valid (GDAL's rule), when at least half its weight is, or
+#: only when all of them are.
+BilinearValidity = Literal["any", "half", "all"]
+BILINEAR_VALIDITY_RULES: tuple[BilinearValidity, ...] = ("any", "half", "all")
 
 #: Resampling methods offered to the user, in menu order.
 RESAMPLING_METHODS: tuple[Resampling, ...] = ("nearest", "average", "bilinear")
@@ -51,6 +56,8 @@ class ReaderConfig:
     cache_bytes: int = 256 * 1024 * 1024
     #: Extra source pixels read around the window, so bilinear has neighbours.
     halo: int = 1
+    #: See :data:`BilinearValidity`.
+    bilinear_validity: BilinearValidity = "any"
 
 
 @dataclass(frozen=True)
@@ -286,8 +293,9 @@ class DatasetReader:
         variable: str,
         window: Window,
         indices: Mapping[str, int],
+        use_cache: bool = True,
     ) -> np.ndarray:
-        """Decode one source window, via the cache."""
+        """Decode one source window, via the cache unless ``use_cache`` is off."""
         info = self.variable_info(variable, level)
         key = (
             self.handle.snapshot_id or self.handle.uri,
@@ -296,7 +304,7 @@ class DatasetReader:
             tuple(sorted(indices.items())),
             (window.col_off, window.row_off, window.width, window.height),
         )
-        cached = self._cache.get(key)
+        cached = self._cache.get(key) if use_cache else None
         if cached is not None:
             return cached
 
@@ -313,8 +321,34 @@ class DatasetReader:
         if block.ndim != 2:
             block = np.reshape(block, (window.height, window.width))
         block = np.ascontiguousarray(block)
-        self._cache.put(key, block)
+        if use_cache:
+            self._cache.put(key, block)
         return block
+
+    def read_window(
+        self,
+        variable: str,
+        window: Window,
+        indices: Mapping[str, int] | None = None,
+        level: LevelInfo | None = None,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        """Native pixels of one window, in physical units, and which are data.
+
+        No resampling and no georeferencing: for statistics, which want every pixel
+        exactly once. ``window`` must lie inside ``level`` (the base by default).
+        Returns the values (scaled to float32 where the variable declares a scale)
+        and a validity mask, or ``None`` for the mask when every pixel is data.
+
+        Bypasses the decoded-window cache: a scan over the whole cube would
+        otherwise evict every tile the map is drawing from.
+        """
+        level = level or self.dataset.base
+        info = self.variable_info(variable, level)
+        source = self._read_source(level, variable, window, indices or {}, use_cache=False)
+        valid = _source_validity(source, info, self.nodata)
+        if info.needs_scaling:
+            return _apply_scaling(source, info), valid
+        return source, valid
 
     def read(self, request: ReadRequest) -> ReadResult:
         """Read ``request`` and return pixels already on the requested grid."""
@@ -359,7 +393,11 @@ class DatasetReader:
         for variable in request.variables:
             info = self.variable_info(variable, level)
             source = self._read_source(level, variable, window, request.indices)
-            plane, valid = sampler.apply(source, _source_validity(source, info, self.nodata))
+            plane, valid = sampler.apply(
+                source,
+                _source_validity(source, info, self.nodata),
+                self.config.bilinear_validity,
+            )
             if valid is not None:
                 mask &= valid
             if info.needs_scaling:
@@ -610,7 +648,10 @@ class _Sampler:
 
     # -- application -----------------------------------------------------
     def apply(
-        self, source: np.ndarray, valid: np.ndarray | None = None
+        self,
+        source: np.ndarray,
+        valid: np.ndarray | None = None,
+        bilinear_validity: BilinearValidity = "any",
     ) -> tuple[np.ndarray, np.ndarray | None]:
         """Resample ``source`` onto the output grid.
 
@@ -639,7 +680,9 @@ class _Sampler:
             block, valid = _block_mean(block, pre_y, pre_x, valid)
 
         if self.method == "bilinear" and self.row_frac is not None and self.col_frac is not None:
-            return _bilinear(block, self.rows, self.cols, self.row_frac, self.col_frac, valid)
+            return _bilinear(
+                block, self.rows, self.cols, self.row_frac, self.col_frac, valid, bilinear_validity
+            )
         index = np.ix_(self.rows, self.cols)
         return block[index], None if valid is None else valid[index]
 
@@ -675,12 +718,13 @@ def _bilinear(
     row_frac: np.ndarray,
     col_frac: np.ndarray,
     valid: np.ndarray | None = None,
+    rule: BilinearValidity = "any",
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Bilinear interpolation, in float32.
 
-    With ``valid``, the weights are renormalised over the valid corners, and an
-    output pixel counts as data when at least half its weight is (roughly: when
-    nearest-neighbour would have picked a valid pixel).
+    With ``valid``, the weights are renormalised over the valid corners, and
+    ``rule`` decides which output pixels count as data (see :data:`BilinearValidity`).
+    A corner with no weight takes no part in either.
     """
     r0 = rows
     r1 = np.minimum(rows + 1, data.shape[0] - 1)
@@ -707,4 +751,9 @@ def _bilinear(
         total += np.where(ok, work[np.ix_(r, c)], np.float32(0)) * w
         weight += w
     out = np.divide(total, weight, out=np.zeros_like(total), where=weight > 0)
-    return out, weight >= 0.5
+    if rule == "all":
+        # The weights sum to 1, so "every weighted corner is valid" is weight ~ 1.
+        return out, weight >= np.float32(1.0 - 1e-5)
+    if rule == "half":
+        return out, weight >= 0.5
+    return out, weight > 0

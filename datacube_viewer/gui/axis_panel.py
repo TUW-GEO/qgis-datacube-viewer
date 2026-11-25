@@ -50,7 +50,7 @@ from qgis.PyQt.QtWidgets import (
     QFrame,
     QGridLayout,
     QLabel,
-    QPushButton,
+    QMenu,
     QSizePolicy,
     QSlider,
     QToolButton,
@@ -72,6 +72,8 @@ from ..provider.statistics import (
     current_stretch,
     fit_to_cube,
     has_auto_limits,
+    layer_method,
+    range_info,
     slice_ranges,
     stretch_is_effective,
 )
@@ -294,10 +296,18 @@ class AxisScrubber(QWidget):
     #: A variable was picked in the search box: the dock finds or adds its layer.
     variablePicked = pyqtSignal(str)
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, stretch=None):
         super().__init__(parent)
         self._layer: QgsRasterLayer | None = None
         self._provider = None
+        #: The plugin's ``gui.stretch_tasks.StretchService``, which fits ranges in
+        #: the background and checks for clipping. Without one (a bare widget, as
+        #: in tests) the cube range is computed on the spot.
+        self._stretch = stretch
+        if stretch is not None:
+            stretch.rangeChanged.connect(self._on_stretch_news)
+            stretch.fitStarted.connect(self._on_stretch_news)
+            stretch.clippingChanged.connect(self._on_stretch_news)
         self._rows: list[AxisSliderRow] = []
         #: Set while code (not the user) is moving a slider, so the change does not
         #: come straight back as a read.
@@ -364,19 +374,31 @@ class AxisScrubber(QWidget):
         # The way back. Unticking the box above freezes the range where it is,
         # which is useful but is not the same as returning to the range the layer
         # loaded with -- by then the per-slice ranges have overwritten it.
-        self._fit_cube = QPushButton("Rescale colours to whole cube")
+        self._fit_cube = QToolButton()
+        self._fit_cube.setText("Rescale colours to whole cube")
+        self._fit_cube.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._fit_cube.setPopupMode(QToolButton.MenuButtonPopup)
+        self._fit_cube.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._fit_cube.setToolTip(
             "\n".join(
                 (
-                    "Recompute the range over every slice and fix it there, which is",
+                    "Recompute the range over the whole cube and fix it there, which is",
                     "what the layer loaded with. Also turns off per-slice rescaling,",
                     "since that would overwrite it on the next move.",
+                    "",
+                    "Exact while the cube fits the budget in Settings → Options →",
+                    "Datacube Viewer, read from evenly spread slices past it. The arrow",
+                    "offers a full scan of every slice instead.",
                     "",
                     "Recomputed rather than remembered, so it follows a snapshot switch.",
                 )
             )
         )
-        self._fit_cube.clicked.connect(self._on_fit_cube)
+        self._fit_cube.clicked.connect(lambda _=False: self._on_fit_cube())
+        menu = QMenu(self._fit_cube)
+        full = menu.addAction("Full scan of every slice (exact, may take long)")
+        full.triggered.connect(lambda _=False: self._on_fit_cube(full_scan=True))
+        self._fit_cube.setMenu(menu)
         self._outer.addWidget(self._fit_cube)
 
         self._status = QLabel()
@@ -520,7 +542,7 @@ class AxisScrubber(QWidget):
             self._status.setText(complaint)
         self._layer.triggerRepaint()
 
-    def _on_fit_cube(self) -> None:
+    def _on_fit_cube(self, full_scan: bool = False) -> None:
         """Go back to a range computed over the whole cube."""
         if self._layer is None:
             return
@@ -533,10 +555,17 @@ class AxisScrubber(QWidget):
             self._loading = False
         self._layer.setCustomProperty(RESTRETCH_PROPERTY, "0")
 
+        if self._stretch is not None:
+            if self._stretch.fit(self._layer, full_scan):
+                self._describe()
+            else:
+                self._status.setText("Could not read enough of the cube to rescale.")
+            return
+
         complaint = ""
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            if not fit_to_cube(self._layer):
+            if not fit_to_cube(self._layer, full_scan):
                 complaint = "Could not read enough of the cube to rescale."
         except DatacubeError as exc:
             complaint = f"Could not rescale colours: {exc.detailed}"
@@ -558,11 +587,9 @@ class AxisScrubber(QWidget):
         context = getattr(self._provider, "context", None)
         if context is None or self._layer is None:
             return ""
-        renderer = self._layer.renderer()
-        origin = renderer.minMaxOrigin() if renderer is not None else None
         view = context.view()
         try:
-            ranges = slice_ranges(view.reader, view.bands, view.indices, origin)
+            ranges = slice_ranges(view.reader, view.bands, view.indices, layer_method(self._layer))
         except DatacubeError as exc:
             # A failed stretch must not lose the slice change that triggered it.
             return f"Could not rescale colours: {exc.detailed}"
@@ -607,8 +634,11 @@ class AxisScrubber(QWidget):
         if stretch is None:
             colours = "colours: unknown range"
         else:
-            how = "rescaled per slice" if self._restretch.isChecked() else "fixed"
+            how = "rescaled per slice" if self._restretch.isChecked() else self._fixed_how()
             colours = f"colours {stretch[0]:.3g} … {stretch[1]:.3g} ({how})"
+            colours += self._clip_note()
+        if self._stretch is not None and self._stretch.is_fitting(self._layer):
+            colours += " · computing the range in the background…"
         self._heading.setText(
             f"<b>{self._layer.name()}</b><br>{view.dataset.path or '/'} · {view.ref.label}"
             + (f" @ {view.snapshot_id[:8]}" if view.snapshot_id else "")
@@ -632,6 +662,41 @@ class AxisScrubber(QWidget):
             )
         elif self._rows:
             self._status.setText("")
+
+    def _fixed_how(self) -> str:
+        """How the fixed range was made: "fixed, min/max, exact, whole cube"."""
+        info = range_info(self._layer) or {}
+        method = layer_method(self._layer).describe()
+        read, total = info.get("slices_read"), info.get("slices_total")
+        if not info:
+            return f"fixed, {method}"
+        if info.get("exact"):
+            return f"fixed, {method}, whole cube" if (total or 1) > 1 else f"fixed, {method}"
+        if read and total and read < total:
+            return f"fixed, {method}, sampled from {read} of {total} slices"
+        return f"fixed, {method}, sampled pixels"
+
+    def _clip_note(self) -> str:
+        flags = self._stretch.clip_flags(self._layer) if self._stretch is not None else None
+        if not flags or not any(flags):
+            return ""
+        where = {
+            (True, False): "below",
+            (False, True): "above",
+            (True, True): "below and above",
+        }[flags]
+        return f" · this slice has values {where} it (≤ / ≥ in the legend)"
+
+    def _on_stretch_news(self, layer_id: str) -> None:
+        """The background fit or clipping check reported on a layer."""
+        if self._layer is not None and self._layer.id() == layer_id:
+            if self._stretch is not None and not self._stretch.is_fitting(self._layer):
+                self._loading = True
+                try:
+                    self._restretch.setChecked(should_restretch(self._layer))
+                finally:
+                    self._loading = False
+            self._describe()
 
     # ------------------------------------------------------------------- moving
     def _on_slider_moved(self, _value: int) -> None:
@@ -731,7 +796,7 @@ class DatacubeDock(QgsDockWidget):
     #: layer to add and the one it was searched from. The plugin adds it.
     variableRequested = pyqtSignal(object, object)
 
-    def __init__(self, iface, parent: QWidget | None = None):
+    def __init__(self, iface, parent: QWidget | None = None, stretch=None):
         super().__init__(PANEL_TITLE, parent)
         self.setObjectName(DOCK_OBJECT_NAME)
         self._iface = iface
@@ -739,7 +804,7 @@ class DatacubeDock(QgsDockWidget):
         body = QWidget(self)
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 0, 0)
-        self._scrubber = AxisScrubber(body)
+        self._scrubber = AxisScrubber(body, stretch)
         self._scrubber.variablePicked.connect(self._on_variable_picked)
         self._versions = VersionPanel(body)
         self._versions.historyRequested.connect(self.historyRequested)

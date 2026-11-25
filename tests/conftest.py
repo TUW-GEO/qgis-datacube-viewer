@@ -97,6 +97,7 @@ def isolate_options():
         yield
         return
 
+    from datacube_viewer import settings as plugin_settings
     from datacube_viewer.gui.axis_panel import AUTO_OPEN_KEY, LIVE_REDRAW_KEY
     from datacube_viewer.gui.drop import (
         DROP_KINDS,
@@ -110,6 +111,13 @@ def isolate_options():
         AUTO_OPEN_KEY,
         LIVE_REDRAW_KEY,
         SHARE_MATCHING_KEY,
+        plugin_settings.BILINEAR_VALIDITY_KEY,
+        plugin_settings.STRETCH_LIMITS_KEY,
+        plugin_settings.STRETCH_CUT_LOWER_KEY,
+        plugin_settings.STRETCH_CUT_UPPER_KEY,
+        plugin_settings.STRETCH_STD_DEV_FACTOR_KEY,
+        plugin_settings.STRETCH_ACCURACY_KEY,
+        plugin_settings.EXACT_BUDGET_KEY,
         *(drop_action_key(kind) for kind in DROP_KINDS),
         *(batch_action_key(kind) for kind in DROP_KINDS),
     )

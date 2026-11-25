@@ -314,6 +314,20 @@ class LayerContext:
             return self._reader.cache_stats
 
     # -- mutation ---------------------------------------------------------
+    def set_reader_config(self, config: ReaderConfig) -> bool:
+        """Read with ``config`` from now on. True if it changed anything.
+
+        A new reader on the same store handle, so nothing is reopened; the decoded
+        windows it caches are raw source pixels, which a resampling rule does not
+        change, but they go with the old reader all the same.
+        """
+        with self._lock:
+            if config == self._config:
+                return False
+            self._config = config
+            self._reader = DatasetReader(self._handle, self._dataset, config, self._uri.nodata)
+            return True
+
     def set_ref(self, ref: RefSpec) -> bool:
         """Time travel. Returns True if the underlying snapshot actually changed.
 

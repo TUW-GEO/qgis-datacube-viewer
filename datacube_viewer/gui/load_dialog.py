@@ -413,6 +413,23 @@ class DatacubeLoadDialog(QDialog):
         self._resampling_combo.currentIndexChanged.connect(self._on_render_changed)
         self._render_form.addRow("Resampling", self._resampling_combo)
 
+        self._full_scan_check = QCheckBox("Full scan of every slice")
+        self._full_scan_check.setToolTip(
+            "\n".join(
+                (
+                    "Off: the colour range is exact while the cube fits the budget set in",
+                    "Settings → Options → Datacube Viewer, and read from evenly spread",
+                    "slices past it. The colour bar shows ≤ / ≥ at an end where the slice",
+                    "on screen goes past the range.",
+                    "",
+                    "On: every pixel of every slice, however long it takes. Runs in the",
+                    "background, with progress in the QGIS task bar, where it can also",
+                    "be cancelled.",
+                )
+            )
+        )
+        self._render_form.addRow("Colour range", self._full_scan_check)
+
         level_row = QHBoxLayout()
         self._strategy_combo = QComboBox()
         self._strategy_combo.addItems(list(LEVEL_STRATEGIES))
@@ -1090,6 +1107,10 @@ class DatacubeLoadDialog(QDialog):
         self._preview_caption.setText(caption)
 
     # ---------------------------------------------------------------- done
+    def full_scan_requested(self) -> bool:
+        """Whether the colour range should come from every pixel of every slice."""
+        return self._full_scan_check.isChecked()
+
     def _on_add(self) -> bool:
         """Apply: request the layers and keep the dialog open. Whether it loaded."""
         if self._store is None:
