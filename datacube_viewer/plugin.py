@@ -27,9 +27,9 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from qgis.core import Qgis, QgsMessageLog, QgsProject, QgsRasterLayer, QgsSettings
-from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtCore import QEventLoop, Qt, QTimer
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QPushButton
+from qgis.PyQt.QtWidgets import QAction, QApplication, QPushButton
 
 from . import PLUGIN_NAME
 from .core import REMOTE_PACKAGES, SUPPRESS_KEY, DatacubeError
@@ -157,6 +157,19 @@ class _DialogJob:
 
     store: str
     shared_with: tuple[str, ...] = ()
+
+
+@contextlib.contextmanager
+def _busy_cursor():
+    """The wait cursor while the main thread is busy, restored however the work ends."""
+    QApplication.setOverrideCursor(Qt.WaitCursor)
+    # Show it now: the work ahead keeps the event loop from getting to it. User
+    # input stays queued, so a second click on Add cannot run in between.
+    QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
 
 
 class DatacubeViewerPlugin:
@@ -768,22 +781,25 @@ class DatacubeViewerPlugin:
         grouped = len(requests) > 1
         made: list[QgsRasterLayer] = []
         failures: list[str] = []
-        for uri in requests:
-            # Inside a group the dataset is already in the group's name, so the
-            # layer is just the variable. Ungrouped it needs the full context, which
-            # is what create_layer's own default gives.
-            name = uri.bands[0] if (grouped and uri.bands) else None
-            layer = create_layer(uri, name)
-            if not layer.isValid():
-                detail = layer.customProperty(ERROR_PROPERTY, "") or "unknown error"
-                failures.append(f"{uri.bands[0] if uri.bands else uri.summary}: {detail}")
-                self._log(f"Layer creation failed for {uri.summary}: {detail}", Qgis.Critical)
-                continue
-            self._fix_stretch(layer, full_scan)
-            made.append(layer)
+        # Opening a store is main-thread work (QGIS wants its layers made there), and
+        # a remote one or many variables take a while.
+        with _busy_cursor():
+            for uri in requests:
+                # Inside a group the dataset is already in the group's name, so the
+                # layer is just the variable. Ungrouped it needs the full context,
+                # which is what create_layer's own default gives.
+                name = uri.bands[0] if (grouped and uri.bands) else None
+                layer = create_layer(uri, name)
+                if not layer.isValid():
+                    detail = layer.customProperty(ERROR_PROPERTY, "") or "unknown error"
+                    failures.append(f"{uri.bands[0] if uri.bands else uri.summary}: {detail}")
+                    self._log(f"Layer creation failed for {uri.summary}: {detail}", Qgis.Critical)
+                    continue
+                self._fix_stretch(layer, full_scan)
+                made.append(layer)
 
-        if made:
-            self._place(made, requests[0], grouped=grouped and len(made) > 1)
+            if made:
+                self._place(made, requests[0], grouped=grouped and len(made) > 1)
         return made, failures
 
     def _fix_stretch(self, layer: QgsRasterLayer, full_scan: bool = False) -> None:

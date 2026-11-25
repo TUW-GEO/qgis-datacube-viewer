@@ -1026,3 +1026,45 @@ def test_adding_a_layer_fits_its_colour_range_in_the_background(plugin, iface, s
     assert int(made[0].renderer().minMaxOrigin().limits()) == LIMIT_NOT_SET
     assert range_info(made[0])["exact"]
     QgsProject.instance().removeMapLayer(made[0])
+
+
+def test_adding_layers_shows_the_wait_cursor_until_they_are_placed(
+    plugin, store_uri, monkeypatch
+) -> None:
+    from qgis.PyQt.QtCore import Qt
+    from qgis.PyQt.QtWidgets import QApplication
+
+    from datacube_viewer import provider
+
+    real = provider.create_layer
+    seen = []
+
+    def spy(*args, **kwargs):
+        cursor = QApplication.overrideCursor()
+        seen.append(None if cursor is None else cursor.shape())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(provider, "create_layer", spy)
+    made = plugin.add_layers(
+        [LayerUri(store_uri=store_uri, dataset="conv", bands=(band,)) for band in ("red", "nir")]
+    )
+    try:
+        assert seen == [Qt.WaitCursor, Qt.WaitCursor]
+        assert QApplication.overrideCursor() is None
+    finally:
+        for layer in made:
+            QgsProject.instance().removeMapLayer(layer)
+
+
+def test_the_wait_cursor_goes_when_adding_a_layer_fails(plugin, store_uri, monkeypatch) -> None:
+    from qgis.PyQt.QtWidgets import QApplication
+
+    from datacube_viewer import provider
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("store vanished")
+
+    monkeypatch.setattr(provider, "create_layer", broken)
+    with pytest.raises(RuntimeError):
+        plugin.add_layers([LayerUri(store_uri=store_uri, dataset="conv", bands=("red",))])
+    assert QApplication.overrideCursor() is None
