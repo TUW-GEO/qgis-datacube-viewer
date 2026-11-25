@@ -56,9 +56,11 @@ make shuffled.zarr --dim-order shuffled --sensors
 make nested.zarr --nest 3 --sensors
 
 # --- Icechunk (same content as the Zarr stores above) ------------------------
+# cube and nested get a history for time travel: their tag v1 matches the Zarr
+# store, and the later snapshots brighten one more square each.
 make dummy.icechunk
-make cube.icechunk --sensors
-make nested.icechunk --nest 3 --sensors
+make cube.icechunk --sensors --snapshots 4
+make nested.icechunk --nest 3 --sensors --snapshots 4
 
 # --- NetCDF (same content as the Zarr stores above) --------------------------
 make dummy.nc

@@ -75,11 +75,15 @@ Usage::
     uv run --script scripts/make_dummy_data.py -o shared.nc --levels 1 --shared-coords
     uv run --script scripts/make_dummy_data.py -o dummy.icechunk      # Icechunk, from the suffix
     uv run --script scripts/make_dummy_data.py --format icechunk --nest 3 --sensors
+    uv run --script scripts/make_dummy_data.py --sensors --snapshots 4 -o cube.icechunk
 
 ``--format`` chooses ``zarr``, ``icechunk`` or ``netcdf``; left out, a ``.nc``/``.nc4``/
 ``.cdf`` output means NetCDF, ``.icechunk`` means Icechunk and anything else Zarr. An
 Icechunk output is a local repository whose ``main`` branch holds a single commit with
-the same Zarr v3 content as the plain store. All formats get the same terrain,
+the same Zarr v3 content as the plain store. ``--snapshots N`` gives it a history to
+travel through: that first commit is tagged ``v1``, and each of the N - 1 commits after
+it brightens one more square of every float variable, further along the diagonal from
+the north-west corner, at every level and time step. All formats get the same terrain,
 variables, levels, nesting and axis orders, so they can be compared pixel for pixel.
 NetCDF attributes are flat: structured metadata (``multiscales``, ``zarr_conventions``)
 is stored as JSON text, ``_CRS`` is omitted (``spatial_ref`` carries the CRS) and every
@@ -727,23 +731,62 @@ class ZarrBackend(Backend):
 
 
 class IcechunkBackend(ZarrBackend):
-    """A Zarr v3 hierarchy inside a local Icechunk repository, committed to ``main``."""
+    """A Zarr v3 hierarchy inside a local Icechunk repository, committed to ``main``.
 
-    def __init__(self, chunk: int, dim_order: DimOrder | None = None):
+    With ``snapshots`` > 1 the dataset commit is tagged ``v1`` and followed by edits,
+    one commit each (see :func:`brighten_square`).
+    """
+
+    def __init__(self, chunk: int, dim_order: DimOrder | None = None, snapshots: int = 1):
         super().__init__(chunk, dim_order, zarr_format=3)
+        self.repo = None
         self.session = None
+        self.snapshots = snapshots
 
     def open(self, path):
         import icechunk
 
         self.path = path
-        repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(path)))
-        self.session = repo.writable_session("main")
+        self.repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(path)))
+        self.session = self.repo.writable_session("main")
         return zarr.open_group(self.session.store, mode="w", zarr_format=3)
 
     def close(self):
         # Icechunk keeps its own manifests; there is no consolidated metadata to write.
-        self.session.commit("Create dummy dataset with make_dummy_data.py")
+        first = self.session.commit("Create dummy dataset with make_dummy_data.py")
+        if self.snapshots == 1:
+            return
+        self.repo.create_tag("v1", snapshot_id=first)
+        edits = self.snapshots - 1
+        for k in range(1, edits + 1):
+            session = self.repo.writable_session("main")
+            root = zarr.open_group(session.store, mode="r+")
+            for _, node in root.members(max_depth=None):
+                if isinstance(node, zarr.Array):
+                    brighten_square(node, k, edits)
+            session.commit(f"Brighten square {k} of {edits} in every float variable")
+
+
+def brighten_square(arr, k: int, count: int) -> None:
+    """Raise square ``k`` of ``count`` in ``arr`` by 30 % of its value range.
+
+    The squares run down the diagonal from the north-west corner and are placed by
+    fraction of the extent, so every pyramid level shows the same square. Arrays
+    without both ``y`` and ``x``, and non-float ones (``land_cover`` holds classes),
+    are left alone. Missing values stay missing.
+    """
+    names = tuple(arr.metadata.dimension_names or ())
+    if "y" not in names or "x" not in names or arr.dtype.kind != "f":
+        return
+    start = 0.1 + 0.8 * (k - 1) / count
+    stop = start + 0.8 / count
+    where = [slice(None)] * arr.ndim
+    for dim in ("y", "x"):
+        n = arr.shape[names.index(dim)]
+        where[names.index(dim)] = slice(int(start * n), int(stop * n))
+    data = arr[...]
+    boost = 0.3 * (np.nanmax(data) - np.nanmin(data))
+    arr[tuple(where)] = data[tuple(where)] + boost
 
 
 def netcdf_attr(value):
@@ -1082,6 +1125,16 @@ def main() -> None:
             "own x/y (the sizes differ) and shares time, sensor and the CRS"
         ),
     )
+    parser.add_argument(
+        "--snapshots",
+        type=int,
+        default=1,
+        help=(
+            "icechunk only: commits on main. The first holds the dataset (tagged v1 when "
+            "there are more); each further one brightens another square of every float "
+            "variable, so there is a history to travel through"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cache-dir", type=Path, default=Path(__file__).parent / ".cache")
     parser.add_argument("--overwrite", action="store_true", help="replace an existing output")
@@ -1098,6 +1151,10 @@ def main() -> None:
         parser.error("icechunk stores are always Zarr v3")
     if args.shared_coords and fmt != "netcdf":
         parser.error("--shared-coords only applies to the netcdf format")
+    if args.snapshots != 1 and fmt != "icechunk":
+        parser.error("--snapshots only applies to the icechunk format")
+    if args.snapshots < 1:
+        parser.error("--snapshots must be at least 1")
     zarr_format = args.zarr_format or 3
 
     if args.size % 2 ** (args.levels - 1):
@@ -1137,7 +1194,7 @@ def main() -> None:
     if fmt == "netcdf":
         writer: Backend = NetcdfBackend(args.chunk, dim_order)
     elif fmt == "icechunk":
-        writer = IcechunkBackend(args.chunk, dim_order)
+        writer = IcechunkBackend(args.chunk, dim_order, args.snapshots)
     else:
         writer = ZarrBackend(args.chunk, dim_order, zarr_format)
     root = writer.open(args.output)
@@ -1235,6 +1292,8 @@ def main() -> None:
     )
     if args.nest:
         print(f"  nested under: /{'/'.join(args.nest)}")
+    if fmt == "icechunk" and args.snapshots > 1:
+        print(f"  snapshots: {args.snapshots} on main, the first tagged v1")
     print(f"  bbox: {grid.bbox}")
     print(f"  elevation: {np.nanmin(elevation):.0f} .. {np.nanmax(elevation):.0f} m")
     print(f"  dim order: {dim_order.label}")
