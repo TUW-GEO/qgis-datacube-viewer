@@ -314,6 +314,14 @@ def test_a_failed_read_is_reported_not_raised(dock, layers) -> None:
     assert "outside" in dock.messages[-1][0] and dock.messages[-1][1]
 
 
+def test_a_layer_opened_by_older_plugin_code_is_explained(dock, layers, monkeypatch) -> None:
+    """After a plugin update or reload, an open layer keeps its old reader."""
+    monkeypatch.delattr(DatasetReader, "read_along")
+    assert not dock.pick(layers["cube"], "time", _point(2, 1))
+    assert dock.series_count() == 0
+    assert "earlier version" in dock.messages[-1][0] and dock.messages[-1][1]
+
+
 def test_values_export_as_long_rows(dock, layers) -> None:
     dock.pick(layers["cube"], "time", _point(2, 1))
     rows = dock.rows()

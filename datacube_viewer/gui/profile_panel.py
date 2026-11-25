@@ -299,6 +299,14 @@ class ProfileDock(QgsDockWidget):
         """
         if not is_datacube_layer(layer):
             return self._say("Pick a Datacube Viewer layer.", True)
+        if not hasattr(layer.dataProvider().context.view().reader, "read_along"):
+            # Opened before the plugin was updated or reloaded: the layer keeps the
+            # reader it was built with, which predates profiles (see is_datacube_layer).
+            return self._say(
+                f"{layer.name()} was opened by an earlier version of the plugin. "
+                "Remove the layer and add it again to plot its pixels.",
+                True,
+            )
         if crs is None:
             crs = self._canvas.mapSettings().destinationCrs() if self._canvas else layer.crs()
         bands = tuple(layer.dataProvider().context.view().bands)
