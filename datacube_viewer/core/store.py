@@ -465,6 +465,11 @@ def list_refs(uri: str, *, max_snapshots: int = 200) -> RepositoryRefs:
 
     ``max_snapshots`` bounds the ancestry walk: a long-lived repository can have
     thousands of commits and we only need enough to populate a combo box.
+
+    The repository's first snapshot is left out. Icechunk writes it when the
+    repository is created ("Repository initialized"), before anything else can be
+    written, so it holds no Zarr hierarchy at all and switching to it can only fail.
+    It is the one snapshot without a parent.
     """
     repo = open_repository(uri)
     try:
@@ -484,7 +489,9 @@ def list_refs(uri: str, *, max_snapshots: int = 200) -> RepositoryRefs:
             for i, raw in enumerate(repo.ancestry(branch=default)):
                 if i >= max_snapshots:
                     break
-                snapshots.append(_snapshot_info(raw))
+                info = _snapshot_info(raw)
+                if info.parent_id is not None:
+                    snapshots.append(info)
         except Exception:
             snapshots = []
 

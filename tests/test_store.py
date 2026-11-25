@@ -142,13 +142,23 @@ def test_list_refs(store_uri: str, fixture_info: FixtureInfo) -> None:
     assert refs.branches == ("main",)
     assert refs.tags == ("v1",)
     assert refs.default_branch == "main"
-    assert len(refs.snapshots) == len(fixture_info.snapshots)
+    assert len(refs.snapshots) == len(fixture_info.listed_snapshots)
 
 
 def test_ancestry_is_newest_first(store_uri: str, fixture_info: FixtureInfo) -> None:
     refs = list_refs(store_uri)
     assert refs.snapshots[0].id == fixture_info.latest_snapshot
-    assert refs.snapshots[-1].id == fixture_info.snapshots[0]
+    assert refs.snapshots[-1].id == fixture_info.listed_snapshots[0]
+
+
+def test_the_empty_creation_snapshot_is_not_offered(
+    store_uri: str, fixture_info: FixtureInfo
+) -> None:
+    """Icechunk's "Repository initialized" snapshot has no Zarr group to open."""
+    ids = [s.id for s in list_refs(store_uri).snapshots]
+    assert fixture_info.snapshots[0] not in ids
+    with pytest.raises(StoreOpenError, match="readable Zarr hierarchy"):
+        open_store(store_uri, RefSpec.snapshot(fixture_info.snapshots[0]))
 
 
 def test_snapshot_labels_are_human_readable(store_uri: str) -> None:

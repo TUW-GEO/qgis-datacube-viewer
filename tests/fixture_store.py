@@ -75,6 +75,11 @@ class FixtureInfo:
     extra: dict = field(default_factory=dict)
 
     @property
+    def listed_snapshots(self) -> tuple[str, ...]:
+        """The snapshots the plugin offers: all but Icechunk's empty first one."""
+        return self.snapshots[1:]
+
+    @property
     def initialised_snapshot(self) -> str:
         return self.snapshots[1]
 

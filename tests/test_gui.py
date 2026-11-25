@@ -364,7 +364,7 @@ def test_empty_location_is_refused_without_touching_the_store(dialog) -> None:
 
 def test_switching_to_snapshots_lists_the_history(connected, fixture_info: FixtureInfo) -> None:
     connected._ref_kind.setCurrentText("Snapshot")
-    assert pump(lambda: connected._ref_value.count() == len(fixture_info.snapshots))
+    assert pump(lambda: connected._ref_value.count() == len(fixture_info.listed_snapshots))
     assert connected._ref_value.itemData(0) == fixture_info.latest_snapshot
 
 

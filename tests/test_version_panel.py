@@ -16,7 +16,7 @@ from qgis.core import QgsApplication
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 from qgis.PyQt.QtWidgets import QWidget
 
-from datacube_viewer.core import RefSpec
+from datacube_viewer.core import RefSpec, SnapshotInfo
 from datacube_viewer.gui.axis_panel import DatacubeDock
 from datacube_viewer.gui.version_panel import (
     REF_SWITCHES,
@@ -79,7 +79,7 @@ def test_the_slider_runs_oldest_to_newest_and_starts_on_the_layer(
     panel, layer, fixture_info: FixtureInfo
 ) -> None:
     ids = [s.id for s in panel._timeline]
-    assert ids == list(fixture_info.snapshots), "oldest on the left, like every timeline"
+    assert ids == list(fixture_info.listed_snapshots), "oldest on the left, like every timeline"
     assert panel._slider.value() == len(ids) - 1
     assert layer.dataProvider().snapshotId() == fixture_info.latest_snapshot
     assert "Following branch main" in panel._status.text()
@@ -117,7 +117,12 @@ def test_following_a_tag(panel, layer, fixture_info) -> None:
 
 
 def test_a_failed_switch_says_why_and_snaps_back(panel, layer, fixture_info) -> None:
-    """The first snapshot is the empty repository: there is no conv to show."""
+    """A snapshot with nothing to open, here Icechunk's empty creation snapshot.
+
+    The panel no longer lists that one, so it is put back by hand: the case it stands
+    for, a listed snapshot that has become unreadable, cannot be built as easily.
+    """
+    panel._timeline[0] = SnapshotInfo(id=fixture_info.snapshots[0])
     panel._slider.setValue(0)
     panel._apply_now()
 
