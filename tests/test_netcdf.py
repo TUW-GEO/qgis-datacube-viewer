@@ -296,3 +296,66 @@ def test_coordinate_is_not_inherited_across_a_redeclared_dimension(
     names = {name for name, _ in open_store(str(path)).root["child"].arrays()}
     assert "x" not in names
     assert "scalar" in names  # scalars (grid mappings) carry no axis, so they still inherit
+
+
+# ------------------------------------------------------------------ file lock
+def test_the_file_lock_is_reentrant_in_the_foreground_and_the_background() -> None:
+    from datacube_viewer.core.netcdf_nodes import _PriorityLock
+    from datacube_viewer.core.nodes import background_reads
+
+    lock = _PriorityLock()
+    with lock, lock:
+        pass
+    with background_reads(), lock, lock:
+        pass
+
+
+def test_a_background_read_waits_for_a_foreground_one_that_came_later() -> None:
+    """Opening a layer must not queue behind a colour range scan of the same file."""
+    import threading
+    import time
+
+    from datacube_viewer.core.netcdf_nodes import _PriorityLock
+    from datacube_viewer.core.nodes import background_reads
+
+    lock = _PriorityLock()
+    order: list[str] = []
+
+    def take(name: str, background: bool) -> None:
+        if background:
+            with background_reads(), lock:
+                order.append(name)
+        else:
+            with lock:
+                order.append(name)
+
+    lock.__enter__()
+    scan = threading.Thread(target=take, args=("scan", True))
+    scan.start()
+    time.sleep(0.05)
+    opener = threading.Thread(target=take, args=("open", False))
+    opener.start()
+    time.sleep(0.05)
+    lock.__exit__(None, None, None)
+    for thread in (scan, opener):
+        thread.join(timeout=5)
+    assert order == ["open", "scan"]
+
+
+def test_a_background_read_runs_when_nothing_else_wants_the_lock() -> None:
+    import threading
+
+    from datacube_viewer.core.netcdf_nodes import _PriorityLock
+    from datacube_viewer.core.nodes import background_reads
+
+    lock = _PriorityLock()
+    with lock:
+        pass
+    done = threading.Event()
+
+    def scan() -> None:
+        with background_reads(), lock:
+            done.set()
+
+    threading.Thread(target=scan).start()
+    assert done.wait(timeout=2)

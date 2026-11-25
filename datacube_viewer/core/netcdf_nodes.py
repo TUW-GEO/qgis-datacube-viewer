@@ -17,7 +17,11 @@ converted to plain Python.
 
 **Threads.** HDF5 is not safe for concurrent use from several threads, and QGIS reads
 tiles on a pool. Every call into ``netCDF4`` goes through one lock per file. Reads are
-therefore serial per file; they are local, and decoding dominates.
+therefore serial per file; they are local, and decoding dominates. A thread inside
+:func:`.nodes.background_reads` only gets the lock when no other thread wants it, and
+not straight after another thread let go of it: opening a layer takes the lock dozens
+of times in a row, and a background scan slipping in between each would add a whole
+slice read to every one of them.
 
 **Scoping.** A NetCDF-4 variable may use a dimension declared in an *ancestor* group,
 and the coordinate variables and CRS carrier it needs may live up there too -- the usual
@@ -34,14 +38,72 @@ import contextlib
 import json
 import logging
 import threading
+import time
 from collections.abc import Iterator
 from typing import Any
 
 import numpy as np
 
 from .errors import StoreOpenError
+from .nodes import in_background
 
 _log = logging.getLogger(__name__)
+
+
+class _PriorityLock:
+    """A re-entrant lock where background threads give way to all others.
+
+    See the module docstring. Background threads wait while any other thread is
+    waiting, and for :attr:`GRACE` seconds after any other thread released it.
+    """
+
+    #: How long a background thread stays away after a foreground release, so a
+    #: foreground caller taking the lock in a loop is not interrupted between turns.
+    GRACE = 0.05
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition(threading.Lock())
+        self._owner: int | None = None
+        self._depth = 0
+        self._foreground_waiting = 0
+        self._foreground_released = float("-inf")
+
+    def __enter__(self) -> _PriorityLock:
+        me = threading.get_ident()
+        background = in_background()
+        with self._cond:
+            if self._owner == me:
+                self._depth += 1
+                return self
+            if background:
+                while True:
+                    if self._owner is None and not self._foreground_waiting:
+                        quiet = time.monotonic() - self._foreground_released
+                        if quiet >= self.GRACE:
+                            break
+                        self._cond.wait(self.GRACE - quiet)
+                    else:
+                        self._cond.wait()
+            else:
+                self._foreground_waiting += 1
+                try:
+                    while self._owner is not None:
+                        self._cond.wait()
+                finally:
+                    self._foreground_waiting -= 1
+            self._owner = me
+            self._depth = 1
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        with self._cond:
+            self._depth -= 1
+            if self._depth:
+                return
+            self._owner = None
+            if not in_background():
+                self._foreground_released = time.monotonic()
+            self._cond.notify_all()
 
 
 class _File:
@@ -50,7 +112,7 @@ class _File:
     def __init__(self, dataset: Any, path: str):
         self.dataset = dataset
         self.path = path
-        self.lock = threading.RLock()
+        self.lock = _PriorityLock()
 
     def close(self) -> None:
         with self.lock:

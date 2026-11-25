@@ -29,6 +29,7 @@ from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 
 from .. import PLUGIN_NAME
 from ..core import DatacubeError
+from ..core.nodes import background_reads
 from ..provider import axes_for_bands
 from ..provider.statistics import (
     RangeScan,
@@ -67,7 +68,10 @@ class ScanTask(QgsTask):
     def run(self) -> bool:
         # Nothing may escape: an exception out of a QgsTask is a crash, not a traceback.
         try:
-            self.scan = self._work(self.setProgress, self.isCanceled)
+            # Background reads give way to the map and the main thread on a file
+            # that serialises access (NetCDF): see core.nodes.background_reads.
+            with background_reads():
+                self.scan = self._work(self.setProgress, self.isCanceled)
             return True
         except ScanCancelled:
             return False

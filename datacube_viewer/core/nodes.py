@@ -19,13 +19,35 @@ one adapter plus an entry in :func:`.store.open_store`.
 
 Adapters are read-only, and must be safe to call from several threads at once --
 QGIS renders tiles on a pool. Zarr gives that for free; NetCDF/HDF5 does not, so its
-adapter serialises access itself.
+adapter serialises access itself. Where it does, reads made inside
+:func:`background_reads` (a colour range scan, say) give way to all others, so a
+long scan never keeps the main thread or the map renderer waiting.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+import contextlib
+import threading
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, Protocol, runtime_checkable
+
+_thread = threading.local()
+
+
+@contextlib.contextmanager
+def background_reads() -> Iterator[None]:
+    """Mark this thread's reads as background work, which yields to any other read."""
+    previous = getattr(_thread, "background", False)
+    _thread.background = True
+    try:
+        yield
+    finally:
+        _thread.background = previous
+
+
+def in_background() -> bool:
+    """Whether this thread is inside :func:`background_reads`."""
+    return getattr(_thread, "background", False)
 
 
 @runtime_checkable
