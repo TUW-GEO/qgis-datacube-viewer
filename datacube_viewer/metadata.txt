@@ -61,7 +61,31 @@ deprecated=False
 server=False
 
 hasProcessingProvider=no
-changelog=0.4.0
+changelog=0.5.0
+    - QGIS 4: the plugin runs on QGIS 4 (Qt6) as well as on QGIS 3.40 and
+      later, from the same code.
+    - Timeseries: right-click a datacube layer on the map, "Datacube Viewer:
+      Show Timeseries", and pick an axis. The pixel's values along it are
+      added to the new Timeseries panel, with a marker on the map in the
+      line's colour. Each pick adds a line, holding the other axes where the
+      layer's sliders are; the Plot Pixel tool adds one per click. Hovering
+      reads out every line, the wheel zooms, and the values export as CSV.
+    - Subsets: each non-spatial axis in the Add Datacube Layer dialog can be
+      cut down to a range (time and numeric axes) or to chosen values
+      (sensors and other named axes). The cube panel's sliders, its search
+      and the colour range only visit the kept slices. A playhead on the
+      range slider picks the slice the layer opens on.
+    - Ctrl+drag moves the subset sliders and the cube panel's sliders slowly
+      enough to reach every step of a long axis. The speed is under
+      Settings > Options > Datacube Viewer.
+    - The cube panel shows a progress bar while a large cube's colour range
+      is fitted, and the wait cursor shows while layers are added.
+    - Fix: several layers of one NetCDF file open quickly together; the
+      colour range scan of the first no longer holds up the others.
+    - Fix: Icechunk's empty first snapshot, which every repository has, is
+      no longer offered in the snapshot slider and the snapshot list, where
+      it could only fail to open.
+  0.4.0
     - Exact colour range: a new layer's range comes from every pixel at full
       resolution, computed in the background with progress in the QGIS task
       bar. A cube past 100 million pixels is read from whole slices spread
