@@ -421,6 +421,19 @@ def test_the_options_page_sets_the_default_for_redrawing_while_dragging(plugin, 
     page.deleteLater()
 
 
+def test_the_options_page_sets_the_fine_drag_speed(plugin, iface) -> None:
+    from datacube_viewer.gui.cube_slider import fine_pixels_per_step
+
+    plugin.initGui()
+    page = iface.options_factories[0].createWidget(None)
+    assert page._fine_drag.value() == 12
+    page._fine_drag.setValue(25)
+    assert fine_pixels_per_step() == 12, "nothing is written before Apply"
+    page.apply()
+    assert fine_pixels_per_step() == 25
+    page.deleteLater()
+
+
 def test_the_drop_handler_is_registered_and_withdrawn(plugin, iface) -> None:
     """QGIS holds the handler by pointer only; left registered, it outlives the plugin."""
     from qgis.gui import QgsCustomDropHandler

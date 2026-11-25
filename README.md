@@ -220,7 +220,8 @@ from the dialog. To stop that, untick **Automatically open slider sidebar** unde
 To work with part of a cube, narrow down each axis in the **Add Datacube Layer**
 dialog. A time axis, or any axis of numbers, gets a range slider: drag its ends to
 keep, say, one year of a decade, and the marker on top to pick the step the layer
-opens on. Hold **Ctrl** while dragging to move any of them one step at a time;
+opens on. Hold **Ctrl** while dragging to move any of them one step at a time, at
+12 pixels per step (set under **Settings → Options → Datacube Viewer**);
 **Shift**+drag on an end, or a drag between the ends, moves the whole range. An axis
 of named values, such as sensors, gets a dropdown of the value to open on and a
 **keep** dropdown with a tick box per value. The layer then only shows what you

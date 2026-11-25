@@ -8,7 +8,8 @@ what a checkbox in the load dialog could not give.
 
 Where each setting is stored and read lives next to the code that uses it
 (:func:`~datacube_viewer.gui.axis_panel.opens_automatically`,
-:func:`~datacube_viewer.gui.drop.drop_action`), so the plugin can ask
+:func:`~datacube_viewer.gui.drop.drop_action`,
+:func:`~datacube_viewer.gui.cube_slider.fine_pixels_per_step`), so the plugin can ask
 without importing this module's widgets.
 """
 
@@ -36,6 +37,12 @@ from .axis_panel import (
     redraws_while_dragging,
     set_opens_automatically,
     set_redraws_while_dragging,
+)
+from .cube_slider import (
+    DEFAULT_FINE_PIXELS_PER_STEP,
+    FINE_PIXELS_PER_STEP_RANGE,
+    fine_pixels_per_step,
+    set_fine_pixels_per_step,
 )
 from .drop import (
     ACTION_LABELS,
@@ -92,6 +99,29 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
             )
         )
         layout.addWidget(self._live_redraw)
+
+        fine_row = QHBoxLayout()
+        self._fine_drag = QSpinBox()
+        self._fine_drag.setRange(*FINE_PIXELS_PER_STEP_RANGE)
+        self._fine_drag.setSuffix(" pixels per step")
+        self._fine_drag.setValue(fine_pixels_per_step())
+        self._fine_drag.setToolTip(
+            "\n".join(
+                (
+                    "How far the pointer travels for one step while Ctrl is held on",
+                    "the subset slider of the Add Datacube Layer dialog. More pixels",
+                    "per step is slower and finer.",
+                    "",
+                    f"Default: {DEFAULT_FINE_PIXELS_PER_STEP}.",
+                )
+            )
+        )
+        fine_label = QLabel("Fine dragging with Ctrl")
+        fine_label.setToolTip(self._fine_drag.toolTip())
+        fine_row.addWidget(fine_label)
+        fine_row.addWidget(self._fine_drag)
+        fine_row.addStretch(1)
+        layout.addLayout(fine_row)
 
         drops = QGroupBox("Drag-and-drop behavior")
         drops.setToolTip(
@@ -278,6 +308,7 @@ class DatacubeOptionsPage(QgsOptionsPageWidget):
     def apply(self) -> None:
         set_opens_automatically(self._auto_open.isChecked())
         set_redraws_while_dragging(self._live_redraw.isChecked())
+        set_fine_pixels_per_step(self._fine_drag.value())
         for kind, combo in self._drop_actions.items():
             set_drop_action(kind, combo.currentData())
         for kind, combo in self._batch_actions.items():

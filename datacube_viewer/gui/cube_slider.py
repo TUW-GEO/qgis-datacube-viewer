@@ -9,8 +9,8 @@ model with ``rangeChanged``, and the keyboard are left to it.
   along. It is grabbed by its marker, which no handle covers, or by its line where
   no handle is. In the groove, a handle wins.
 * **Fine dragging**: Ctrl held while dragging slows the movement down to
-  :data:`FINE_PIXELS_PER_STEP` pixels per step, for the ends, the whole range and
-  the playhead alike. Ctrl, because Shift+drag on an end is already the built-in
+  :func:`fine_pixels_per_step` pixels per step (a setting, 12 by default), for
+  the ends, the whole range and the playhead alike. Ctrl, because Shift+drag on an end is already the built-in
   "move the whole range".
 
 Fine dragging is why the drags themselves are done here rather than by
@@ -34,14 +34,39 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from qgis.core import QgsSettings
 from qgis.gui import QgsRangeSlider
 from qgis.PyQt.QtCore import QEvent, QPoint, QPointF, QRect, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QMouseEvent, QPainter, QPalette, QPen, QPolygonF
 from qgis.PyQt.QtWidgets import QStyle, QStyleOptionSlider
 
-#: Pixels of travel per step while Ctrl is held, or the normal amount if that is
-#: already more (a short axis on a wide slider).
-FINE_PIXELS_PER_STEP = 12
+#: Settings key: pixels of travel per step while Ctrl is held. Settings → Options →
+#: Datacube Viewer writes it.
+FINE_DRAG_KEY = "plugins/datacube_viewer/fine_drag_pixels_per_step"
+#: Large enough to stop on a day of a decade-long daily axis without effort, small
+#: enough that a week is still a short move.
+DEFAULT_FINE_PIXELS_PER_STEP = 12
+#: What the setting is kept to.
+FINE_PIXELS_PER_STEP_RANGE = (2, 100)
+
+
+def fine_pixels_per_step() -> int:
+    """Pixels of travel per step while Ctrl is held: the setting, kept in range.
+
+    A slider whose normal travel is already longer per step (a short axis on a wide
+    slider) keeps its normal speed; Ctrl never makes a drag coarser.
+    """
+    try:
+        value = int(QgsSettings().value(FINE_DRAG_KEY, DEFAULT_FINE_PIXELS_PER_STEP))
+    except (TypeError, ValueError):
+        return DEFAULT_FINE_PIXELS_PER_STEP
+    low, high = FINE_PIXELS_PER_STEP_RANGE
+    return max(low, min(value, high))
+
+
+def set_fine_pixels_per_step(pixels: int) -> None:
+    QgsSettings().setValue(FINE_DRAG_KEY, int(pixels))
+
 
 #: Height of the playhead's marker, above the groove.
 MARKER_SIZE = 7
@@ -61,6 +86,8 @@ class _Drag:
     lower: int
     upper: int
     current: int
+    #: Pixels per step while Ctrl is held, from the setting when the drag began.
+    fine: float = DEFAULT_FINE_PIXELS_PER_STEP
     #: How far the pointer has moved, in steps, fractions kept.
     travel: float = 0.0
     last_x: int = 0
@@ -83,7 +110,8 @@ class CubeRangeSlider(QgsRangeSlider):
                     "Drag the ends to choose the steps to keep, and the marker on top",
                     "for the step to open on.",
                     "",
-                    f"Ctrl+drag: fine, one step per {FINE_PIXELS_PER_STEP} pixels.",
+                    "Ctrl+drag: fine, a few pixels per step (how many is set in",
+                    "Settings → Options → Datacube Viewer).",
                     "Shift+drag on an end, or drag between the ends: move the whole range.",
                 )
             )
@@ -239,7 +267,12 @@ class CubeRangeSlider(QgsRangeSlider):
             super().mousePressEvent(event)
             return
         self._drag = _Drag(
-            part, self.lowerValue(), self.upperValue(), self._current, last_x=event.pos().x()
+            part,
+            self.lowerValue(),
+            self.upperValue(),
+            self._current,
+            fine=fine_pixels_per_step(),
+            last_x=event.pos().x(),
         )
         if part == "current":
             event.accept()
@@ -261,7 +294,7 @@ class CubeRangeSlider(QgsRangeSlider):
         # move, so pressing or letting go of Ctrl carries on from where things are.
         per_step = self._pixels_per_step()
         if event.modifiers() & Qt.ControlModifier:
-            per_step = max(per_step, FINE_PIXELS_PER_STEP)
+            per_step = max(per_step, drag.fine)
         drag.travel += moved / per_step
         self._apply(drag, round(drag.travel))
 
