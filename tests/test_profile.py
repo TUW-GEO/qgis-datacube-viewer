@@ -350,7 +350,7 @@ def test_hovering_reads_out_every_series_at_that_step(dock, layers) -> None:
     dock.pick(layers["cube"], "time", _point(3, 1))
     plot = dock.plot()
     plot.resize(500, 300)
-    image = QImage(500, 300, QImage.Format_ARGB32)
+    image = QImage(500, 300, QImage.Format.Format_ARGB32)
     painter = QPainter(image)
     plot.render_plot(painter)
     painter.end()

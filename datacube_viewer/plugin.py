@@ -162,10 +162,10 @@ class _DialogJob:
 @contextlib.contextmanager
 def _busy_cursor():
     """The wait cursor while the main thread is busy, restored however the work ends."""
-    QApplication.setOverrideCursor(Qt.WaitCursor)
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
     # Show it now: the work ahead keeps the event loop from getting to it. User
     # input stays queued, so a second click on Add cannot run in between.
-    QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+    QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
     try:
         yield
     finally:
@@ -290,7 +290,7 @@ class DatacubeViewerPlugin:
         self._cube_dock = DatacubeDock(self.iface, self.iface.mainWindow(), self._stretch)
         self._cube_dock.historyRequested.connect(self.show_snapshot_dialog)
         self._cube_dock.variableRequested.connect(self.add_variable_next_to)
-        self.iface.addDockWidget(Qt.RightDockWidgetArea, self._cube_dock)
+        self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._cube_dock)
         self._cube_dock.hide()
 
         # The dock's own toggle, so it appears in View → Panels and in the toolbar
@@ -317,7 +317,7 @@ class DatacubeViewerPlugin:
         canvas = self.iface.mapCanvas()
         self._profile_dock = ProfileDock(self.iface, self.iface.mainWindow())
         self._profile_dock.message.connect(self._on_profile_message)
-        self.iface.addDockWidget(Qt.BottomDockWidgetArea, self._profile_dock)
+        self.iface.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._profile_dock)
         self._profile_dock.hide()
 
         icon = _icon("timeseries.png")
@@ -442,7 +442,7 @@ class DatacubeViewerPlugin:
             self.iface.mainWindow(),
             show_suppress=show_suppress,
         )
-        dialog.exec_()
+        dialog.exec()
         if dialog.suppressed():
             QgsSettings().setValue(SUPPRESS_KEY, True)
 
@@ -966,7 +966,7 @@ class DatacubeViewerPlugin:
         from .gui import SnapshotDialog
 
         dialog = SnapshotDialog(layer, self.iface.mainWindow())
-        dialog.exec_()
+        dialog.exec()
 
     # ------------------------------------------------------------- helpers
     @staticmethod

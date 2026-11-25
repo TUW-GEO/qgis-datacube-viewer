@@ -124,9 +124,9 @@ def _monospace(text: str, rows: int) -> QPlainTextEdit:
     box = QPlainTextEdit()
     box.setPlainText(text)
     box.setReadOnly(True)
-    box.setLineWrapMode(QPlainTextEdit.NoWrap)
+    box.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
     font = QFont("monospace")
-    font.setStyleHint(QFont.Monospace)
+    font.setStyleHint(QFont.StyleHint.Monospace)
     box.setFont(font)
     _fit_rows(box, rows)
     return box
@@ -151,15 +151,15 @@ def _step(number: int, title: str) -> QLabel:
 def _body(text: str) -> QLabel:
     label = QLabel(text)
     label.setWordWrap(True)
-    label.setTextFormat(Qt.RichText)
+    label.setTextFormat(Qt.TextFormat.RichText)
     label.setOpenExternalLinks(True)
     return label
 
 
 def _rule() -> QFrame:
     line = QFrame()
-    line.setFrameShape(QFrame.HLine)
-    line.setFrameShadow(QFrame.Sunken)
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setFrameShadow(QFrame.Shadow.Sunken)
     return line
 
 
@@ -317,8 +317,8 @@ class DependencyDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidget(content)
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         outer.addWidget(scroll, 1)
 
         # Below the scroll area, so the way out is always reachable.
@@ -329,10 +329,10 @@ class DependencyDialog(QDialog):
             )
             outer.addWidget(self._suppress)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
-        self._close_button = buttons.button(QDialogButtonBox.Close)
+        self._close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
         outer.addWidget(buttons)
 
         self._size_to_content(content, outer)
@@ -647,19 +647,19 @@ class DependencyDialog(QDialog):
         """
         process = QProcess(self)
         process.setProcessEnvironment(_pip_environment())
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             process.start(str(interpreter), ["-c", PROBE_SCRIPT])
             finished = process.waitForFinished(_PROBE_TIMEOUT_MS)
         finally:
             QApplication.restoreOverrideCursor()
-        if process.error() == QProcess.FailedToStart:
+        if process.error() == QProcess.ProcessError.FailedToStart:
             return None, process.errorString()
         if not finished:
             process.kill()
             process.waitForFinished(1000)
             return None, f"no answer within {_PROBE_TIMEOUT_MS // 1000} seconds"
-        if process.exitStatus() != QProcess.NormalExit or process.exitCode() != 0:
+        if process.exitStatus() != QProcess.ExitStatus.NormalExit or process.exitCode() != 0:
             errors = bytes(process.readAllStandardError()).decode(errors="replace").split("\n")
             errors = [line for line in errors if line.strip()]
             return None, errors[-1] if errors else f"exit code {process.exitCode()}"
@@ -686,10 +686,10 @@ class DependencyDialog(QDialog):
             "that uses this Python imports it instead of the copy above, not only QGIS. "
             f"To undo that later, run:\n\n  {undo}\n\n"
             "Install anyway?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        return answer == QMessageBox.Yes
+        return answer == QMessageBox.StandardButton.Yes
 
     def _run_installer(self, command) -> None:
         """Start pip (or conda) for ``command`` and stream what it prints into the log."""
@@ -708,7 +708,7 @@ class DependencyDialog(QDialog):
             if command.flavour == CONDA
             else _pip_environment()
         )
-        process.setProcessChannelMode(QProcess.MergedChannels)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         process.readyReadStandardOutput.connect(self._on_pip_output)
         process.finished.connect(self._on_pip_finished)
         process.errorOccurred.connect(self._on_pip_error)
@@ -722,9 +722,9 @@ class DependencyDialog(QDialog):
     def _append(self, text: str) -> None:
         if self._log is None:
             return
-        self._log.moveCursor(QTextCursor.End)
+        self._log.moveCursor(QTextCursor.MoveOperation.End)
         self._log.insertPlainText(text)
-        self._log.moveCursor(QTextCursor.End)
+        self._log.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_pip_output(self) -> None:
         if self._process is None:
@@ -735,7 +735,7 @@ class DependencyDialog(QDialog):
 
     def _on_pip_error(self, error) -> None:
         """Only a failure to start ends things here; for everything else, ``finished`` follows."""
-        if error != QProcess.FailedToStart or self._process is None:
+        if error != QProcess.ProcessError.FailedToStart or self._process is None:
             return
         reason = self._process.errorString()
         self._process = None
@@ -754,7 +754,7 @@ class DependencyDialog(QDialog):
         packages = " ".join(self._wanted)
         conda = self._install.flavour == CONDA
         tool = "conda" if conda else "pip"
-        if process.exitStatus() == QProcess.NormalExit and code == 0:
+        if process.exitStatus() == QProcess.ExitStatus.NormalExit and code == 0:
             self._done = True
             if self._install_button is not None:
                 self._install_button.setEnabled(False)

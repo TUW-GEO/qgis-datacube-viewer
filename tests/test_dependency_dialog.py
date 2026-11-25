@@ -368,7 +368,7 @@ def test_replacing_an_installed_package_needs_a_yes(runnable, monkeypatch) -> No
     monkeypatch.setattr(
         depmod.QMessageBox,
         "question",
-        lambda *args, **kwargs: asked.append(args[2]) or QMessageBox.No,
+        lambda *args, **kwargs: asked.append(args[2]) or QMessageBox.StandardButton.No,
     )
     d = runnable(
         "raise SystemExit('pip must not run')",

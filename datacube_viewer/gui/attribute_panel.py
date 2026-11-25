@@ -43,9 +43,9 @@ CELL_LIMIT = 160
 TOOLTIP_LIMIT = 3000
 
 #: Item data role holding a row's full, unshortened value.
-FULL_VALUE_ROLE = Qt.UserRole
+FULL_VALUE_ROLE = Qt.ItemDataRole.UserRole
 #: Item data role holding a section's key ("variable", "axes", "dataset", "store").
-SECTION_ROLE = Qt.UserRole + 1
+SECTION_ROLE = Qt.ItemDataRole.UserRole + 1
 
 #: Sections open when first shown. The variable is what the layer *is*; the rest is
 #: context a user goes looking for.
@@ -186,18 +186,18 @@ class AttributePanel(QgsCollapsibleGroupBox):
         self._tree.setHeaderLabels(["Name", "Value"])
         self._tree.setUniformRowHeights(True)
         self._tree.setAlternatingRowColors(True)
-        self._tree.setTextElideMode(Qt.ElideRight)
-        self._tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._tree.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._tree.header().setStretchLastSection(True)
         self._tree.itemExpanded.connect(lambda item: self._on_expanded(item, True))
         self._tree.itemCollapsed.connect(lambda item: self._on_expanded(item, False))
 
         self._copy = QAction("Copy", self._tree)
-        self._copy.setShortcut(QKeySequence.Copy)
-        self._copy.setShortcutContext(Qt.WidgetShortcut)
+        self._copy.setShortcut(QKeySequence.StandardKey.Copy)
+        self._copy.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self._copy.triggered.connect(self.copy_selection)
         self._tree.addAction(self._copy)
-        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
 
         layout = QVBoxLayout(self)
@@ -277,4 +277,4 @@ class AttributePanel(QgsCollapsibleGroupBox):
             value.triggered.connect(
                 lambda: QGuiApplication.clipboard().setText(str(item.data(1, FULL_VALUE_ROLE)))
             )
-        menu.exec_(self._tree.viewport().mapToGlobal(point))
+        menu.exec(self._tree.viewport().mapToGlobal(point))

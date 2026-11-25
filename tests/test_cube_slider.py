@@ -42,21 +42,23 @@ def slider(qgis_app):
     QgsApplication.processEvents()
 
 
-def send(widget, kind, x, y, buttons=Qt.LeftButton, modifiers=Qt.NoModifier):
-    button = Qt.LeftButton if kind != QEvent.MouseMove else Qt.NoButton
-    held = buttons if kind != QEvent.MouseButtonRelease else Qt.NoButton
+def send(
+    widget, kind, x, y, buttons=Qt.MouseButton.LeftButton, modifiers=Qt.KeyboardModifier.NoModifier
+):
+    button = Qt.MouseButton.LeftButton if kind != QEvent.Type.MouseMove else Qt.MouseButton.NoButton
+    held = buttons if kind != QEvent.Type.MouseButtonRelease else Qt.MouseButton.NoButton
     event = QMouseEvent(kind, QPointF(x, y), button, held, modifiers)
     QgsApplication.sendEvent(widget, event)
 
 
-def drag(widget, start, end, modifiers=Qt.NoModifier, steps=10):
+def drag(widget, start, end, modifiers=Qt.KeyboardModifier.NoModifier, steps=10):
     """Press at ``start``, move to ``end`` in ``steps`` moves, release there."""
     (x0, y0), (x1, y1) = start, end
-    send(widget, QEvent.MouseButtonPress, x0, y0, modifiers=modifiers)
+    send(widget, QEvent.Type.MouseButtonPress, x0, y0, modifiers=modifiers)
     for i in range(1, steps + 1):
         x = x0 + (x1 - x0) * i / steps
-        send(widget, QEvent.MouseMove, x, y0 + (y1 - y0) * i / steps, modifiers=modifiers)
-    send(widget, QEvent.MouseButtonRelease, x1, y1, modifiers=modifiers)
+        send(widget, QEvent.Type.MouseMove, x, y0 + (y1 - y0) * i / steps, modifiers=modifiers)
+    send(widget, QEvent.Type.MouseButtonRelease, x1, y1, modifiers=modifiers)
 
 
 def handle_centre(widget, value):
@@ -124,41 +126,48 @@ def test_an_end_dragged_past_the_playhead_pushes_it(slider) -> None:
 def test_ctrl_makes_a_handle_drag_fine(slider) -> None:
     x, y = handle_centre(slider, STEPS - 1)
     distance = 5 * DEFAULT_FINE_PIXELS_PER_STEP
-    drag(slider, (x, y), (x - distance, y), modifiers=Qt.ControlModifier)
+    drag(slider, (x, y), (x - distance, y), modifiers=Qt.KeyboardModifier.ControlModifier)
     assert slider.upperValue() == pytest.approx(STEPS - 1 - 5, abs=1)
 
 
 def test_ctrl_makes_a_playhead_drag_fine(slider) -> None:
     slider.setCurrent(50)
     x, y = marker(slider)
-    drag(slider, (x, y), (x + 3 * DEFAULT_FINE_PIXELS_PER_STEP, y), modifiers=Qt.ControlModifier)
+    drag(
+        slider,
+        (x, y),
+        (x + 3 * DEFAULT_FINE_PIXELS_PER_STEP, y),
+        modifiers=Qt.KeyboardModifier.ControlModifier,
+    )
     assert slider.current() == pytest.approx(53, abs=1)
 
 
 def test_letting_go_of_ctrl_mid_drag_does_not_jump(slider) -> None:
     slider.setCurrent(50)
     x, y = marker(slider)
-    send(slider, QEvent.MouseButtonPress, x, y)
+    send(slider, QEvent.Type.MouseButtonPress, x, y)
     send(
         slider,
-        QEvent.MouseMove,
+        QEvent.Type.MouseMove,
         x + 4 * DEFAULT_FINE_PIXELS_PER_STEP,
         y,
-        modifiers=Qt.ControlModifier,
+        modifiers=Qt.KeyboardModifier.ControlModifier,
     )
     fine = slider.current()
     assert fine == pytest.approx(54, abs=1)
     # Ctrl released: the next move continues from here rather than snapping to
     # where the pointer really is, which is many more steps away.
-    send(slider, QEvent.MouseMove, x + 4 * DEFAULT_FINE_PIXELS_PER_STEP + 1, y)
+    send(slider, QEvent.Type.MouseMove, x + 4 * DEFAULT_FINE_PIXELS_PER_STEP + 1, y)
     assert abs(slider.current() - fine) <= 1
-    send(slider, QEvent.MouseButtonRelease, x, y)
+    send(slider, QEvent.Type.MouseButtonRelease, x, y)
 
 
 def test_shift_drag_still_moves_the_whole_range(slider) -> None:
     slider.setRange(10, 30)
     x, y = handle_centre(slider, 10)
-    drag(slider, (x, y), (x + 20 * per_step(slider), y), modifiers=Qt.ShiftModifier)
+    drag(
+        slider, (x, y), (x + 20 * per_step(slider), y), modifiers=Qt.KeyboardModifier.ShiftModifier
+    )
     assert slider.lowerValue() == pytest.approx(30, abs=1)
     assert slider.upperValue() - slider.lowerValue() == 20
 
@@ -183,15 +192,15 @@ def long_slider(qgis_app):
     QgsApplication.processEvents()
 
 
-def crawl(widget, start, pixels, read, modifiers=Qt.ControlModifier):
+def crawl(widget, start, pixels, read, modifiers=Qt.KeyboardModifier.ControlModifier):
     """Drag one pixel at a time and record ``read()`` after every move."""
     x, y = start
-    send(widget, QEvent.MouseButtonPress, x, y, modifiers=modifiers)
+    send(widget, QEvent.Type.MouseButtonPress, x, y, modifiers=modifiers)
     seen = [read()]
     for i in range(1, pixels + 1):
-        send(widget, QEvent.MouseMove, x + i, y, modifiers=modifiers)
+        send(widget, QEvent.Type.MouseMove, x + i, y, modifiers=modifiers)
         seen.append(read())
-    send(widget, QEvent.MouseButtonRelease, x + pixels, y, modifiers=modifiers)
+    send(widget, QEvent.Type.MouseButtonRelease, x + pixels, y, modifiers=modifiers)
     return seen
 
 
@@ -257,7 +266,9 @@ def knob(widget):
 
     option = QStyleOptionSlider()
     widget.initStyleOption(option)
-    rect = widget.style().subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderHandle, widget)
+    rect = widget.style().subControlRect(
+        QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderHandle, widget
+    )
     return rect.center().x(), rect.center().y()
 
 
@@ -272,7 +283,13 @@ def test_ctrl_makes_a_panel_drag_visit_every_step(axis_slider) -> None:
     assert per_step(axis_slider) < 1, "the fixture is meant to have several steps per pixel"
     axis_slider.setValue(2000)
     pixels = 6 * DEFAULT_FINE_PIXELS_PER_STEP
-    seen = crawl(axis_slider, knob(axis_slider), pixels, axis_slider.value, Qt.ControlModifier)
+    seen = crawl(
+        axis_slider,
+        knob(axis_slider),
+        pixels,
+        axis_slider.value,
+        Qt.KeyboardModifier.ControlModifier,
+    )
     steps = [b - a for a, b in zip(seen, seen[1:])]
     assert set(steps) <= {0, 1}, f"skipped steps: {steps}"
     assert seen[-1] - seen[0] == 6
@@ -281,12 +298,14 @@ def test_ctrl_makes_a_panel_drag_visit_every_step(axis_slider) -> None:
 def test_letting_go_of_ctrl_on_the_panel_does_not_jump(axis_slider) -> None:
     axis_slider.setValue(2000)
     x, y = knob(axis_slider)
-    send(axis_slider, QEvent.MouseButtonPress, x, y)
-    send(axis_slider, QEvent.MouseMove, x + 24, y, modifiers=Qt.ControlModifier)
+    send(axis_slider, QEvent.Type.MouseButtonPress, x, y)
+    send(
+        axis_slider, QEvent.Type.MouseMove, x + 24, y, modifiers=Qt.KeyboardModifier.ControlModifier
+    )
     assert axis_slider.value() == 2002
-    send(axis_slider, QEvent.MouseMove, x + 25, y)
+    send(axis_slider, QEvent.Type.MouseMove, x + 25, y)
     assert axis_slider.value() == 2002 + round(1 / per_step(axis_slider))
-    send(axis_slider, QEvent.MouseButtonRelease, x + 25, y)
+    send(axis_slider, QEvent.Type.MouseButtonRelease, x + 25, y)
 
 
 def test_a_panel_drag_still_reads_as_a_drag(axis_slider) -> None:
@@ -298,7 +317,7 @@ def test_a_panel_drag_still_reads_as_a_drag(axis_slider) -> None:
     axis_slider.setValue(2000)
     down.clear()
     x, y = knob(axis_slider)
-    drag(axis_slider, (x, y), (x + 30, y), modifiers=Qt.ControlModifier)
+    drag(axis_slider, (x, y), (x + 30, y), modifiers=Qt.KeyboardModifier.ControlModifier)
     assert events == ["pressed", "released"]
     assert down and all(down), "values change while the handle is down"
     assert axis_slider.value() == 2000 + round(30 / DEFAULT_FINE_PIXELS_PER_STEP)
@@ -315,7 +334,7 @@ def test_a_click_on_the_panel_groove_is_left_to_qt(axis_slider) -> None:
     axis_slider.setPageStep(100)
     axis_slider.setValue(2000)
     x, y = knob(axis_slider)
-    send(axis_slider, QEvent.MouseButtonPress, x + 150, y)
-    send(axis_slider, QEvent.MouseButtonRelease, x + 150, y)
+    send(axis_slider, QEvent.Type.MouseButtonPress, x + 150, y)
+    send(axis_slider, QEvent.Type.MouseButtonRelease, x + 150, y)
     assert axis_slider.value() != 2000
     assert not axis_slider.isSliderDown()

@@ -9,7 +9,6 @@ platforms = ["linux-64", "win-64"]
 # lets us run the provider headlessly under pytest-qgis.
 [dependencies]
 python = "3.12.*"
-qgis = ">=3.40"
 zarr = ">=3.0"
 xarray = ">=2024.10"
 netcdf4 = ">=1.7"
@@ -20,12 +19,39 @@ pytest-cov = "*"
 pytest-timeout = "*"
 ruff = "*"
 
+# One environment per QGIS major, both run by CI. QGIS is pinned in each: left
+# open (">=3.40"), the next lock refresh moved CI to whatever conda-forge had
+# newest, which is how QGIS 4 would have arrived unannounced.
+[feature.qgis3.dependencies]
+qgis = "3.44.*"
+
+[feature.qgis4.dependencies]
+qgis = ">=4.4,<5"
+
+[environments]
+# `pixi run test` stays QGIS 3, the LTR until 4.4 replaces it in March 2027.
+default = ["qgis3"]
+qgis4 = ["qgis4"]
+
 [pypi-dependencies]
 icechunk = ">=1.0"
 pytest-qgis = ">=2.1"
 
 [tasks]
-test = "pytest -q"
+# QGIS 3 by default; `pixi run -e qgis4 test` for QGIS 4, `pixi run test-all` for both.
+# - Offscreen from the start: pytest-qgis creates the QgsApplication before
+#   tests/conftest.py runs, so the setdefault there comes too late for it. Without
+#   a display, Qt6 then aborts the whole run before the first test.
+# - DISPLAY points nowhere on purpose: with the desktop's DISPLAY, QGIS still
+#   talks to that X server, and with a locked session the run hangs silently.
+# - A cache directory per environment: fontconfig shares ~/.cache/fontconfig with
+#   every other conda env on the machine, and a cache written by another
+#   fontconfig version segfaults the first test that builds a dialog.
+test = { cmd = "pytest -q", env = { QT_QPA_PLATFORM = "offscreen", DISPLAY = ":9999", XDG_CACHE_HOME = "$CONDA_PREFIX/var/cache" } }
+test-all = { depends-on = [
+    { task = "test", environment = "default" },
+    { task = "test", environment = "qgis4" },
+] }
 lint = "ruff check . && ruff format --check ."
 fmt = "ruff format . && ruff check --fix ."
 build = "python scripts/build_plugin.py"

@@ -152,11 +152,11 @@ def test_a_missing_local_entry_is_marked_not_removed(dialog, tmp_path) -> None:
     dialog._rewrite_recents([gone])
 
     assert dialog._recent_entries() == [gone], "the entry is kept"
-    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is not None
-    assert dialog._uri_combo.itemData(0, Qt.DecorationRole) is not None, (
+    assert dialog._uri_combo.itemData(0, Qt.ItemDataRole.ForegroundRole) is not None
+    assert dialog._uri_combo.itemData(0, Qt.ItemDataRole.DecorationRole) is not None, (
         "colour must not be the only carrier"
     )
-    assert "Not found" in str(dialog._uri_combo.itemData(0, Qt.ToolTipRole))
+    assert "Not found" in str(dialog._uri_combo.itemData(0, Qt.ItemDataRole.ToolTipRole))
 
 
 def test_marking_never_touches_the_item_text(dialog, tmp_path) -> None:
@@ -175,8 +175,8 @@ def test_marking_never_touches_the_item_text(dialog, tmp_path) -> None:
 
 def test_a_present_local_entry_is_left_alone(dialog, store_uri: str) -> None:
     dialog._rewrite_recents([store_uri])
-    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is None
-    assert dialog._uri_combo.itemData(0, Qt.DecorationRole) is None
+    assert dialog._uri_combo.itemData(0, Qt.ItemDataRole.ForegroundRole) is None
+    assert dialog._uri_combo.itemData(0, Qt.ItemDataRole.DecorationRole) is None
 
 
 def test_a_present_netcdf_file_is_not_marked_missing(dialog, tmp_path) -> None:
@@ -185,7 +185,7 @@ def test_a_present_netcdf_file_is_not_marked_missing(dialog, tmp_path) -> None:
     path.write_bytes(b"CDF\x01")
     assert dialog.recent_is_missing(str(path)) is False
     dialog._rewrite_recents([str(path)])
-    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is None
+    assert dialog._uri_combo.itemData(0, Qt.ItemDataRole.ForegroundRole) is None
 
 
 def test_remote_entries_are_never_probed(dialog) -> None:
@@ -193,17 +193,17 @@ def test_remote_entries_are_never_probed(dialog) -> None:
     for uri in ("s3://bucket/x.zarr", "gs://bucket/x.zarr", "https://host/x.zarr"):
         assert dialog.recent_is_missing(uri) is False, uri
     dialog._rewrite_recents(["s3://bucket/x.zarr"])
-    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is None
+    assert dialog._uri_combo.itemData(0, Qt.ItemDataRole.ForegroundRole) is None
 
 
 def test_a_store_that_comes_back_loses_its_marking(dialog, tmp_path) -> None:
     """Re-marked in place, so the grey is not sticky until the dialog reopens."""
     path = tmp_path / "remounted.zarr"
     dialog._rewrite_recents([str(path)])
-    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is not None
+    assert dialog._uri_combo.itemData(0, Qt.ItemDataRole.ForegroundRole) is not None
     path.mkdir()
     dialog._mark_missing_recents()
-    assert dialog._uri_combo.itemData(0, Qt.ForegroundRole) is None
+    assert dialog._uri_combo.itemData(0, Qt.ItemDataRole.ForegroundRole) is None
 
 
 def test_forgetting_an_entry_updates_the_list_and_the_settings(dialog, tmp_path) -> None:
@@ -381,21 +381,23 @@ def test_bands_default_to_rgb(connected) -> None:
 def test_band_list_starts_in_channel_order(connected) -> None:
     """The list order is the channel order, so the checked bands must lead it."""
     names = [
-        connected._band_list.item(i).data(Qt.UserRole) for i in range(connected._band_list.count())
+        connected._band_list.item(i).data(Qt.ItemDataRole.UserRole)
+        for i in range(connected._band_list.count())
     ]
     assert names[:3] == ["red", "green", "blue"]
 
 
 def test_all_variables_are_listed(connected) -> None:
     listed = {
-        connected._band_list.item(i).data(Qt.UserRole) for i in range(connected._band_list.count())
+        connected._band_list.item(i).data(Qt.ItemDataRole.UserRole)
+        for i in range(connected._band_list.count())
     }
     assert listed == {"red", "green", "blue", "nir"}
 
 
 def test_unchecking_every_band_blocks_loading(connected) -> None:
     for row in range(connected._band_list.count()):
-        connected._band_list.item(row).setCheckState(Qt.Unchecked)
+        connected._band_list.item(row).setCheckState(Qt.CheckState.Unchecked)
     QgsApplication.processEvents()
     assert not connected._add_button.isEnabled()
     assert "at least one band" in connected._messages.toPlainText()
@@ -403,8 +405,8 @@ def test_unchecking_every_band_blocks_loading(connected) -> None:
 
 def test_rechecking_a_band_re_enables_loading(connected) -> None:
     for row in range(connected._band_list.count()):
-        connected._band_list.item(row).setCheckState(Qt.Unchecked)
-    connected._band_list.item(0).setCheckState(Qt.Checked)
+        connected._band_list.item(row).setCheckState(Qt.CheckState.Unchecked)
+    connected._band_list.item(0).setCheckState(Qt.CheckState.Checked)
     QgsApplication.processEvents()
     assert connected._add_button.isEnabled()
 
@@ -554,7 +556,11 @@ def test_ticking_one_variable_emits_one_uri_either_way(connected) -> None:
     """A single-variable load must not depend on the checkbox."""
     for row in range(connected._band_list.count()):
         item = connected._band_list.item(row)
-        item.setCheckState(Qt.Checked if item.data(Qt.UserRole) == "red" else Qt.Unchecked)
+        item.setCheckState(
+            Qt.CheckState.Checked
+            if item.data(Qt.ItemDataRole.UserRole) == "red"
+            else Qt.CheckState.Unchecked
+        )
     QgsApplication.processEvents()
     for split in (True, False):
         emitted: list[tuple] = []
@@ -577,7 +583,7 @@ def test_the_band_hint_follows_the_checkbox(connected) -> None:
 def test_mixed_dtypes_only_warn_for_a_composite(connected) -> None:
     """Splitting makes the mixed-dtype warning meaningless, so it must not show."""
     for row in range(connected._band_list.count()):
-        connected._band_list.item(row).setCheckState(Qt.Checked)
+        connected._band_list.item(row).setCheckState(Qt.CheckState.Checked)
     connected._split_check.setChecked(False)
     QgsApplication.processEvents()
     composite_text = connected._messages.toPlainText()
@@ -592,7 +598,7 @@ def test_add_does_nothing_while_invalid(connected) -> None:
     emitted: list[tuple] = []
     connected.layersRequested.connect(emitted.append)
     for row in range(connected._band_list.count()):
-        connected._band_list.item(row).setCheckState(Qt.Unchecked)
+        connected._band_list.item(row).setCheckState(Qt.CheckState.Unchecked)
     QgsApplication.processEvents()
     connected._on_add()
     assert emitted == []
@@ -695,7 +701,7 @@ def test_to_image_handles_a_constant_band(qgis_app) -> None:
 def test_typing_narrows_the_variable_list(connected) -> None:
     connected._search.setText("ni")
     visible = [
-        connected._band_list.item(i).data(Qt.UserRole)
+        connected._band_list.item(i).data(Qt.ItemDataRole.UserRole)
         for i in range(connected._band_list.count())
         if not connected._band_list.item(i).isHidden()
     ]
@@ -733,7 +739,11 @@ def test_the_add_button_says_how_many_layers(connected) -> None:
     def tick(*names):
         for i in range(connected._band_list.count()):
             item = connected._band_list.item(i)
-            item.setCheckState(Qt.Checked if item.data(Qt.UserRole) in names else Qt.Unchecked)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if item.data(Qt.ItemDataRole.UserRole) in names
+                else Qt.CheckState.Unchecked
+            )
 
     connected._split_check.setChecked(True)
     tick("red")

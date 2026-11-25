@@ -791,7 +791,7 @@ def test_the_heading_names_the_dataset_and_ref(widget) -> None:
 def test_tick_marks_only_on_a_short_axis(widget) -> None:
     row = widget._rows[0]
     assert row.axis.size <= 40
-    assert row.slider.tickPosition() == QSlider.TicksBelow
+    assert row.slider.tickPosition() == QSlider.TickPosition.TicksBelow
 
 
 def test_axis_tooltip_mentions_the_size(widget) -> None:

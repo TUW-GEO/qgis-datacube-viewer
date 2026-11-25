@@ -356,7 +356,7 @@ def test_unticking_a_sensor_drops_it(dialog) -> None:
 
     picker = dialog._axis_pickers["sensor"]
     picker.set_value(1)
-    picker._keep.setItemCheckState(1, Qt.Unchecked)
+    picker._keep.setItemCheckState(1, Qt.CheckState.Unchecked)
     assert [picker._combo.itemText(i) for i in range(picker._combo.count())] == ["AMSR2", "SMAP"]
     assert picker.value() in (0, 2)
     assert dialog.build_uri().subset == {"sensor": (0, 2)}
@@ -368,10 +368,10 @@ def test_unticking_every_sensor_blocks_adding(dialog) -> None:
 
     picker = dialog._axis_pickers["sensor"]
     for i in range(len(SENSORS)):
-        picker._keep.setItemCheckState(i, Qt.Unchecked)
+        picker._keep.setItemCheckState(i, Qt.CheckState.Unchecked)
     assert not dialog._add_button.isEnabled()
     assert "keeps nothing" in dialog._messages.toPlainText()
-    picker._keep.setItemCheckState(2, Qt.Checked)
+    picker._keep.setItemCheckState(2, Qt.CheckState.Checked)
     assert dialog._add_button.isEnabled()
     assert dialog.build_uri().indices["sensor"] == 2
 

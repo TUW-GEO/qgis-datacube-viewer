@@ -239,7 +239,7 @@ class AxisSliderRow:
         name.setToolTip(self._axis_tooltip())
 
         self.previous = QToolButton()
-        self.previous.setArrowType(Qt.LeftArrow)
+        self.previous.setArrowType(Qt.ArrowType.LeftArrow)
         self.previous.setAutoRepeat(True)
         self.previous.setToolTip(f"Previous {axis.name} slice")
 
@@ -252,20 +252,20 @@ class AxisSliderRow:
         # Ticks only while they stay readable; a 4000-step time axis drawn with
         # ticks is a grey smear that hides the handle.
         if 2 <= count <= 40:
-            self.slider.setTickPosition(QSlider.TicksBelow)
+            self.slider.setTickPosition(QSlider.TickPosition.TicksBelow)
             self.slider.setTickInterval(1)
 
         self.next = QToolButton()
-        self.next.setArrowType(Qt.RightArrow)
+        self.next.setArrowType(Qt.ArrowType.RightArrow)
         self.next.setAutoRepeat(True)
         self.next.setToolTip(f"Next {axis.name} slice")
 
         self.value = QLabel()
-        self.value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
         self.position = QLabel()
-        self.position.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.position.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.position.setEnabled(False)  # greyed: secondary to the label
 
         grid.addWidget(name, row, 0)
@@ -417,9 +417,9 @@ class AxisScrubber(QWidget):
         # loaded with -- by then the per-slice ranges have overwritten it.
         self._fit_cube = QToolButton()
         self._fit_cube.setText("Rescale colours to whole cube")
-        self._fit_cube.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self._fit_cube.setPopupMode(QToolButton.MenuButtonPopup)
-        self._fit_cube.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._fit_cube.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._fit_cube.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self._fit_cube.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._fit_cube.setToolTip(
             "\n".join(
                 (
@@ -506,8 +506,8 @@ class AxisScrubber(QWidget):
         for position, axis in enumerate(axes_for_bands(dataset, self._bands())):
             if position:
                 line = QFrame()
-                line.setFrameShape(QFrame.HLine)
-                line.setFrameShadow(QFrame.Sunken)
+                line.setFrameShape(QFrame.Shape.HLine)
+                line.setFrameShadow(QFrame.Shadow.Sunken)
                 grid.addWidget(line, position * 3 - 1, 0, 1, 3)
             row = AxisSliderRow(
                 axis, axis_chunk_length(dataset, axis), grid, position * 3, self._steps(axis)
@@ -619,7 +619,7 @@ class AxisScrubber(QWidget):
             return
 
         complaint = ""
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             if not fit_to_cube(self._layer, full_scan):
                 complaint = "Could not read enough of the cube to rescale."

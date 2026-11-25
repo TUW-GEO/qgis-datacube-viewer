@@ -134,25 +134,25 @@ class VersionPanel(QGroupBox):
         grid.addWidget(self._follow, 0, 2)
 
         self._value = QLabel()
-        self._value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._position = QLabel()
-        self._position.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._position.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._position.setEnabled(False)
         grid.addWidget(QLabel("<b>snapshot</b>"), 1, 0)
         grid.addWidget(self._value, 1, 1)
         grid.addWidget(self._position, 1, 2)
 
         self._older = QToolButton()
-        self._older.setArrowType(Qt.LeftArrow)
+        self._older.setArrowType(Qt.ArrowType.LeftArrow)
         self._older.setToolTip("Older snapshot")
         self._older.clicked.connect(lambda: self._step(-1))
-        self._slider = QSlider(Qt.Horizontal)
+        self._slider = QSlider(Qt.Orientation.Horizontal)
         self._slider.setToolTip("History of the default branch, oldest on the left")
         self._slider.valueChanged.connect(self._on_slider_moved)
         self._slider.sliderReleased.connect(self._apply_now)
         self._newer = QToolButton()
-        self._newer.setArrowType(Qt.RightArrow)
+        self._newer.setArrowType(Qt.ArrowType.RightArrow)
         self._newer.setToolTip("Newer snapshot")
         self._newer.clicked.connect(lambda: self._step(+1))
         grid.addWidget(self._older, 2, 0)
@@ -166,7 +166,7 @@ class VersionPanel(QGroupBox):
         self._history = QPushButton("Full history…")
         self._history.setToolTip("Open Time Travel, with every snapshot and its message")
         self._history.clicked.connect(self.historyRequested)
-        grid.addWidget(self._history, 4, 0, 1, 3, Qt.AlignRight)
+        grid.addWidget(self._history, 4, 0, 1, 3, Qt.AlignmentFlag.AlignRight)
 
         self.set_layer(None)
 
@@ -226,10 +226,10 @@ class VersionPanel(QGroupBox):
                 self._named.addItem(f"tag: {tag}", ("tag", tag))
             self._slider.setRange(0, max(len(self._timeline) - 1, 0))
             if 2 <= len(self._timeline) <= 40:
-                self._slider.setTickPosition(QSlider.TicksBelow)
+                self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
                 self._slider.setTickInterval(1)
             else:
-                self._slider.setTickPosition(QSlider.NoTicks)
+                self._slider.setTickPosition(QSlider.TickPosition.NoTicks)
         finally:
             self._loading = False
         self._set_controls_enabled(True)

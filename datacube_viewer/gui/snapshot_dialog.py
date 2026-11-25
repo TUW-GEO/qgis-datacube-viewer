@@ -89,7 +89,7 @@ class SnapshotDialog(QDialog):
         self._older.clicked.connect(lambda: self._step(-1))
         self._newer = QPushButton("Newer ▶")
         self._newer.clicked.connect(lambda: self._step(+1))
-        self._slider = QSlider(Qt.Horizontal)
+        self._slider = QSlider(Qt.Orientation.Horizontal)
         self._slider.setEnabled(False)
         self._slider.valueChanged.connect(self._on_slider)
         scrub.addWidget(self._older)
@@ -97,7 +97,7 @@ class SnapshotDialog(QDialog):
         scrub.addWidget(self._newer)
         outer.addLayout(scrub)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.accept)
         outer.addWidget(buttons)
 
@@ -125,7 +125,7 @@ class SnapshotDialog(QDialog):
         self._list.clear()
         for snapshot in self._timeline:
             item = QListWidgetItem(snapshot.label)
-            item.setData(Qt.UserRole, snapshot.id)
+            item.setData(Qt.ItemDataRole.UserRole, snapshot.id)
             self._list.addItem(item)
 
         self._slider.setRange(0, max(len(self._timeline) - 1, 0))

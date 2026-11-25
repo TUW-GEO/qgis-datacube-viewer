@@ -249,7 +249,7 @@ class ProfileDock(QgsDockWidget):
             bar.addWidget(button)
         export = QToolButton(body)
         export.setText("Export")
-        export.setPopupMode(QToolButton.InstantPopup)
+        export.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         export_menu = QMenu(export)
         export_menu.addAction("Copy Values", self.copy_values)
         export_menu.addAction("Save as CSV…", self.save_csv)
@@ -258,13 +258,13 @@ class ProfileDock(QgsDockWidget):
         bar.addWidget(export)
         layout.addLayout(bar)
 
-        splitter = QSplitter(Qt.Vertical, body)
+        splitter = QSplitter(Qt.Orientation.Vertical, body)
         self._plot = ProfilePlot(splitter)
         self._plot.set_empty_text(EMPTY_TEXT)
         self._list = QTreeWidget(splitter)
         self._list.setHeaderLabels(["Series", "Pixel", "Held at", "Valid"])
         self._list.setRootIsDecorated(False)
-        self._list.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self._list.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self._list.itemChanged.connect(self._on_item_changed)
         splitter.addWidget(self._plot)
         splitter.addWidget(self._list)
@@ -455,7 +455,7 @@ class ProfileDock(QgsDockWidget):
         self._refresh_plot()
 
     def remove_selected(self) -> None:
-        self.remove([item.data(0, Qt.UserRole) for item in self._list.selectedItems()])
+        self.remove([item.data(0, Qt.ItemDataRole.UserRole) for item in self._list.selectedItems()])
 
     def clear(self) -> None:
         self.remove(list(self._series))
@@ -507,9 +507,11 @@ class ProfileDock(QgsDockWidget):
                     f"{profile.valid_count}/{len(profile.values)}",
                 ]
             )
-            item.setData(0, Qt.UserRole, series.key)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(0, Qt.Checked if series.plot.visible else Qt.Unchecked)
+            item.setData(0, Qt.ItemDataRole.UserRole, series.key)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                0, Qt.CheckState.Checked if series.plot.visible else Qt.CheckState.Unchecked
+            )
             item.setIcon(0, _swatch(series.plot, dark))
             item.setToolTip(
                 0,
@@ -522,10 +524,10 @@ class ProfileDock(QgsDockWidget):
         self._list.blockSignals(False)
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
-        series = self._series.get(item.data(0, Qt.UserRole))
+        series = self._series.get(item.data(0, Qt.ItemDataRole.UserRole))
         if series is None or column != 0:
             return
-        series.plot.visible = item.checkState(0) == Qt.Checked
+        series.plot.visible = item.checkState(0) == Qt.CheckState.Checked
         self._refresh_plot(keep_view=True)
 
     def _refresh_plot(self, *_args, keep_view: bool = False) -> None:
@@ -536,7 +538,7 @@ class ProfileDock(QgsDockWidget):
         self._list.blockSignals(True)
         for i in range(self._list.topLevelItemCount()):
             item = self._list.topLevelItem(i)
-            series = self._series.get(item.data(0, Qt.UserRole))
+            series = self._series.get(item.data(0, Qt.ItemDataRole.UserRole))
             item.setDisabled(series is None or series.pick.axis != axis)
         self._list.blockSignals(False)
         if not shown:
@@ -639,10 +641,10 @@ def _y_title(profiles: Sequence[PixelProfile]) -> str:
 
 def _swatch(series: PlotSeries, dark: bool) -> QIcon:
     pixmap = QPixmap(14, 14)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing)
-    painter.setPen(Qt.NoPen)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(series_colour(series.slot, dark))
     draw_marker(painter, series.marker, QPointF(7, 7), 11)
     painter.end()
@@ -656,11 +658,11 @@ class ProfileMapTool(QgsMapToolEmitPoint):
     def __init__(self, canvas, dock: ProfileDock):
         super().__init__(canvas)
         self._dock = dock
-        self.setCursor(Qt.CrossCursor)
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
     def flags(self):
         return super().flags() | QgsMapToolEmitPoint.ShowContextMenu
 
     def canvasReleaseEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self._dock.pick_at(event.mapPoint())

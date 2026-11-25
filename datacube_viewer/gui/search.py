@@ -20,7 +20,7 @@ from qgis.PyQt.QtWidgets import QCompleter, QWidget
 
 from ..core.search import DEFAULT_LIMIT, SearchEntry, rank
 
-_ENTRY_ROLE = Qt.UserRole + 1
+_ENTRY_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class FuzzySearchBox(QgsFilterLineEdit):
@@ -38,7 +38,7 @@ class FuzzySearchBox(QgsFilterLineEdit):
 
         self._model = QStandardItemModel(self)
         self._completer = QCompleter(self._model, self)
-        self._completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
+        self._completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
         self._completer.setMaxVisibleItems(12)
         self._completer.setWidget(self)
         self._completer.activated[QModelIndex].connect(self._on_activated)

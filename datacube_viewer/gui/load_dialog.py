@@ -119,7 +119,7 @@ class _AxisPicker(QWidget):
         self._note = QLabel()
         self._note.setStyleSheet("color: palette(mid);")
         self._note.setWordWrap(True)
-        self._note.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self._note)
         self._describe()
 
@@ -140,7 +140,7 @@ class _AxisPicker(QWidget):
                 "whole cube is fitted to them."
             )
             for i in range(self.axis.size):
-                self._keep.addItemWithCheckState(self.axis.label_at(i), Qt.Checked, i)
+                self._keep.addItemWithCheckState(self.axis.label_at(i), Qt.CheckState.Checked, i)
             # The model rather than checkedItemsChanged, which only a click on a
             # row emits: setItemCheckState leaves it silent.
             self._keep.model().dataChanged.connect(lambda *_: self._on_subset_changed())
@@ -217,7 +217,9 @@ class _AxisPicker(QWidget):
             self._slider.setRange(wanted[0], wanted[-1])
         elif self._keep is not None:
             for i in range(self.axis.size):
-                self._keep.setItemCheckState(i, Qt.Checked if i in wanted else Qt.Unchecked)
+                self._keep.setItemCheckState(
+                    i, Qt.CheckState.Checked if i in wanted else Qt.CheckState.Unchecked
+                )
 
     def value(self) -> int:
         """The step to open on."""
@@ -311,7 +313,7 @@ class DatacubeLoadDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidget(content)
         scroll.setWidgetResizable(True)  # content follows the dialog's width
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         # Low enough that the dialog can be dragged down to almost nothing and the
         # buttons still show; the scroll bar takes over from there.
         scroll.setMinimumHeight(180)
@@ -324,12 +326,18 @@ class DatacubeLoadDialog(QDialog):
         # Both load buttons carry the accept role (the standard Apply role would be
         # placed after Close on some platforms), and are wired through ``clicked``
         # rather than ``accepted`` so each keeps its own meaning.
-        self._add_button = self._buttons.addButton("Add Layer", QDialogButtonBox.AcceptRole)
-        self._apply_button = self._buttons.addButton("Apply", QDialogButtonBox.AcceptRole)
-        self._buttons.addButton(QDialogButtonBox.Close)
+        self._add_button = self._buttons.addButton(
+            "Add Layer", QDialogButtonBox.ButtonRole.AcceptRole
+        )
+        self._apply_button = self._buttons.addButton(
+            "Apply", QDialogButtonBox.ButtonRole.AcceptRole
+        )
+        self._buttons.addButton(QDialogButtonBox.StandardButton.Close)
         # Only while a drop of several stores is being worked through; see
         # set_drop_note. ActionRole, so it neither accepts nor rejects by itself.
-        self._skip_button = self._buttons.addButton("Skip Remaining", QDialogButtonBox.ActionRole)
+        self._skip_button = self._buttons.addButton(
+            "Skip Remaining", QDialogButtonBox.ButtonRole.ActionRole
+        )
         self._skip_button.setToolTip("Close, and do not open the other dropped stores")
         self._skip_button.clicked.connect(self._on_skip_remaining)
         self._skip_button.hide()
@@ -367,7 +375,7 @@ class DatacubeLoadDialog(QDialog):
 
         self._uri_combo = QComboBox()
         self._uri_combo.setEditable(True)
-        self._uri_combo.setInsertPolicy(QComboBox.NoInsert)
+        self._uri_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self._uri_combo.lineEdit().setPlaceholderText(
             "/path/to/store_or_file.nc   or   s3://bucket/prefix"
         )
@@ -382,7 +390,7 @@ class DatacubeLoadDialog(QDialog):
         # combo, because an editable combo's own context menu belongs to its line
         # edit and hijacking it would cost the user copy and paste.
         view = self._uri_combo.view()
-        view.setContextMenuPolicy(Qt.CustomContextMenu)
+        view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         view.customContextMenuRequested.connect(self._on_recent_context_menu)
 
         browse = QPushButton("Folder…")
@@ -405,7 +413,9 @@ class DatacubeLoadDialog(QDialog):
         self._ref_kind.addItems(["Branch", "Tag", "Snapshot"])
         self._ref_kind.currentIndexChanged.connect(self._on_ref_kind_changed)
         self._ref_value = QComboBox()
-        self._ref_value.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._ref_value.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         self._ref_value.currentIndexChanged.connect(self._on_ref_changed)
         self._pin_check = QCheckBox("Pin this snapshot in the saved project")
         self._pin_check.setToolTip(
@@ -473,9 +483,9 @@ class DatacubeLoadDialog(QDialog):
         self._search.picked.connect(self._on_search_picked)
         layout.addWidget(self._search)
         self._band_list = QListWidget()
-        self._band_list.setSelectionMode(QListWidget.SingleSelection)
-        self._band_list.setDragDropMode(QListWidget.InternalMove)
-        self._band_list.setDefaultDropAction(Qt.MoveAction)
+        self._band_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self._band_list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self._band_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self._band_list.itemChanged.connect(lambda _: self._refresh())
         self._band_list.model().rowsMoved.connect(lambda *_: self._refresh())
         layout.addWidget(self._band_list)
@@ -576,7 +586,7 @@ class DatacubeLoadDialog(QDialog):
         self._preview_label.setMinimumSize(140, 140)
         self._preview_label.setMaximumSize(220, 220)
         self._preview_label.setScaledContents(False)
-        self._preview_label.setAlignment(Qt.AlignCenter)
+        self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_label.setStyleSheet(
             "border: 1px solid palette(mid); background: palette(base);"
         )
@@ -590,7 +600,7 @@ class DatacubeLoadDialog(QDialog):
 
         self._messages = QPlainTextEdit()
         self._messages.setReadOnly(True)
-        self._messages.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._messages.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         right.addWidget(self._messages, 1)
         layout.addLayout(right, 1)
         return group
@@ -650,24 +660,26 @@ class DatacubeLoadDialog(QDialog):
         # _on_connect a recent entry in place of the store the user asked for.
         # Restoring the text afterwards is the whole guard -- do not drop it.
         typed = self._uri_combo.currentText()
-        missing = QBrush(self.palette().color(QPalette.Disabled, QPalette.WindowText))
-        icon = self.style().standardIcon(QStyle.SP_MessageBoxWarning)
+        missing = QBrush(
+            self.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText)
+        )
+        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
         for row in range(self._uri_combo.count()):
             uri = self._uri_combo.itemText(row)
             # Cleared first, so a store that has come back loses its marking
             # instead of keeping it until the dialog is next opened.
-            self._uri_combo.setItemData(row, None, Qt.ForegroundRole)
-            self._uri_combo.setItemData(row, None, Qt.DecorationRole)
-            self._uri_combo.setItemData(row, uri, Qt.ToolTipRole)
+            self._uri_combo.setItemData(row, None, Qt.ItemDataRole.ForegroundRole)
+            self._uri_combo.setItemData(row, None, Qt.ItemDataRole.DecorationRole)
+            self._uri_combo.setItemData(row, uri, Qt.ItemDataRole.ToolTipRole)
             if not self.recent_is_missing(uri):
                 continue
-            self._uri_combo.setItemData(row, missing, Qt.ForegroundRole)
-            self._uri_combo.setItemData(row, icon, Qt.DecorationRole)
+            self._uri_combo.setItemData(row, missing, Qt.ItemDataRole.ForegroundRole)
+            self._uri_combo.setItemData(row, icon, Qt.ItemDataRole.DecorationRole)
             self._uri_combo.setItemData(
                 row,
                 f"{uri}\n\nNot found on this machine. The path may be on a drive or "
                 "share that is not mounted; the entry is kept either way.",
-                Qt.ToolTipRole,
+                Qt.ItemDataRole.ToolTipRole,
             )
         if self._uri_combo.currentText() != typed:
             self._uri_combo.setCurrentText(typed)
@@ -679,7 +691,7 @@ class DatacubeLoadDialog(QDialog):
         forget.setEnabled(row >= 0)
         prune = menu.addAction("Remove entries not found")
         prune.setEnabled(any(self.recent_is_missing(u) for u in self._recent_entries()))
-        chosen = menu.exec_(self._uri_combo.view().viewport().mapToGlobal(point))
+        chosen = menu.exec(self._uri_combo.view().viewport().mapToGlobal(point))
         if chosen is forget and row >= 0:
             self.forget_recent(self._uri_combo.itemText(row))
         elif chosen is prune:
@@ -970,9 +982,13 @@ class DatacubeLoadDialog(QDialog):
             for name in ordered:
                 info = dataset.base.variables[name]
                 item = QListWidgetItem(f"{name}   [{info.dtype}]")
-                item.setData(Qt.UserRole, name)
-                item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
-                item.setCheckState(Qt.Checked if name in default_bands else Qt.Unchecked)
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                item.setFlags(
+                    item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsDragEnabled
+                )
+                item.setCheckState(
+                    Qt.CheckState.Checked if name in default_bands else Qt.CheckState.Unchecked
+                )
                 if info.long_name != name:
                     item.setToolTip(info.long_name)
                 self._band_list.addItem(item)
@@ -980,9 +996,9 @@ class DatacubeLoadDialog(QDialog):
                 if name in dataset.variable_names:
                     continue
                 item = QListWidgetItem(f"{name}   (not at every level)")
-                item.setData(Qt.UserRole, name)
-                item.setFlags(Qt.ItemIsUserCheckable)  # visible but unselectable
-                item.setCheckState(Qt.Unchecked)
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                item.setFlags(Qt.ItemFlag.ItemIsUserCheckable)  # visible but unselectable
+                item.setCheckState(Qt.CheckState.Unchecked)
                 self._band_list.addItem(item)
 
             for axis in dataset.axes:
@@ -1035,7 +1051,7 @@ class DatacubeLoadDialog(QDialog):
         variables = self._dataset.base.variables if self._dataset is not None else {}
 
         def text(item: QListWidgetItem) -> str:
-            name = str(item.data(Qt.UserRole))
+            name = str(item.data(Qt.ItemDataRole.UserRole))
             info = variables.get(name)
             return f"{name} {info.long_name}" if info is not None else name
 
@@ -1052,8 +1068,8 @@ class DatacubeLoadDialog(QDialog):
             return
         for row in range(self._band_list.count()):
             item = self._band_list.item(row)
-            if item.data(Qt.UserRole) == entry.name:
-                item.setCheckState(Qt.Checked)
+            if item.data(Qt.ItemDataRole.UserRole) == entry.name:
+                item.setCheckState(Qt.CheckState.Checked)
                 self._band_list.setCurrentItem(item)
                 self._band_list.scrollToItem(item)
                 return
@@ -1087,8 +1103,8 @@ class DatacubeLoadDialog(QDialog):
         names = []
         for row in range(self._band_list.count()):
             item = self._band_list.item(row)
-            if item.checkState() == Qt.Checked:
-                names.append(str(item.data(Qt.UserRole)))
+            if item.checkState() == Qt.CheckState.Checked:
+                names.append(str(item.data(Qt.ItemDataRole.UserRole)))
         return tuple(names)
 
     def build_uri(self) -> LayerUri:
@@ -1147,7 +1163,7 @@ class DatacubeLoadDialog(QDialog):
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
         self._connect_button.setEnabled(not busy)
-        self.setCursor(Qt.WaitCursor if busy else Qt.ArrowCursor)
+        self.setCursor(Qt.CursorShape.WaitCursor if busy else Qt.CursorShape.ArrowCursor)
         if message:
             self._show_messages(message)
 
@@ -1222,8 +1238,8 @@ class DatacubeLoadDialog(QDialog):
             return
         pixmap = QPixmap.fromImage(result.image).scaled(
             self._preview_label.size() - self._preview_label.size() * 0.03,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
         self._preview_label.setPixmap(pixmap)
         cuts = ", ".join(f"{low:g}–{high:g}" for low, high in result.stretch)

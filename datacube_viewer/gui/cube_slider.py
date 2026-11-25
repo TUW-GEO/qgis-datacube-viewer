@@ -44,6 +44,8 @@ from qgis.PyQt.QtCore import QEvent, QPoint, QPointF, QRect, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QMouseEvent, QPainter, QPalette, QPen, QPolygonF
 from qgis.PyQt.QtWidgets import QSlider, QStyle, QStyleOptionSlider
 
+from .qtcompat import event_pos
+
 #: Settings key: pixels of travel per step while Ctrl is held. Settings → Options →
 #: Datacube Viewer writes it.
 FINE_DRAG_KEY = "plugins/datacube_viewer/fine_drag_pixels_per_step"
@@ -113,7 +115,7 @@ class CubeSlider(QSlider):
     """
 
     def __init__(self, parent=None):
-        super().__init__(Qt.Horizontal, parent)
+        super().__init__(Qt.Orientation.Horizontal, parent)
         self._drag: _HandleDrag | None = None
 
     def _pixels_per_step(self) -> float:
@@ -121,37 +123,47 @@ class CubeSlider(QSlider):
         option = QStyleOptionSlider()
         self.initStyleOption(option)
         style = self.style()
-        groove = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderGroove, self)
-        handle = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
+        groove = style.subControlRect(
+            QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderGroove, self
+        )
+        handle = style.subControlRect(
+            QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderHandle, self
+        )
         travel = groove.width() - handle.width()
         return max(travel, 1) / max(self.maximum() - self.minimum(), 1)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         super().mousePressEvent(event)
-        if event.button() == Qt.LeftButton and self.isSliderDown():
-            self._drag = _HandleDrag(self.sliderPosition(), fine_pixels_per_step(), event.pos().x())
+        if event.button() == Qt.MouseButton.LeftButton and self.isSliderDown():
+            self._drag = _HandleDrag(
+                self.sliderPosition(), fine_pixels_per_step(), event_pos(event).x()
+            )
         else:
             self._drag = None
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         drag = self._drag
-        if drag is None or not self.isSliderDown() or not event.buttons() & Qt.LeftButton:
+        if (
+            drag is None
+            or not self.isSliderDown()
+            or not event.buttons() & Qt.MouseButton.LeftButton
+        ):
             super().mouseMoveEvent(event)
             return
         event.accept()
         drag.travel = _drag_steps(
             drag.travel,
-            event.pos().x() - drag.last_x,
+            event_pos(event).x() - drag.last_x,
             self._pixels_per_step(),
             drag.fine,
-            bool(event.modifiers() & Qt.ControlModifier),
+            bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier),
         )
-        drag.last_x = event.pos().x()
+        drag.last_x = event_pos(event).x()
         value = drag.start + round(drag.travel)
         self.setSliderPosition(max(self.minimum(), min(value, self.maximum())))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self._drag = None
         super().mouseReleaseEvent(event)
 
@@ -181,7 +193,7 @@ class CubeRangeSlider(QgsRangeSlider):
     currentChanged = pyqtSignal(int)
 
     def __init__(self, parent=None):
-        super().__init__(Qt.Horizontal, parent)
+        super().__init__(Qt.Orientation.Horizontal, parent)
         self._current = 0
         self._drag: _Drag | None = None
         self.rangeChanged.connect(lambda _low, _high: self._keep_current_inside())
@@ -219,28 +231,36 @@ class CubeRangeSlider(QgsRangeSlider):
         option = QStyleOptionSlider()
         option.initFrom(self)
         option.rect = self.rect()
-        option.orientation = Qt.Horizontal
+        option.orientation = Qt.Orientation.Horizontal
         option.minimum = self.minimum()
         option.maximum = self.maximum()
         option.tickPosition = self.tickPosition()
         option.sliderPosition = value
-        option.subControls = QStyle.SC_All
+        option.subControls = QStyle.SubControl.SC_All
         return option
 
     def _handle_rect(self, value: int) -> QRect:
         return self.style().subControlRect(
-            QStyle.CC_Slider, self._option(value), QStyle.SC_SliderHandle, self
+            QStyle.ComplexControl.CC_Slider,
+            self._option(value),
+            QStyle.SubControl.SC_SliderHandle,
+            self,
         )
 
     def _over_handle(self, value: int, pos: QPoint) -> bool:
-        hit = self.style().hitTestComplexControl(QStyle.CC_Slider, self._option(value), pos, self)
-        return hit == QStyle.SC_SliderHandle
+        hit = self.style().hitTestComplexControl(
+            QStyle.ComplexControl.CC_Slider, self._option(value), pos, self
+        )
+        return hit == QStyle.SubControl.SC_SliderHandle
 
     def _selected_rect(self) -> QRect:
         """The groove between the ends, as ``QgsRangeSlider::selectedRangeRect``."""
         lower, upper = self._handle_rect(self.lowerValue()), self._handle_rect(self.upperValue())
         groove = self.style().subControlRect(
-            QStyle.CC_Slider, self._option(self.minimum()), QStyle.SC_SliderGroove, self
+            QStyle.ComplexControl.CC_Slider,
+            self._option(self.minimum()),
+            QStyle.SubControl.SC_SliderGroove,
+            self,
         )
         rect = QRect(lower.right(), groove.y(), upper.left() - lower.right(), groove.height())
         return rect.adjusted(-1, 1, 1, -1)
@@ -248,7 +268,9 @@ class CubeRangeSlider(QgsRangeSlider):
     def _pixels_per_step(self) -> float:
         """How far a handle moves per step, as ``QgsRangeSlider`` lays them out."""
         option = self._option(self.minimum())
-        groove = self.style().subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderGroove, self)
+        groove = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderGroove, self
+        )
         travel = groove.width() - self._handle_rect(self.minimum()).width()
         return max(travel, 1) / max(self.maximum() - self.minimum(), 1)
 
@@ -270,12 +292,12 @@ class CubeRangeSlider(QgsRangeSlider):
 
     def _part_at(self, event: QMouseEvent) -> str | None:
         """What a press grabs, in the order ``QgsRangeSlider`` decides it."""
-        pos = event.pos()
+        pos = event_pos(event)
         if self._on_playhead(pos):
             return "current"
         over_lower = self._over_handle(self.lowerValue(), pos)
         over_upper = self._over_handle(self.upperValue(), pos)
-        if (over_lower or over_upper) and event.modifiers() & Qt.ShiftModifier:
+        if (over_lower or over_upper) and event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             return "range"
         if over_lower and over_upper:
             return "both"
@@ -304,15 +326,16 @@ class CubeRangeSlider(QgsRangeSlider):
         if self.minimum() == self.maximum():
             return
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         colour = self.palette().color(
-            QPalette.Disabled if not self.isEnabled() else QPalette.Active, QPalette.Text
+            QPalette.ColorGroup.Disabled if not self.isEnabled() else QPalette.ColorGroup.Active,
+            QPalette.ColorRole.Text,
         )
         x = self.playhead_x()
         handle = self._handle_rect(self._current)
         painter.setPen(QPen(colour, 2))
         painter.drawLine(QPointF(x, handle.top() - 1), QPointF(x, handle.bottom() + 1))
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(colour)
         tip = handle.top() - 1
         painter.drawPolygon(
@@ -332,16 +355,16 @@ class CubeRangeSlider(QgsRangeSlider):
         # QgsRangeSlider sets the cursor for its own handles on hover; over the
         # playhead it would leave the plain arrow.
         if (
-            event.type() in (QEvent.HoverMove, QEvent.HoverEnter)
+            event.type() in (QEvent.Type.HoverMove, QEvent.Type.HoverEnter)
             and self._drag is None
-            and self._on_playhead(event.pos())
+            and self._on_playhead(event_pos(event))
         ):
-            self.setCursor(Qt.SizeHorCursor)
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
         return handled
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         part = None
-        if event.button() == Qt.LeftButton and self.minimum() != self.maximum():
+        if event.button() == Qt.MouseButton.LeftButton and self.minimum() != self.maximum():
             part = self._part_at(event)
         if part is None:
             self._drag = None
@@ -353,7 +376,7 @@ class CubeRangeSlider(QgsRangeSlider):
             self.upperValue(),
             self._current,
             fine=fine_pixels_per_step(),
-            last_x=event.pos().x(),
+            last_x=event_pos(event).x(),
         )
         if part == "current":
             event.accept()
@@ -364,18 +387,18 @@ class CubeRangeSlider(QgsRangeSlider):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         drag = self._drag
-        if drag is None or not event.buttons() & Qt.LeftButton:
+        if drag is None or not event.buttons() & Qt.MouseButton.LeftButton:
             super().mouseMoveEvent(event)
             return
         event.accept()
-        moved = event.pos().x() - drag.last_x
-        drag.last_x = event.pos().x()
+        moved = event_pos(event).x() - drag.last_x
+        drag.last_x = event_pos(event).x()
         drag.travel = _drag_steps(
             drag.travel,
             moved,
             self._pixels_per_step(),
             drag.fine,
-            bool(event.modifiers() & Qt.ControlModifier),
+            bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier),
         )
         self._apply(drag, round(drag.travel))
 
@@ -399,7 +422,7 @@ class CubeRangeSlider(QgsRangeSlider):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         part = self._drag.part if self._drag is not None else None
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self._drag = None
         if part == "current":
             event.accept()

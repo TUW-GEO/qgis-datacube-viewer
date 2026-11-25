@@ -66,7 +66,7 @@ def to_image(result: ReadResult) -> tuple[QImage, tuple[tuple[float, float], ...
     argb = np.dstack([planes[2], planes[1], planes[0], alpha])
     buffer = np.ascontiguousarray(argb)
 
-    image = QImage(buffer.data, width, height, 4 * width, QImage.Format_ARGB32)
+    image = QImage(buffer.data, width, height, 4 * width, QImage.Format.Format_ARGB32)
     # QImage does not copy the buffer, and `buffer` dies with this function.
     image = image.copy()
 

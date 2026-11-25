@@ -8,7 +8,10 @@ name=Datacube Viewer
 ; icechunk >= 2 needs >= 3.12, and QGIS 3.40 LTR is the first release whose standard
 ; Windows/macOS builds ship Python 3.12.
 qgisMinimumVersion=3.40
-qgisMaximumVersion=3.99
+; QGIS 4 (Qt6) too, from the same code: CI runs the suite on both, and
+; tests/test_qt_compat.py keeps out what only Qt5 accepts. The plugin repository
+; offers one upload to both majors on the strength of this line alone.
+qgisMaximumVersion=4.99
 description=Load and visualise datacubes from GeoZarr, Zarr, NetCDF and Icechunk, with multiscale pyramids and sliders for time and other axes.
 ; PLACEHOLDER. The version comes from the git tag (vX.Y.Z) and scripts/build_plugin.py
 ; injects it here on the way into the .zip. Do not hand-edit a real number in: it
@@ -56,10 +59,6 @@ icon=icons/open_cube.png
 experimental=True
 deprecated=False
 server=False
-
-; Set this to True only after actually running the plugin against a Qt6 QGIS build;
-; declaring it untested would strand users on the builds that are becoming the default.
-; supportsQt6=True
 
 hasProcessingProvider=no
 changelog=0.4.0

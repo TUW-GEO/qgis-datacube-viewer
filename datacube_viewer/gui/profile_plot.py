@@ -24,6 +24,7 @@ from qgis.PyQt.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from qgis.PyQt.QtWidgets import QSizePolicy, QToolTip, QWidget
 
 from ..core.profile import ScaleKind, format_number, nice_ticks, time_ticks
+from .qtcompat import event_global_pos, event_pos
 
 #: Categorical series colours, in the order they are handed out, as (light, dark).
 #: Checked for colour-vision-deficiency separation between neighbours in both modes.
@@ -110,7 +111,7 @@ class ProfilePlot(QWidget):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setMinimumHeight(160)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._series: list[PlotSeries] = []
         self._kind: ScaleKind = "number"
         self._x_title = ""
@@ -234,7 +235,7 @@ class ProfilePlot(QWidget):
     # -------------------------------------------------------------- painting
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.render_plot(painter)
         painter.end()
 
@@ -251,7 +252,7 @@ class ProfilePlot(QWidget):
             painter.setPen(secondary)
             painter.drawText(
                 QRectF(self.rect()).adjusted(16, 16, -16, -16),
-                Qt.AlignCenter | Qt.TextWordWrap,
+                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
                 self._empty_text if not self._series else "No data in view.",
             )
             return
@@ -278,7 +279,7 @@ class ProfilePlot(QWidget):
             painter.setPen(secondary)
             painter.drawText(
                 QRectF(0, y - metrics.height(), rect.left() - 6, 2 * metrics.height()),
-                Qt.AlignRight | Qt.AlignVCenter,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 label,
             )
         for value, label in self._x_ticks(xlo, xhi, rect.width()):
@@ -289,7 +290,7 @@ class ProfilePlot(QWidget):
             half = metrics.horizontalAdvance(label) / 2 + 2
             painter.drawText(
                 QRectF(x - half, rect.bottom() + 4, 2 * half, metrics.height()),
-                Qt.AlignHCenter | Qt.AlignTop,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                 label,
             )
         painter.setPen(QPen(QColor(_AXIS[dark]), 1))
@@ -305,7 +306,7 @@ class ProfilePlot(QWidget):
                     rect.width(),
                     metrics.height(),
                 ),
-                Qt.AlignHCenter,
+                Qt.AlignmentFlag.AlignHCenter,
                 self._x_title,
             )
         if self._y_title:
@@ -314,7 +315,7 @@ class ProfilePlot(QWidget):
             painter.rotate(-90)
             painter.drawText(
                 QRectF(-rect.height() / 2, 0, rect.height(), metrics.height()),
-                Qt.AlignHCenter | Qt.AlignTop,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                 self._y_title,
             )
             painter.restore()
@@ -342,8 +343,16 @@ class ProfilePlot(QWidget):
                     pen_down = True
                     if not (i + 1 < len(finite) and finite[i + 1]):
                         singles.append(point)
-            painter.setPen(QPen(colour, 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-            painter.setBrush(Qt.NoBrush)
+            painter.setPen(
+                QPen(
+                    colour,
+                    2,
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
+                )
+            )
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
             visible = (s.positions >= xlo) & (s.positions <= xhi) & finite
             spacing = np.min(np.diff(xs[visible])) if visible.sum() > 1 else math.inf
@@ -362,7 +371,7 @@ class ProfilePlot(QWidget):
         # Hover: a crosshair and each series' point under it.
         if self._hover is not None and xlo <= self._hover <= xhi:
             x = px(self._hover)
-            painter.setPen(QPen(QColor(_AXIS[dark]), 1, Qt.DashLine))
+            painter.setPen(QPen(QColor(_AXIS[dark]), 1, Qt.PenStyle.DashLine))
             painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
             for s, index in self._hits(self._hover, px):
                 value = float(s.values[index])
@@ -431,7 +440,7 @@ class ProfilePlot(QWidget):
         return "<br>".join(rows)
 
     def mouseMoveEvent(self, event) -> None:
-        pos = event.pos()
+        pos = event_pos(event)
         if self._drag is not None:
             geometry = self._last_geometry
             if geometry is not None:
@@ -444,7 +453,7 @@ class ProfilePlot(QWidget):
         found = self.hover_at(pos.x())
         self._hover = found[0] if found else None
         if found and found[1]:
-            QToolTip.showText(event.globalPos(), self.readout(*found), self)
+            QToolTip.showText(event_global_pos(event), self.readout(*found), self)
         else:
             QToolTip.hideText()
         self.update()
@@ -454,9 +463,9 @@ class ProfilePlot(QWidget):
         self.update()
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton and self.x_range() is not None:
-            self._drag = (event.pos().x(), self.x_range())  # type: ignore[assignment]
-            self.setCursor(Qt.ClosedHandCursor)
+        if event.button() == Qt.MouseButton.LeftButton and self.x_range() is not None:
+            self._drag = (event_pos(event).x(), self.x_range())  # type: ignore[assignment]
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseReleaseEvent(self, _event) -> None:
         self._drag = None
@@ -472,7 +481,7 @@ class ProfilePlot(QWidget):
             return
         rect, _lo, _hi = geometry
         lo, hi = current
-        x = event.position().x() if hasattr(event, "position") else event.pos().x()
+        x = event_pos(event).x()
         anchor = lo + (min(max(x, rect.left()), rect.right()) - rect.left()) / rect.width() * (
             hi - lo
         )

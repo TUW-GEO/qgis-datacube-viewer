@@ -1,6 +1,7 @@
 """Symlink the plugin into a QGIS profile so edits take effect on reload.
 
-    pixi run deploy              # link into the 'default' profile
+    pixi run deploy              # link into QGIS 3's 'default' profile
+    pixi run deploy -- --qgis 4  # QGIS 4 keeps its profiles apart, under QGIS4
     pixi run deploy -- --copy    # copy instead (Windows without developer mode)
     pixi run deploy -- --remove
 
@@ -29,21 +30,22 @@ PACKAGE = "datacube_viewer"
 SOURCE = REPO / PACKAGE
 
 
-def profile_root(profile: str = "default") -> Path:
-    """Where QGIS 3 keeps plugins for ``profile`` on this platform."""
+def profile_root(profile: str = "default", major: int = 3) -> Path:
+    """Where QGIS ``major`` keeps plugins for ``profile`` on this platform.
+
+    QGIS 4 names its folder ``QGIS4``, so the two majors have separate profiles.
+    """
+    app = f"QGIS{major}"
     system = platform.system()
     if system == "Windows":
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
-        base = base / "QGIS/QGIS3/profiles"
+        base = base / "QGIS" / app / "profiles"
     elif system == "Darwin":
-        base = Path.home() / "Library/Application Support/QGIS/QGIS3/profiles"
+        base = Path.home() / "Library/Application Support/QGIS" / app / "profiles"
     else:
         xdg = os.environ.get("XDG_DATA_HOME")
-        base = (
-            Path(xdg) / "QGIS/QGIS3/profiles"
-            if xdg
-            else Path.home() / ".local/share/QGIS/QGIS3/profiles"
-        )
+        base = Path(xdg) if xdg else Path.home() / ".local/share"
+        base = base / "QGIS" / app / "profiles"
     return base / profile / "python/plugins"
 
 
@@ -89,8 +91,8 @@ def check_qgis_dependencies() -> None:
         print("  ? dependency check gave no clear answer; run the plugin to find out")
 
 
-def deploy(profile: str, copy: bool, force: bool) -> int:
-    plugins = profile_root(profile)
+def deploy(profile: str, copy: bool, force: bool, major: int = 3) -> int:
+    plugins = profile_root(profile, major)
     target = plugins / PACKAGE
 
     if not SOURCE.is_dir():
@@ -129,8 +131,8 @@ def deploy(profile: str, copy: bool, force: bool) -> int:
     return 0
 
 
-def remove(profile: str) -> int:
-    target = profile_root(profile) / PACKAGE
+def remove(profile: str, major: int = 3) -> int:
+    target = profile_root(profile, major) / PACKAGE
     if target.is_symlink() or target.is_file():
         target.unlink()
     elif target.is_dir():
@@ -145,14 +147,15 @@ def remove(profile: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default="default")
+    parser.add_argument("--qgis", type=int, choices=(3, 4), default=3, help="QGIS major version")
     parser.add_argument("--copy", action="store_true", help="copy instead of symlink")
     parser.add_argument("--force", action="store_true", help="replace an existing install")
     parser.add_argument("--remove", action="store_true")
     args = parser.parse_args()
 
     if args.remove:
-        return remove(args.profile)
-    return deploy(args.profile, args.copy, args.force)
+        return remove(args.profile, args.qgis)
+    return deploy(args.profile, args.copy, args.force, args.qgis)
 
 
 if __name__ == "__main__":

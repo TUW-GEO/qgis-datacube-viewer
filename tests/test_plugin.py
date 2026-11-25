@@ -245,7 +245,9 @@ def test_right_clicking_a_cube_offers_its_timeseries(plugin, iface, tmp_path) ->
         from qgis.gui import QgsMapMouseEvent
         from qgis.PyQt.QtCore import QEvent, QPoint, Qt
 
-        event = QgsMapMouseEvent(canvas, QEvent.MouseButtonPress, QPoint(1, 1), Qt.RightButton)
+        event = QgsMapMouseEvent(
+            canvas, QEvent.Type.MouseButtonPress, QPoint(1, 1), Qt.MouseButton.RightButton
+        )
         event.setMapPoint(point)
         menu = QMenu()
         canvas.contextMenuAboutToShow.emit(menu, event)
@@ -1114,7 +1116,7 @@ def test_adding_layers_shows_the_wait_cursor_until_they_are_placed(
         [LayerUri(store_uri=store_uri, dataset="conv", bands=(band,)) for band in ("red", "nir")]
     )
     try:
-        assert seen == [Qt.WaitCursor, Qt.WaitCursor]
+        assert seen == [Qt.CursorShape.WaitCursor, Qt.CursorShape.WaitCursor]
         assert QApplication.overrideCursor() is None
     finally:
         for layer in made:

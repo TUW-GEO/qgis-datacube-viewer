@@ -177,7 +177,7 @@ def compose(map_image: QImage, panel: QImage, background: QColor, margin: int) -
     """Map on the left, the sidebar's contents on the right, as in QGIS."""
     width = margin + map_image.width() + margin + panel.width() + margin
     height = margin + max(map_image.height(), panel.height()) + margin
-    out = QImage(width, height, QImage.Format_RGB32)
+    out = QImage(width, height, QImage.Format.Format_RGB32)
     out.fill(background)
     painter = QPainter(out)
     painter.drawImage(margin, margin, map_image)
@@ -195,7 +195,7 @@ class SidebarShot:
         self.window = QMainWindow()
         self.iface = _Iface(layer)
         self.dock = DatacubeDock(self.iface, self.window)
-        self.window.addDockWidget(Qt.RightDockWidgetArea, self.dock)
+        self.window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         self.body: QWidget = self.dock.widget()
         self.body.setFixedWidth(width)
         self.window.resize(width + 40, 900)
@@ -228,7 +228,7 @@ def shot_dialog(out: Path) -> None:
     if not pump(lambda: dialog._store is not None and dialog._dataset is not None):
         raise SystemExit(f"the dialog never connected to {DIALOG_STORE}")
     for row in range(dialog._band_list.count()):
-        dialog._band_list.item(row).setCheckState(Qt.Checked)
+        dialog._band_list.item(row).setCheckState(Qt.CheckState.Checked)
     for name, index in (("sensor", 0), ("time", 0)):
         if name in dialog._axis_pickers:
             dialog._axis_pickers[name].set_value(index)
@@ -262,7 +262,7 @@ def to_pil(image: QImage):
 
     # Held in a name: a temporary from convertToFormat() is freed before
     # constBits() is read, and the first bytes come back as garbage.
-    rgba = image.convertToFormat(QImage.Format_RGBA8888)
+    rgba = image.convertToFormat(QImage.Format.Format_RGBA8888)
     raw = bytes(rgba.constBits().asarray(rgba.sizeInBytes()))
     return Image.frombytes("RGBA", (rgba.width(), rgba.height()), raw).convert("RGB")
 
@@ -328,7 +328,7 @@ def annotate(image: QImage, notes: list[tuple[QRect, str, str]]) -> None:
     device pixel ratio, which is not 1 on every platform.
     """
     painter = QPainter(image)
-    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     font = QFont(painter.font())
     font.setBold(True)
     font.setPointSizeF(font.pointSizeF() * 1.05)
@@ -346,7 +346,7 @@ def annotate(image: QImage, notes: list[tuple[QRect, str, str]]) -> None:
         )
         box = QRectF(rect.adjusted(-5, -4, 5, 4)).intersected(bounds)
         painter.setPen(QPen(ACCENT, 3))
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(box, 6, 6)
 
         width = metrics.horizontalAdvance(text) + 20
@@ -363,7 +363,7 @@ def annotate(image: QImage, notes: list[tuple[QRect, str, str]]) -> None:
         # Arrowhead on the box, pointing into it.
         tip = box.left() if side == "left" else box.right()
         back = -11 if side == "left" else 11
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(ACCENT)
         painter.drawPolygon(
             QPolygonF(
@@ -376,7 +376,7 @@ def annotate(image: QImage, notes: list[tuple[QRect, str, str]]) -> None:
         )
         painter.drawRoundedRect(label, height / 2, height / 2)
         painter.setPen(QColor("white"))
-        painter.drawText(label, Qt.AlignCenter, text)
+        painter.drawText(label, Qt.AlignmentFlag.AlignCenter, text)
     painter.end()
 
 
@@ -402,7 +402,7 @@ class _Session:
         self.dock = self.plugin._cube_dock
         if self.dock is None or self.dock.isHidden():
             raise RuntimeError("the slider sidebar did not open")
-        self.window.resizeDocks([self.dock], [GIF_SIDEBAR_WIDTH], Qt.Horizontal)
+        self.window.resizeDocks([self.dock], [GIF_SIDEBAR_WIDTH], Qt.Orientation.Horizontal)
         self.versions = self.dock.versions()
         if not self.versions.isHidden() and not pump(lambda: self.versions._slider.isEnabled()):
             raise RuntimeError("the Icechunk history never arrived")
