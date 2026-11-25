@@ -62,7 +62,21 @@ server=False
 ; supportsQt6=True
 
 hasProcessingProvider=no
-changelog=0.3.1
+changelog=0.4.0
+    - Exact colour range: a new layer's range comes from every pixel at full
+      resolution, computed in the background with progress in the QGIS task
+      bar. A cube past 100 million pixels is read from whole slices spread
+      evenly through it, and the cube panel says how many. "Full scan of
+      every slice" in the dialog and the panel reads everything regardless.
+    - The legend's colour bar shows <= or >= at an end where the slice on
+      screen goes past the range.
+    - Settings > Options > Datacube Viewer sets the default method (min/max,
+      cumulative count cut, mean +- std dev), the accuracy (exact or
+      estimated) and the pixel budget. Each layer's own Symbology settings
+      win over them.
+    - Bilinear resampling next to nodata draws a pixel when any neighbour
+      has data, as GDAL does. "Bilinear next to nodata" in the options asks
+      for half or all of them instead.
     - Fix: scaled variables (CF scale_factor / add_offset) show physical
       values everywhere, not only on the map. Statistics, the colour range
       and Identify no longer work on the stored integers.
