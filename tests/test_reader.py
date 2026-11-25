@@ -14,7 +14,7 @@ from datacube_viewer.core import (
     open_store,
 )
 from datacube_viewer.core.errors import ReadError
-from datacube_viewer.core.reader import ReaderConfig
+from datacube_viewer.core.reader import ReaderConfig, _bilinear, _block_mean
 from tests.fixture_store import _pattern
 
 
@@ -317,11 +317,13 @@ def _read_dn(handle, store, nodata):
 
 def test_nodata_override_masks_exactly_those_values(handle, store) -> None:
     baseline = _read_dn(handle, store, None)
-    low, high = int(baseline.data.min()), int(baseline.data.max())
+    # The reader returns physical values (dn * 0.1 + 5); nodata is in stored units.
+    stored = np.rint((baseline.data[0] - 5.0) / 0.1).astype(int)
+    low, high = int(stored.min()), int(stored.max())
 
     result = _read_dn(handle, store, (float(low), float(high)))
 
-    np.testing.assert_array_equal(result.mask, ~np.isin(baseline.data[0], (low, high)))
+    np.testing.assert_array_equal(result.mask, ~np.isin(stored, (low, high)))
     assert not result.mask.all()
 
 
@@ -456,3 +458,33 @@ def test_read_overview_preserves_aspect_ratio(handle, store) -> None:
     result = reader.read_overview(("red",), max_size=64, indices=DATA_T)
     assert max(result.data.shape[1:]) == 64
     assert result.data.shape[1] == result.data.shape[2]  # the fixture is square
+
+
+def test_scale_factor_and_add_offset_are_applied_once(handle, store) -> None:
+    """``plain/dn`` stores ``x * 3`` with scale 0.1 and offset 5: reads are physical."""
+    result = _read_dn(handle, store, None)
+    assert result.data.dtype == np.float32
+    expected = np.broadcast_to(np.arange(48) * 3 * 0.1 + 5.0, (48, 48))
+    np.testing.assert_allclose(result.data[0], expected, rtol=1e-6)
+
+
+def test_average_leaves_fill_values_out_of_the_mean() -> None:
+    """A fill value must not be blended into a real pixel next to it.
+
+    Masking after resampling cannot catch this: (65535 + 3 * 15000) / 4 matches no
+    fill value, so the mean of half ocean, half land passed as a 400 K pixel.
+    """
+    fill = 65535
+    data = np.array([[fill, 15000, fill, fill], [15000, 15000, fill, fill]], dtype=np.uint16)
+    mean, valid = _block_mean(data, 2, 2, data != fill)
+    np.testing.assert_array_equal(mean, [[15000, 0]])
+    np.testing.assert_array_equal(valid, [[True, False]])
+
+
+def test_bilinear_renormalises_over_valid_corners() -> None:
+    data = np.array([[10.0, 10.0], [10.0, 1e6]], dtype=np.float32)
+    valid = np.array([[True, True], [True, False]])
+    half = np.array([0.5], dtype=np.float32)
+    out, ok = _bilinear(data, np.array([0]), np.array([0]), half, half, valid)
+    np.testing.assert_allclose(out, [[10.0]])
+    assert ok.all()  # three of four corners, 75 % of the weight

@@ -127,8 +127,9 @@ def test_pixels_match_zarr(nc_path, zarr_path, clean_handle_cache) -> None:
         )
         results.append(DatasetReader(handle, dataset).read(request).data)
     np.testing.assert_array_equal(results[0], results[1])
-    # Raw values: scale_factor is the reader's job, so it must not have been applied.
-    np.testing.assert_array_equal(results[0][0], DATA[1])
+    # scale_factor (2.0) applied exactly once, by the reader: netCDF4's own
+    # auto-scaling would have doubled it a second time.
+    np.testing.assert_array_equal(results[0][0], DATA[1] * 2.0)
 
 
 def test_structured_attributes_are_decoded(tmp_path, clean_handle_cache) -> None:

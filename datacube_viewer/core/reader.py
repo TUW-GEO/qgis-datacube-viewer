@@ -22,7 +22,7 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
@@ -81,7 +81,9 @@ class ReadRequest:
 class ReadResult:
     """Pixels for one request, already on the requested grid."""
 
-    #: ``(len(variables), height, width)``, dtype as stored.
+    #: ``(len(variables), height, width)``, in physical units: CF ``scale_factor``
+    #: and ``add_offset`` are applied (as float32) where a variable declares them,
+    #: otherwise the dtype is as stored.
     data: np.ndarray
     #: ``(height, width)`` bool, True where the pixel is real data.
     mask: np.ndarray
@@ -322,7 +324,8 @@ class DatasetReader:
             raise ReadError("No variables requested.")
 
         level, budget_limited = self.choose_level(request)
-        dtype = np.dtype(self.variable_info(request.variables[0], level).dtype)
+        first = self.variable_info(request.variables[0], level)
+        dtype = np.dtype(np.float32) if first.needs_scaling else np.dtype(first.dtype)
 
         window = self._source_window(level, request.bounds)
         if window.is_empty or not request.bounds.intersects(level.bbox):
@@ -347,17 +350,24 @@ class DatasetReader:
             request.resampling,
         )
 
+        # Nodata is masked on the *source* pixels, before resampling. Masking after
+        # would let "average" and "bilinear" blend fill values into their real
+        # neighbours: a uint16 coastline pixel half ocean (65535) and half land
+        # (~15000) averages to ~40000, which matches no fill value and passes as data.
         planes = []
-        for variable in request.variables:
-            source = self._read_source(level, variable, window, request.indices)
-            planes.append(sampler.apply(source))
-        data = np.stack(planes, axis=0)
-
         mask = sampler.coverage.copy()
-        for band_index, variable in enumerate(request.variables):
-            declared = self.variable_info(variable, level).nodata
-            for nodata in resolve_nodata(declared, self.nodata):
-                mask &= ~_isclose_to(data[band_index], nodata)
+        for variable in request.variables:
+            info = self.variable_info(variable, level)
+            source = self._read_source(level, variable, window, request.indices)
+            plane, valid = sampler.apply(source, _source_validity(source, info, self.nodata))
+            if valid is not None:
+                mask &= valid
+            if info.needs_scaling:
+                plane = _apply_scaling(plane, info)
+            elif plane.dtype != source.dtype:
+                plane = _round_to(plane, source.dtype)
+            planes.append(plane)
+        data = np.stack(planes, axis=0)
 
         return ReadResult(
             data=data,
@@ -420,6 +430,43 @@ def _isclose_to(data: np.ndarray, value: float) -> np.ndarray:
     if data.dtype.kind == "b":
         return data == np.asarray(value).astype(data.dtype)
     return np.isclose(data, value, rtol=0.0, atol=1e-9, equal_nan=True)
+
+
+def _source_validity(
+    source: np.ndarray, info: VariableInfo, override: tuple[float, ...] | None
+) -> np.ndarray | None:
+    """True where a source pixel is real data, or ``None`` when all of them are.
+
+    Values are compared in stored units, before scaling, like ``_FillValue``
+    itself. A non-finite float is never data, declared or not.
+    """
+    invalid = None
+    for nodata in resolve_nodata(info.nodata, override):
+        hit = _isclose_to(source, nodata)
+        invalid = hit if invalid is None else invalid | hit
+    if source.dtype.kind == "f":
+        hit = ~np.isfinite(source)
+        invalid = hit if invalid is None else invalid | hit
+    if invalid is None or not invalid.any():
+        return None
+    return ~invalid
+
+
+def _apply_scaling(plane: np.ndarray, info: VariableInfo) -> np.ndarray:
+    """CF ``scale_factor``/``add_offset``, applied once, in float32."""
+    return plane.astype(np.float32, copy=False) * np.float32(info.scale_factor) + np.float32(
+        info.add_offset
+    )
+
+
+def _round_to(plane: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """Back to the stored dtype after a float resampling step."""
+    if dtype.kind in "iub":
+        if dtype.kind == "b":
+            return np.rint(plane) != 0
+        limits = np.iinfo(dtype)
+        return np.rint(np.clip(plane, limits.min, limits.max)).astype(dtype)
+    return plane.astype(dtype, copy=False)
 
 
 # ----------------------------------------------------------------------- sampling
@@ -562,9 +609,20 @@ class _Sampler:
         )
 
     # -- application -----------------------------------------------------
-    def apply(self, source: np.ndarray) -> np.ndarray:
+    def apply(
+        self, source: np.ndarray, valid: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        """Resample ``source`` onto the output grid.
+
+        ``valid`` marks the source pixels that are real data (``None``: all are).
+        Invalid pixels take no part in "average" or "bilinear", so a fill value
+        never leaks into its neighbours. Returns the plane and, when ``valid`` was
+        given, which output pixels have data behind them. "nearest" keeps the source
+        dtype; the other two return float32, which the caller rounds or scales.
+        """
         if self.grid_rows is not None and self.grid_cols is not None:
-            return source[self.grid_rows, self.grid_cols]
+            picked = source[self.grid_rows, self.grid_cols]
+            return picked, None if valid is None else valid[self.grid_rows, self.grid_cols]
 
         # Not an assert: those are stripped under `python -O`, and QGIS is started
         # with PYTHONOPTIMIZE set on some packagings. Without the check the separable
@@ -578,26 +636,36 @@ class _Sampler:
         block = source
         pre_y, pre_x = self.pre_factor
         if pre_y > 1 or pre_x > 1:
-            block = _block_mean(block, pre_y, pre_x)
+            block, valid = _block_mean(block, pre_y, pre_x, valid)
 
         if self.method == "bilinear" and self.row_frac is not None and self.col_frac is not None:
-            return _bilinear(block, self.rows, self.cols, self.row_frac, self.col_frac)
-        return block[np.ix_(self.rows, self.cols)]
+            return _bilinear(block, self.rows, self.cols, self.row_frac, self.col_frac, valid)
+        index = np.ix_(self.rows, self.cols)
+        return block[index], None if valid is None else valid[index]
 
 
-def _block_mean(data: np.ndarray, fy: int, fx: int) -> np.ndarray:
-    """Integer block mean, trimming any partial trailing block."""
+def _block_mean(
+    data: np.ndarray, fy: int, fx: int, valid: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Integer block mean over the valid pixels, trimming any partial trailing block.
+
+    A block with no valid pixel is itself invalid (and holds 0).
+    """
     height = (data.shape[0] // fy) * fy
     width = (data.shape[1] // fx) * fx
     if height == 0 or width == 0:
-        return data
+        return data, valid
+    shape = (height // fy, fy, width // fx, fx)
     trimmed = data[:height, :width]
-    # float32 keeps the intermediate small; uint8/uint16 imagery loses nothing.
-    accum = trimmed.astype(np.float32, copy=False)
-    reduced = accum.reshape(height // fy, fy, width // fx, fx).mean(axis=(1, 3))
-    if data.dtype.kind in "iub":
-        return np.rint(reduced).astype(data.dtype)
-    return reduced.astype(data.dtype, copy=False)
+    if valid is None:
+        # float32 keeps the intermediate small; uint8/uint16 imagery loses nothing.
+        return trimmed.astype(np.float32, copy=False).reshape(shape).mean(axis=(1, 3)), None
+    ok = valid[:height, :width]
+    values = np.where(ok, trimmed, 0).reshape(shape)
+    total = values.sum(axis=(1, 3), dtype=np.float64)
+    count = ok.reshape(shape).sum(axis=(1, 3))
+    mean = np.divide(total, count, out=np.zeros_like(total), where=count > 0)
+    return mean.astype(np.float32), count > 0
 
 
 def _bilinear(
@@ -606,33 +674,37 @@ def _bilinear(
     cols: np.ndarray,
     row_frac: np.ndarray,
     col_frac: np.ndarray,
-) -> np.ndarray:
+    valid: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Bilinear interpolation, in float32.
+
+    With ``valid``, the weights are renormalised over the valid corners, and an
+    output pixel counts as data when at least half its weight is (roughly: when
+    nearest-neighbour would have picked a valid pixel).
+    """
     r0 = rows
     r1 = np.minimum(rows + 1, data.shape[0] - 1)
     c0 = cols
     c1 = np.minimum(cols + 1, data.shape[1] - 1)
-
-    work = data.astype(np.float32, copy=False)
-    top_left = work[np.ix_(r0, c0)]
-    top_right = work[np.ix_(r0, c1)]
-    bottom_left = work[np.ix_(r1, c0)]
-    bottom_right = work[np.ix_(r1, c1)]
+    corners = [(r0, c0), (r0, c1), (r1, c0), (r1, c1)]
 
     fx = col_frac[None, :]
     fy = row_frac[:, None]
-    top = top_left + (top_right - top_left) * fx
-    bottom = bottom_left + (bottom_right - bottom_left) * fx
-    out = top + (bottom - top) * fy
+    work = data.astype(np.float32, copy=False)
 
-    if data.dtype.kind in "iub":
-        info = np.iinfo(data.dtype)
-        return np.rint(np.clip(out, info.min, info.max)).astype(data.dtype)
-    return out.astype(data.dtype, copy=False)
+    if valid is None:
+        top_left, top_right, bottom_left, bottom_right = (work[np.ix_(r, c)] for r, c in corners)
+        top = top_left + (top_right - top_left) * fx
+        bottom = bottom_left + (bottom_right - bottom_left) * fx
+        return top + (bottom - top) * fy, None
 
-
-def scale_and_offset(result: ReadResult, info: VariableInfo) -> ReadResult:
-    """Apply CF ``scale_factor``/``add_offset``, promoting to float32."""
-    if not info.needs_scaling:
-        return result
-    scaled = result.data.astype(np.float32) * info.scale_factor + info.add_offset
-    return replace(result, data=scaled)
+    weights = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy]
+    total = np.zeros((rows.size, cols.size), dtype=np.float32)
+    weight = np.zeros_like(total)
+    for (r, c), w in zip(corners, weights):
+        ok = valid[np.ix_(r, c)]
+        w = np.where(ok, w, np.float32(0))
+        total += np.where(ok, work[np.ix_(r, c)], np.float32(0)) * w
+        weight += w
+    out = np.divide(total, weight, out=np.zeros_like(total), where=weight > 0)
+    return out, weight >= 0.5

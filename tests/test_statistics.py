@@ -336,3 +336,23 @@ def test_fit_to_cube_fixes_the_range_it_computes(layer) -> None:
     assert fit_to_cube(layer)
     assert not has_auto_limits(layer)
     assert current_stretch(layer) is not None
+
+
+def test_statistics_are_in_physical_units(qgis_app, fixture_info: FixtureInfo) -> None:
+    """``plain/dn`` stores 0..141 with scale 0.1 and offset 5, so 5.0..19.1.
+
+    The render path scaled but statistics read stored values, so the stretch for a
+    scaled variable sat a factor of ``1 / scale_factor`` off the pixels it stretched.
+    """
+    scaled = create_layer(
+        LayerUri(
+            store_uri=fixture_info.path,
+            dataset="plain",
+            bands=("dn",),
+            crs_override="EPSG:25832",
+        ),
+        "scaled",
+    )
+    assert scaled.isValid(), scaled.customProperty(ERROR_PROPERTY, "")
+    stats = _stats(scaled)
+    assert 5.0 <= stats.minimumValue < stats.maximumValue <= 19.1 + 1e-4

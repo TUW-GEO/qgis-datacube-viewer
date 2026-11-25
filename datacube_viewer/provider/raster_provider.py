@@ -464,12 +464,8 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
         if feedback is not None and feedback.isCanceled():
             return self._empty_block(qtype, width, height)
 
-        info = view.dataset.variable(variable)
-        data = result.data[0]
-        if info is not None and info.needs_scaling:
-            data = data.astype(np.float32) * info.scale_factor + info.add_offset
-
-        return self._to_block(qtype, data, result.mask, self.sourceNoDataValue(bandNo))
+        # Already in physical units: the reader applies scale_factor/add_offset.
+        return self._to_block(qtype, result.data[0], result.mask, self.sourceNoDataValue(bandNo))
 
     def _to_block(
         self,
