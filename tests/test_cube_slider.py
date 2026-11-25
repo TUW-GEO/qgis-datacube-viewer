@@ -63,8 +63,7 @@ def marker(widget):
 
 
 def per_step(widget):
-    low, high = widget._span()
-    return (high - low) / (widget.maximum() - widget.minimum())
+    return widget._pixels_per_step()
 
 
 def test_the_playhead_starts_at_the_lower_end(slider) -> None:
@@ -153,3 +152,49 @@ def test_shift_drag_still_moves_the_whole_range(slider) -> None:
 
 def test_the_marker_has_room_above_the_groove(slider) -> None:
     assert slider._handle_rect(0).top() >= MARKER_SIZE
+
+
+# ------------------------------------------------- long axes: below a pixel
+@pytest.fixture
+def long_slider(qgis_app):
+    """Several steps per pixel, like a daily axis over decades."""
+    widget = CubeRangeSlider()
+    widget.setRangeLimits(0, 4999)
+    widget.setRange(0, 4999)
+    widget.resize(420, widget.sizeHint().height())
+    widget.show()
+    QgsApplication.processEvents()
+    yield widget
+    widget.close()
+    widget.deleteLater()
+    QgsApplication.processEvents()
+
+
+def crawl(widget, start, pixels, read, modifiers=Qt.ControlModifier):
+    """Drag one pixel at a time and record ``read()`` after every move."""
+    x, y = start
+    send(widget, QEvent.MouseButtonPress, x, y, modifiers=modifiers)
+    seen = [read()]
+    for i in range(1, pixels + 1):
+        send(widget, QEvent.MouseMove, x + i, y, modifiers=modifiers)
+        seen.append(read())
+    send(widget, QEvent.MouseButtonRelease, x + pixels, y, modifiers=modifiers)
+    return seen
+
+
+@pytest.mark.parametrize("what", ["playhead", "lower", "upper"])
+def test_ctrl_drag_visits_every_step_on_a_long_axis(long_slider, what) -> None:
+    assert per_step(long_slider) < 1, "the fixture is meant to have several steps per pixel"
+    long_slider.setRange(1000, 3000)
+    long_slider.setCurrent(2000)
+    if what == "playhead":
+        start, read, sign = marker(long_slider), long_slider.current, 1
+    elif what == "lower":
+        start, read, sign = handle_centre(long_slider, 1000), long_slider.lowerValue, 1
+    else:
+        start, read, sign = handle_centre(long_slider, 3000), long_slider.upperValue, 1
+    pixels = 6 * FINE_PIXELS_PER_STEP
+    seen = crawl(long_slider, start, sign * pixels, read)
+    steps = [b - a for a, b in zip(seen, seen[1:])]
+    assert set(steps) <= {0, 1}, f"skipped steps: {steps}"
+    assert seen[-1] - seen[0] == 6

@@ -1,19 +1,26 @@
 """A range slider with a playhead: which steps to keep, and which one to open on.
 
-:class:`CubeRangeSlider` is QGIS's own ``QgsRangeSlider`` with two additions, and
-everything else (painting the groove, the range and both handles, the value model,
-``rangeChanged``, dragging, keyboard) left to it:
+:class:`CubeRangeSlider` is QGIS's own ``QgsRangeSlider`` with two additions. The
+painting of the groove, the range and both handles, the hover highlight, the value
+model with ``rangeChanged``, and the keyboard are left to it.
 
 * **A playhead**: a thin line with a marker above the groove, for the step the
   layer opens on. It always stays inside the range; moving an end past it pushes it
   along. It is grabbed by its marker, which no handle covers, or by its line where
-  no handle is. In the groove, a handle wins, so the built-in drags are unchanged.
+  no handle is. In the groove, a handle wins.
 * **Fine dragging**: Ctrl held while dragging slows the movement down to
-  :data:`FINE_PIXELS_PER_STEP` pixels per step, for the playhead and for the
-  built-in drags alike. Ctrl, because Shift+drag on a handle is already the
-  built-in "move the whole range". The built-in drags are slowed down by handing
-  ``QgsRangeSlider`` a mouse position that moves less than the real one, so all of
-  its own logic applies.
+  :data:`FINE_PIXELS_PER_STEP` pixels per step, for the ends, the whole range and
+  the playhead alike. Ctrl, because Shift+drag on an end is already the built-in
+  "move the whole range".
+
+Fine dragging is why the drags themselves are done here rather than by
+``QgsRangeSlider``: it maps whole pixels to values, so on an axis with more steps
+than pixels it can never land on most of them, however slowly the pointer moves.
+Here a drag is followed in steps instead, as a fraction that whole pixels add up
+to. Which part a press grabs follows ``QgsRangeSlider::mousePressEvent`` (an end,
+two ends on top of each other, Shift on an end or a press between the ends for the
+whole range), and the press is still handed to it, so it shows the grabbed handle
+pressed and points its keys at it.
 
 Keys stay as ``QgsRangeSlider`` has them, moving the ends. Driving the playhead
 from the keyboard as well would put the built-in focus frame, which always marks
@@ -25,8 +32,10 @@ separate control for the playhead is the way back.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from qgis.gui import QgsRangeSlider
-from qgis.PyQt.QtCore import QEvent, QPoint, QPointF, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QEvent, QPoint, QPointF, QRect, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QMouseEvent, QPainter, QPalette, QPen, QPolygonF
 from qgis.PyQt.QtWidgets import QStyle, QStyleOptionSlider
 
@@ -41,12 +50,20 @@ MARKER_SIZE = 7
 LINE_GRAB = 3
 
 
-def _move_event(source: QMouseEvent, x: float) -> QMouseEvent:
-    """``source`` moved to ``x``, for handing to ``QgsRangeSlider``."""
-    position = QPointF(x, source.pos().y())
-    return QMouseEvent(
-        QEvent.MouseMove, position, source.button(), source.buttons(), source.modifiers()
-    )
+@dataclass
+class _Drag:
+    """One drag, followed in steps rather than pixels."""
+
+    #: "current", "lower", "upper", "both" (ends on top of each other, until the
+    #: direction picks one) or "range".
+    part: str
+    #: The values when the drag started.
+    lower: int
+    upper: int
+    current: int
+    #: How far the pointer has moved, in steps, fractions kept.
+    travel: float = 0.0
+    last_x: int = 0
 
 
 class CubeRangeSlider(QgsRangeSlider):
@@ -58,13 +75,7 @@ class CubeRangeSlider(QgsRangeSlider):
     def __init__(self, parent=None):
         super().__init__(Qt.Horizontal, parent)
         self._current = 0
-        #: Set while the playhead is being dragged: the pixel offset of the grab
-        #: from the line, so the line does not jump to the pointer.
-        self._grab_offset: float | None = None
-        #: The pointer position this widget acts on: the real one, except that it
-        #: moves less while Ctrl is held. See _virtual_move.
-        self._virtual_x = 0.0
-        self._last_x = 0
+        self._drag: _Drag | None = None
         self.rangeChanged.connect(lambda _low, _high: self._keep_current_inside())
         self.setToolTip(
             "\n".join(
@@ -72,7 +83,7 @@ class CubeRangeSlider(QgsRangeSlider):
                     "Drag the ends to choose the steps to keep, and the marker on top",
                     "for the step to open on.",
                     "",
-                    "Ctrl+drag: fine, one step per few pixels.",
+                    f"Ctrl+drag: fine, one step per {FINE_PIXELS_PER_STEP} pixels.",
                     "Shift+drag on an end, or drag between the ends: move the whole range.",
                 )
             )
@@ -107,46 +118,65 @@ class CubeRangeSlider(QgsRangeSlider):
         option.subControls = QStyle.SC_All
         return option
 
-    def _handle_rect(self, value: int):
+    def _handle_rect(self, value: int) -> QRect:
         return self.style().subControlRect(
             QStyle.CC_Slider, self._option(value), QStyle.SC_SliderHandle, self
         )
 
-    def _span(self) -> tuple[int, int]:
-        """Where the handle's left edge can go, as ``QgsRangeSlider`` computes it."""
+    def _over_handle(self, value: int, pos: QPoint) -> bool:
+        hit = self.style().hitTestComplexControl(QStyle.CC_Slider, self._option(value), pos, self)
+        return hit == QStyle.SC_SliderHandle
+
+    def _selected_rect(self) -> QRect:
+        """The groove between the ends, as ``QgsRangeSlider::selectedRangeRect``."""
+        lower, upper = self._handle_rect(self.lowerValue()), self._handle_rect(self.upperValue())
+        groove = self.style().subControlRect(
+            QStyle.CC_Slider, self._option(self.minimum()), QStyle.SC_SliderGroove, self
+        )
+        rect = QRect(lower.right(), groove.y(), upper.left() - lower.right(), groove.height())
+        return rect.adjusted(-1, 1, 1, -1)
+
+    def _pixels_per_step(self) -> float:
+        """How far a handle moves per step, as ``QgsRangeSlider`` lays them out."""
         option = self._option(self.minimum())
         groove = self.style().subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderGroove, self)
-        length = self._handle_rect(self.minimum()).width()
-        return groove.x(), groove.right() - length + 1
-
-    def _value_at(self, x: float) -> int:
-        """The value whose handle's left edge is at ``x``: ``pixelPosToRangeValue``."""
-        low, high = self._span()
-        return QStyle.sliderValueFromPosition(
-            self.minimum(), self.maximum(), round(x) - low, high - low
-        )
+        travel = groove.width() - self._handle_rect(self.minimum()).width()
+        return max(travel, 1) / max(self.maximum() - self.minimum(), 1)
 
     def playhead_x(self) -> float:
         """Where the playhead line is drawn: the centre of a handle at the current step."""
         return self._handle_rect(self._current).center().x() + 0.5
 
-    def _fine_factor(self) -> float:
-        """How much Ctrl slows the pointer down by."""
-        low, high = self._span()
-        steps = max(self.maximum() - self.minimum(), 1)
-        per_step = (high - low) / steps
-        return max(1.0, FINE_PIXELS_PER_STEP / per_step) if per_step > 0 else 1.0
-
     def _on_playhead(self, pos: QPoint) -> bool:
         """Whether ``pos`` grabs the playhead: its marker, or its line clear of a handle."""
         x = self.playhead_x()
-        groove_top = self._handle_rect(self._current).top()
-        if pos.y() < groove_top and abs(pos.x() - x) <= MARKER_SIZE:
+        if pos.y() < self._handle_rect(self._current).top() and abs(pos.x() - x) <= MARKER_SIZE:
             return True
         if abs(pos.x() - x) > LINE_GRAB:
             return False
-        handles = (self._handle_rect(self.lowerValue()), self._handle_rect(self.upperValue()))
-        return not any(rect.contains(pos) for rect in handles)
+        return not (
+            self._handle_rect(self.lowerValue()).contains(pos)
+            or self._handle_rect(self.upperValue()).contains(pos)
+        )
+
+    def _part_at(self, event: QMouseEvent) -> str | None:
+        """What a press grabs, in the order ``QgsRangeSlider`` decides it."""
+        pos = event.pos()
+        if self._on_playhead(pos):
+            return "current"
+        over_lower = self._over_handle(self.lowerValue(), pos)
+        over_upper = self._over_handle(self.upperValue(), pos)
+        if (over_lower or over_upper) and event.modifiers() & Qt.ShiftModifier:
+            return "range"
+        if over_lower and over_upper:
+            return "both"
+        if over_lower:
+            return "lower"
+        if over_upper:
+            return "upper"
+        if self._selected_rect().contains(pos):
+            return "range"
+        return None
 
     # ----------------------------------------------------------------- sizes
     def sizeHint(self):
@@ -194,53 +224,70 @@ class CubeRangeSlider(QgsRangeSlider):
         # playhead it would leave the plain arrow.
         if (
             event.type() in (QEvent.HoverMove, QEvent.HoverEnter)
-            and self._grab_offset is None
+            and self._drag is None
             and self._on_playhead(event.pos())
         ):
             self.setCursor(Qt.SizeHorCursor)
         return handled
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        self._virtual_x = float(event.pos().x())
-        self._last_x = event.pos().x()
-        if (
-            event.button() == Qt.LeftButton
-            and self.minimum() != self.maximum()
-            and self._on_playhead(event.pos())
-        ):
-            self._grab_offset = event.pos().x() - self.playhead_x()
-            event.accept()
+        part = None
+        if event.button() == Qt.LeftButton and self.minimum() != self.maximum():
+            part = self._part_at(event)
+        if part is None:
+            self._drag = None
+            super().mousePressEvent(event)
             return
-        super().mousePressEvent(event)
-
-    def _virtual_move(self, event: QMouseEvent) -> float:
-        """Advance the acted-on pointer: as far as the real one, or less with Ctrl.
-
-        Accumulated move by move rather than scaled from the press, so pressing or
-        letting go of Ctrl part-way through a drag carries on from where the handle
-        is instead of jumping.
-        """
-        moved = event.pos().x() - self._last_x
-        self._last_x = event.pos().x()
-        fine = bool(event.modifiers() & Qt.ControlModifier)
-        self._virtual_x += moved / self._fine_factor() if fine else moved
-        return self._virtual_x
+        self._drag = _Drag(
+            part, self.lowerValue(), self.upperValue(), self._current, last_x=event.pos().x()
+        )
+        if part == "current":
+            event.accept()
+        else:
+            # Only for what it shows: the grabbed handle pressed, and the keys
+            # pointed at it. The moves that follow are not handed on.
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if not event.buttons() & Qt.LeftButton:
+        drag = self._drag
+        if drag is None or not event.buttons() & Qt.LeftButton:
             super().mouseMoveEvent(event)
             return
-        x = self._virtual_move(event)
-        if self._grab_offset is not None:
-            left = x - self._grab_offset - self._handle_rect(self._current).width() / 2
-            self.setCurrent(self._value_at(left))
-            event.accept()
-            return
-        super().mouseMoveEvent(_move_event(event, x))
+        event.accept()
+        moved = event.pos().x() - drag.last_x
+        drag.last_x = event.pos().x()
+        # Steps rather than pixels, with the fraction kept: whole pixels would
+        # skip steps on an axis with more steps than pixels. Accumulated move by
+        # move, so pressing or letting go of Ctrl carries on from where things are.
+        per_step = self._pixels_per_step()
+        if event.modifiers() & Qt.ControlModifier:
+            per_step = max(per_step, FINE_PIXELS_PER_STEP)
+        drag.travel += moved / per_step
+        self._apply(drag, round(drag.travel))
+
+    def _apply(self, drag: _Drag, steps: int) -> None:
+        low, high = self.minimum(), self.maximum()
+        part = drag.part
+        if part == "both":
+            # Two ends on top of each other: the direction picks one, as in
+            # QgsRangeSlider, and the other goes back to where it started.
+            part = "lower" if steps < 0 else "upper" if steps > 0 else None
+            self.setRange(drag.lower, drag.upper)
+        if part == "current":
+            self.setCurrent(drag.current + steps)
+        elif part == "lower":
+            self.setLowerValue(max(low, min(drag.lower + steps, self.upperValue())))
+        elif part == "upper":
+            self.setUpperValue(min(high, max(drag.upper + steps, self.lowerValue())))
+        elif part == "range":
+            steps = max(low - drag.lower, min(steps, high - drag.upper))
+            self.setRange(drag.lower + steps, drag.upper + steps)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if self._grab_offset is not None and event.button() == Qt.LeftButton:
-            self._grab_offset = None
+        part = self._drag.part if self._drag is not None else None
+        if event.button() == Qt.LeftButton:
+            self._drag = None
+        if part == "current":
             event.accept()
             return
         super().mouseReleaseEvent(event)
