@@ -396,34 +396,44 @@ def dialog(qgis_app, cube_path):
     QgsApplication.processEvents()
 
 
-def test_a_named_axis_gets_tick_boxes_and_a_scale_a_range_slider(dialog) -> None:
+def test_a_named_axis_gets_dropdowns_and_a_scale_a_playhead_slider(dialog) -> None:
     sensor, time_ = dialog._axis_pickers["sensor"], dialog._axis_pickers["time"]
-    assert [tick.text() for tick in sensor._ticks] == list(SENSORS)
-    assert sensor._range is None
-    assert time_._range is not None and not time_._ticks
-    assert (time_._range.lowerValue(), time_._range.upperValue()) == (0, STEPS - 1)
+    assert [sensor._keep.itemText(i) for i in range(sensor._keep.count())] == list(SENSORS)
+    assert sensor._slider is None and sensor._combo is not None
+    assert time_._slider is not None and time_._combo is None
+    slider = time_._slider
+    assert (slider.lowerValue(), slider.upperValue(), slider.current()) == (0, STEPS - 1, 0)
 
 
 def test_by_default_the_dialog_keeps_the_whole_cube(dialog) -> None:
     assert dialog.build_uri().subset == {}
 
 
-def test_narrowing_the_range_narrows_the_slice_choices(dialog) -> None:
+def test_narrowing_the_range_pushes_the_playhead_along(dialog) -> None:
     picker = dialog._axis_pickers["time"]
     picker.set_value(5)
-    picker._range.setRange(1, 3)
-    assert picker._combo.count() == 3
-    assert picker.value() == 3, "the slice moved to the nearest step kept"
+    picker._slider.setRange(1, 3)
+    assert picker.value() == 3, "the playhead was pushed inside the range"
     uri = dialog.build_uri()
     assert uri.subset == {"time": (1, 2, 3)}
     assert uri.indices["time"] == 3
+    assert "opens at" in picker._note.text() and "3 of 6" in picker._note.text()
     assert dialog._add_button.isEnabled()
 
 
+def test_the_playhead_sets_the_slice_to_open_on(dialog) -> None:
+    picker = dialog._axis_pickers["time"]
+    picker._slider.setCurrent(4)
+    assert dialog.build_uri().indices["time"] == 4
+    assert picker.axis.label_at(4) in picker._note.text()
+
+
 def test_unticking_a_sensor_drops_it(dialog) -> None:
+    from qgis.PyQt.QtCore import Qt
+
     picker = dialog._axis_pickers["sensor"]
     picker.set_value(1)
-    picker._ticks[1].setChecked(False)
+    picker._keep.setItemCheckState(1, Qt.Unchecked)
     assert [picker._combo.itemText(i) for i in range(picker._combo.count())] == ["AMSR2", "SMAP"]
     assert picker.value() in (0, 2)
     assert dialog.build_uri().subset == {"sensor": (0, 2)}
@@ -431,12 +441,14 @@ def test_unticking_a_sensor_drops_it(dialog) -> None:
 
 
 def test_unticking_every_sensor_blocks_adding(dialog) -> None:
+    from qgis.PyQt.QtCore import Qt
+
     picker = dialog._axis_pickers["sensor"]
-    for tick in picker._ticks:
-        tick.setChecked(False)
+    for i in range(len(SENSORS)):
+        picker._keep.setItemCheckState(i, Qt.Unchecked)
     assert not dialog._add_button.isEnabled()
     assert "keeps nothing" in dialog._messages.toPlainText()
-    picker._ticks[2].setChecked(True)
+    picker._keep.setItemCheckState(2, Qt.Checked)
     assert dialog._add_button.isEnabled()
     assert dialog.build_uri().indices["sensor"] == 2
 
@@ -462,8 +474,8 @@ def test_the_layer_added_carries_the_subset(dialog) -> None:
     assert decode_uri(uri.encode()).subset == uri.subset
 
 
-def test_a_long_axis_spin_box_stays_inside_the_range(qgis_app, tmp_path) -> None:
-    """Past 366 steps the slice is a spin box, which the range has to bound."""
+def test_a_long_axis_gets_the_same_slider(qgis_app, tmp_path) -> None:
+    """No counter past 366 steps any more: the playhead does it at any length."""
     from qgis.core import QgsApplication
     from qgis.PyQt.QtCore import QThreadPool
 
@@ -477,12 +489,10 @@ def test_a_long_axis_spin_box_stays_inside_the_range(qgis_app, tmp_path) -> None
         widget._on_connect()
         assert _pump(lambda: widget._dataset is not None)
         picker = widget._axis_pickers["time"]
-        assert picker._spin is not None and picker._range is not None
+        assert picker._slider is not None
         picker.set_value(390)
-        picker._range.setRange(100, 199)
-        assert (picker._spin.minimum(), picker._spin.maximum()) == (100, 199)
+        picker._slider.setRange(100, 199)
         assert picker.value() == 199
-        assert picker._label.text() == picker.axis.label_at(199)
         assert widget.build_uri().subset == {"time": tuple(range(100, 200))}
         assert "time=100..199" in widget.build_uri().encode().replace("%3D", "=")
     finally:

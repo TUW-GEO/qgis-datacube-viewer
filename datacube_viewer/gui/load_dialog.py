@@ -19,7 +19,7 @@ import os
 from typing import Any
 
 from qgis.core import QgsSettings
-from qgis.gui import QgsProjectionSelectionWidget, QgsRangeSlider
+from qgis.gui import QgsCheckableComboBox, QgsProjectionSelectionWidget
 from qgis.PyQt.QtCore import Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QBrush, QGuiApplication, QPalette, QPixmap
 from qgis.PyQt.QtWidgets import (
@@ -41,7 +41,6 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QStyle,
     QVBoxLayout,
     QWidget,
@@ -66,32 +65,26 @@ from ..core.reader import RESAMPLING_METHODS, DatasetReader
 from ..core.search import SearchEntry, axis_entries, filter_matches, variable_entry
 from ..layeruri import LEVEL_STRATEGIES, LayerUri, per_variable
 from ..selection import can_load, summarise, validate
+from .cube_slider import CubeRangeSlider
 from .preview import PreviewResult, render_thumbnail
 from .search import FuzzySearchBox
 from .worker import StoreWorker
 
 _SETTINGS_RECENT = "plugins/datacube_viewer/recent_stores"
 _MAX_RECENT = 12
-#: Above this many elements a combo box of labels is unusable, so fall back to a
-#: spin box. 366 covers a daily time axis for one year, which is the common case.
-_COMBO_AXIS_LIMIT = 366
-#: A categorical axis with up to this many values gets a tick box per value for
-#: its subset; one with more gets a range slider, like a scale.
-_MAX_TICK_BOXES = 24
-#: Tick boxes per row.
-_TICK_COLUMNS = 4
 
 
 class _AxisPicker(QWidget):
-    """One non-spatial dimension: the slice to open on, and the subset to keep.
+    """One non-spatial dimension: the subset to keep, and the step to open on.
 
-    The slice control lists decoded labels where there are any. Below it, the
-    subset: a range slider for an axis that is a scale (time, depth), a tick box
-    per value for one whose values are named categories (sensors). The slice
-    control only offers what the subset keeps.
+    An axis that is a scale (time, depth, anything numbered) gets one
+    :class:`~.cube_slider.CubeRangeSlider`: its ends choose the steps to keep, its
+    playhead the step to open on. An axis of named values (sensors) gets two
+    dropdowns side by side: the step to open on, and a dropdown of tick boxes for
+    the values to keep. An axis of one step only says what that step is.
     """
 
-    #: The slice moved, or the subset changed.
+    #: The step to open on moved, or the subset changed.
     changed = pyqtSignal()
     #: The subset changed; the dialog's search offers only what it keeps.
     subsetChanged = pyqtSignal()
@@ -101,94 +94,67 @@ class _AxisPicker(QWidget):
         self.axis = axis
         #: The indices the subset keeps, in order.
         self._steps: tuple[int, ...] = tuple(range(axis.size))
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        layout = QHBoxLayout()
-        outer.addLayout(layout)
-
+        self._slider: CubeRangeSlider | None = None
         self._combo: QComboBox | None = None
-        self._spin: QSpinBox | None = None
-        self._range: QgsRangeSlider | None = None
-        self._ticks: list[QCheckBox] = []
-        self._subset_note: QLabel | None = None
+        self._keep: QgsCheckableComboBox | None = None
+        self._note: QLabel | None = None
 
-        if axis.size <= _COMBO_AXIS_LIMIT and axis.labels:
-            self._combo = QComboBox()
-            self._fill_combo()
-            self._combo.currentIndexChanged.connect(lambda _: self.changed.emit())
-            layout.addWidget(self._combo, 1)
+        if axis.size > 1 and not axis.is_categorical:
+            self._build_slider()
         else:
-            self._spin = QSpinBox()
-            self._spin.setRange(0, max(axis.size - 1, 0))
-            self._spin.valueChanged.connect(lambda _: self.changed.emit())
-            layout.addWidget(self._spin)
-            self._label = QLabel(axis.label_at(0))
-            self._label.setStyleSheet("color: palette(mid);")
-            self._spin.valueChanged.connect(lambda v: self._label.setText(self.axis.label_at(v)))
-            layout.addWidget(self._label, 1)
+            self._build_dropdowns()
 
-        units = f"  ({axis.units})" if axis.units else ""
-        layout.addWidget(QLabel(f"of {axis.size}{units}"))
+    # -------------------------------------------------------------- building
+    def _build_slider(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._slider = CubeRangeSlider()
+        self._slider.setRangeLimits(0, self.axis.size - 1)
+        self._slider.setRange(0, self.axis.size - 1)
+        self._slider.setPageStep(max(self.axis.size // 10, 1))
+        self._slider.rangeChanged.connect(lambda _low, _high: self._on_subset_changed())
+        self._slider.currentChanged.connect(lambda _value: self._on_current_moved())
+        layout.addWidget(self._slider)
+        self._note = QLabel()
+        self._note.setStyleSheet("color: palette(mid);")
+        self._note.setWordWrap(True)
+        self._note.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self._note)
+        self._describe()
 
-        if axis.size > 1:
-            outer.addLayout(self._build_subset())
-
-    # ------------------------------------------------------------- subset UI
-    @property
-    def uses_tick_boxes(self) -> bool:
-        """Named categories, few enough to tick one by one. Otherwise a range."""
-        return self.axis.is_categorical and self.axis.size <= _MAX_TICK_BOXES
-
-    def _build_subset(self) -> QGridLayout:
-        """Caption on the left; the control, and under it what it keeps, on the right."""
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setColumnStretch(1, 1)
-        caption = QLabel("Subset")
-        caption.setStyleSheet("color: palette(mid);")
-        caption.setToolTip(
-            "\n".join(
-                (
-                    f"Which {self.axis.name} steps the layer keeps. The sliders in the",
-                    "Datacube Viewer panel step only through these, and the colour",
-                    "range fitted to the whole cube is fitted to them.",
-                )
+    def _build_dropdowns(self) -> None:
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._combo = QComboBox()
+        self._combo.setToolTip(f"The {self.axis.name} the layer opens on")
+        self._fill_combo()
+        self._combo.currentIndexChanged.connect(lambda _: self.changed.emit())
+        layout.addWidget(self._combo, 1)
+        if self.axis.size > 1:
+            self._keep = QgsCheckableComboBox()
+            self._keep.setDefaultText("nothing")
+            self._keep.setToolTip(
+                f"The {self.axis.name} values the layer keeps. The Datacube Viewer\n"
+                "panel steps only through these, and the colour range fitted to the\n"
+                "whole cube is fitted to them."
             )
-        )
-        grid.addWidget(caption, 0, 0, Qt.AlignTop)
-        self._subset_note = QLabel()
-        self._subset_note.setStyleSheet("color: palette(mid);")
-        self._subset_note.setWordWrap(True)
-
-        if self.uses_tick_boxes:
-            boxes = QGridLayout()
-            boxes.setContentsMargins(0, 0, 0, 0)
             for i in range(self.axis.size):
-                tick = QCheckBox(self.axis.label_at(i))
-                tick.setChecked(True)
-                tick.toggled.connect(lambda _checked: self._on_subset_changed())
-                boxes.addWidget(tick, i // _TICK_COLUMNS, i % _TICK_COLUMNS)
-                self._ticks.append(tick)
-            # Packed to the left rather than spread over the width, so the boxes
-            # read as one group.
-            boxes.setColumnStretch(_TICK_COLUMNS, 1)
-            grid.addLayout(boxes, 0, 1)
-        else:
-            self._range = QgsRangeSlider(Qt.Horizontal)
-            self._range.setRangeLimits(0, self.axis.size - 1)
-            self._range.setRange(0, self.axis.size - 1)
-            self._range.setToolTip(f"Drag either end to keep a range of {self.axis.name}")
-            self._range.rangeChanged.connect(lambda _low, _high: self._on_subset_changed())
-            grid.addWidget(self._range, 0, 1)
-        grid.addWidget(self._subset_note, 1, 1)
-        self._describe_subset()
-        return grid
+                self._keep.addItemWithCheckState(self.axis.label_at(i), Qt.Checked, i)
+            # The model rather than checkedItemsChanged, which only a click on a
+            # row emits: setItemCheckState leaves it silent.
+            self._keep.model().dataChanged.connect(lambda *_: self._on_subset_changed())
+            layout.addWidget(QLabel("keep"))
+            layout.addWidget(self._keep, 1)
+        units = f" ({self.axis.units})" if self.axis.units else ""
+        layout.addWidget(QLabel(f"of {self.axis.size}{units}"))
 
+    # --------------------------------------------------------------- updates
     def _read_subset(self) -> tuple[int, ...]:
-        if self._range is not None:
-            return tuple(range(self._range.lowerValue(), self._range.upperValue() + 1))
-        if self._ticks:
-            return tuple(i for i, tick in enumerate(self._ticks) if tick.isChecked())
+        if self._slider is not None:
+            return tuple(range(self._slider.lowerValue(), self._slider.upperValue() + 1))
+        if self._keep is not None:
+            return tuple(sorted(int(i) for i in self._keep.checkedItemsData()))
         return tuple(range(self.axis.size))
 
     def _on_subset_changed(self) -> None:
@@ -197,35 +163,34 @@ class _AxisPicker(QWidget):
             return
         current = self.value()
         self._steps = kept
-        self._fill_combo()
-        if self._spin is not None and kept:
-            # A spin box only meets a range subset, which is contiguous.
-            self._spin.blockSignals(True)
-            try:
-                self._spin.setRange(kept[0], kept[-1])
-            finally:
-                self._spin.blockSignals(False)
-            self._label.setText(self.axis.label_at(self._spin.value()))
-        if kept:
-            self._set_value_quietly(current)
-        self._describe_subset()
+        if self._combo is not None:
+            self._fill_combo()
+            if kept:
+                self._combo.blockSignals(True)
+                try:
+                    self.set_value(current)
+                finally:
+                    self._combo.blockSignals(False)
+        self._describe()
         self.subsetChanged.emit()
         self.changed.emit()
 
-    def _describe_subset(self) -> None:
-        if self._subset_note is None:
+    def _on_current_moved(self) -> None:
+        self._describe()
+        self.changed.emit()
+
+    def _describe(self) -> None:
+        if self._note is None or self._slider is None:
             return
-        kept, size = len(self._steps), self.axis.size
-        if self._range is not None and self._steps:
-            first, last = self._steps[0], self._steps[-1]
-            self._subset_note.setText(
-                f"{self.axis.label_at(first)} → {self.axis.label_at(last)}  ({kept} of {size})"
-            )
-        else:
-            self._subset_note.setText(f"{kept} of {size}")
+        label = self.axis.label_at
+        units = f" ({self.axis.units})" if self.axis.units else ""
+        self._note.setText(
+            f"opens at {label(self._slider.current())} · keeps {label(self._steps[0])} → "
+            f"{label(self._steps[-1])}, {len(self._steps)} of {self.axis.size}{units}"
+        )
 
     def _fill_combo(self) -> None:
-        """List the steps the subset keeps, keeping the current one where it can."""
+        """List the steps the subset keeps."""
         if self._combo is None:
             return
         self._combo.blockSignals(True)
@@ -235,19 +200,6 @@ class _AxisPicker(QWidget):
                 self._combo.addItem(self.axis.label_at(i), i)
         finally:
             self._combo.blockSignals(False)
-
-    def _set_value_quietly(self, index: int) -> None:
-        for widget in (self._combo, self._spin):
-            if widget is not None:
-                widget.blockSignals(True)
-        try:
-            self.set_value(index)
-        finally:
-            for widget in (self._combo, self._spin):
-                if widget is not None:
-                    widget.blockSignals(False)
-        if self._spin is not None:
-            self._label.setText(self.axis.label_at(self._spin.value()))
 
     # ------------------------------------------------------------------ state
     def steps(self) -> tuple[int, ...]:
@@ -259,36 +211,30 @@ class _AxisPicker(QWidget):
         return None if len(self._steps) == self.axis.size else self._steps
 
     def set_subset(self, steps) -> None:
-        """Keep ``steps``: a range from their first to their last on a range slider."""
+        """Keep ``steps``: on a slider, the range from their first to their last."""
         wanted = sorted({int(i) for i in steps if 0 <= int(i) < self.axis.size})
-        if self._range is not None and wanted:
-            self._range.setRange(wanted[0], wanted[-1])
-        elif self._ticks:
-            for tick in self._ticks:
-                tick.blockSignals(True)
-            try:
-                for i, tick in enumerate(self._ticks):
-                    tick.setChecked(i in wanted)
-            finally:
-                for tick in self._ticks:
-                    tick.blockSignals(False)
-            self._on_subset_changed()
+        if self._slider is not None and wanted:
+            self._slider.setRange(wanted[0], wanted[-1])
+        elif self._keep is not None:
+            for i in range(self.axis.size):
+                self._keep.setItemCheckState(i, Qt.Checked if i in wanted else Qt.Unchecked)
 
     def value(self) -> int:
-        if self._combo is not None:
-            data = self._combo.currentData()
-            return int(data) if data is not None else (self._steps[0] if self._steps else 0)
-        return int(self._spin.value()) if self._spin else 0
+        """The step to open on."""
+        if self._slider is not None:
+            return self._slider.current()
+        data = self._combo.currentData() if self._combo is not None else None
+        return int(data) if data is not None else (self._steps[0] if self._steps else 0)
 
     def set_value(self, index: int) -> None:
         """Open on ``index``, or on the nearest step the subset keeps."""
         index = nearest_step(self._steps, int(index)) if self._steps else int(index)
-        if self._combo is not None:
+        if self._slider is not None:
+            self._slider.setCurrent(index)
+        elif self._combo is not None:
             position = self._combo.findData(index)
             if position >= 0:
                 self._combo.setCurrentIndex(position)
-        elif self._spin is not None:
-            self._spin.setValue(index)
 
 
 class DatacubeLoadDialog(QDialog):

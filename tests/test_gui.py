@@ -412,8 +412,9 @@ def test_rechecking_a_band_re_enables_loading(connected) -> None:
 # --------------------------------------------------------------- axis widgets
 def test_time_axis_gets_a_labelled_picker(connected) -> None:
     picker = connected._axis_pickers["time"]
-    assert picker._combo is not None
-    assert picker._combo.itemText(1) == "2025-01-01"
+    assert picker._slider is not None
+    picker.set_value(1)
+    assert "opens at 2025-01-01" in picker._note.text()
 
 
 def test_changing_the_axis_updates_the_uri(connected) -> None:

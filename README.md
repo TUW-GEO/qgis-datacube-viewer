@@ -217,14 +217,17 @@ from the dialog. To stop that, untick **Automatically open slider sidebar** unde
 **Settings → Options → Datacube Viewer**, and open the panel from the toolbar or
 **Raster → Datacube Viewer → Datacube Panel** when you want it.
 
-To work with part of a cube, set a **Subset** under each axis in the **Add Datacube
-Layer** dialog. A time axis, or any axis of numbers, gets a range slider: drag its
-ends to keep, say, one year of a decade. An axis of named values, such as sensors,
-gets a tick box per value; untick the ones to leave out. The layer then only shows
-what the subsets keep: the panel's sliders step through those slices alone, the
-search offers only them, and the colour range fitted to the whole cube is fitted to
-them (see [Colour range](#colour-range)). The subset is saved with the layer, in its
-source (`subset=time=12..23,sensor=0;2`).
+To work with part of a cube, narrow down each axis in the **Add Datacube Layer**
+dialog. A time axis, or any axis of numbers, gets a range slider: drag its ends to
+keep, say, one year of a decade, and the marker on top to pick the step the layer
+opens on. Hold **Ctrl** while dragging to move any of them one step at a time;
+**Shift**+drag on an end, or a drag between the ends, moves the whole range. An axis
+of named values, such as sensors, gets a dropdown of the value to open on and a
+**keep** dropdown with a tick box per value. The layer then only shows what you
+kept: the panel's sliders step through those slices alone, the search offers only
+them, and the colour range fitted to the whole cube is fitted to them (see
+[Colour range](#colour-range)). The subset is saved with the layer, in its source
+(`subset=time=12..23,sensor=0;2`).
 
 For a slow or remote store, untick **Redraw while dragging** in the panel: the layer
 is then redrawn once, when you let go of the handle, rather than for slices on the
