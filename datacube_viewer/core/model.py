@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from numbers import Integral
 from typing import Any, Literal
 
 from .geometry import Affine, BBox
@@ -270,6 +271,171 @@ def nearest_step(steps: Sequence[int], index: int) -> int:
     if not steps:
         return int(index)
     return min(steps, key=lambda step: (abs(step - index), step))
+
+
+def select_steps(axis: AxisInfo, selection: Any) -> tuple[int, ...]:
+    """The steps of ``axis`` that ``selection`` names by value, as for ``xarray.sel``.
+
+    ``selection`` is plain data, so that it survives JSON:
+
+    * ``{"from": a, "to": b}``: every step from ``a`` to ``b``, both included;
+      either key may be left out for an open end. A ``slice(a, b)`` means the same.
+      An ``"at"`` key is the step the layer opens on, the playhead of the subset
+      slider; it does not change the steps kept (see `select_opening`).
+    * a list (or tuple) of values: those steps.
+    * one value: that step.
+
+    Values are the axis's coordinate values, as decoded for its labels:
+
+    * a time axis: dates. A partial date covers the whole period, so ``"2020"`` is
+      the year and ``{"to": "2020-12"}`` takes all of December. Dates and
+      datetimes are accepted as well as strings.
+    * an axis of numbers (depth, wavelength): compared as numbers.
+    * an axis of names (sensors): matched exactly. A range runs over the axis
+      order, from the step named ``a`` to the step named ``b``.
+    * an axis without a coordinate variable: its positions, 0 to ``size - 1``.
+
+    Raises ``ValueError``, naming the axis and what it has, when a value is not on
+    the axis or the selection keeps nothing.
+    """
+    if isinstance(selection, slice):
+        if selection.step is not None:
+            raise ValueError(f"A subset of {axis.name!r} cannot have a step: {selection}.")
+        selection = {"from": selection.start, "to": selection.stop}
+    if isinstance(selection, Mapping):
+        unknown = set(selection) - {"from", "to", "at"}
+        if unknown:
+            raise ValueError(
+                f"A range on {axis.name!r} takes 'from', 'to' and 'at', "
+                f"not {', '.join(sorted(unknown))}."
+            )
+        kept = _range_steps(axis, selection.get("from"), selection.get("to"))
+        if not kept:
+            raise ValueError(
+                f"Nothing on {axis.name!r} lies from {selection.get('from')!r} to "
+                f"{selection.get('to')!r}. It has {_axis_extent(axis)}."
+            )
+        return kept
+    values = list(selection) if isinstance(selection, (list, tuple, set)) else [selection]
+    kept: set[int] = set()
+    for value in values:
+        found = [i for i in range(axis.size) if _matches(axis, i, value)]
+        if not found:
+            raise ValueError(
+                f"{value!r} is not on axis {axis.name!r}. It has {_axis_extent(axis)}."
+            )
+        kept.update(found)
+    if not kept:
+        raise ValueError(f"The subset of {axis.name!r} keeps nothing.")
+    return tuple(sorted(kept))
+
+
+def select_opening(axis: AxisInfo, selection: Any, steps: Sequence[int]) -> int | None:
+    """The step that ``selection``'s ``"at"`` names, or ``None`` if it names none.
+
+    ``"at"`` is the playhead of the subset slider: the step the layer opens on,
+    one of ``steps``, the steps ``selection`` keeps (from `select_steps`). It is
+    matched like any other value, so on a time axis ``"2020-06"`` is the first
+    step in June. Raises ``ValueError`` when it is not on the axis, or not in
+    ``steps``.
+    """
+    if not isinstance(selection, Mapping) or selection.get("at") is None:
+        return None
+    value = selection["at"]
+    found = [i for i in range(axis.size) if _matches(axis, i, value)]
+    if not found:
+        raise ValueError(f"{value!r} is not on axis {axis.name!r}. It has {_axis_extent(axis)}.")
+    kept = set(steps)
+    inside = [i for i in found if i in kept]
+    if not inside:
+        raise ValueError(
+            f"The subset of {axis.name!r} opens at {value!r}, which lies outside it: "
+            f"it keeps {axis.labels[min(kept)] if axis.labels else min(kept)} to "
+            f"{axis.labels[max(kept)] if axis.labels else max(kept)}."
+        )
+    return inside[0]
+
+
+def _axis_kind(axis: AxisInfo) -> str:
+    """How values on ``axis`` compare: "position", "time", "number" or "name"."""
+    if not axis.labels:
+        return "position"
+    if axis.is_time:
+        return "time"
+    return "name" if axis.is_categorical else "number"
+
+
+def _time_text(value: Any) -> str:
+    """A date or datetime as the labels write it: ``2020-01-01`` at midnight."""
+    if isinstance(value, datetime):
+        if value.time() == datetime.min.time():
+            return value.strftime("%Y-%m-%d")
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if hasattr(value, "isoformat"):  # a date
+        return value.isoformat()
+    return str(value).strip().replace("T", " ")
+
+
+def _matches(axis: AxisInfo, index: int, value: Any) -> bool:
+    kind = _axis_kind(axis)
+    if kind == "position":
+        return isinstance(value, Integral) and not isinstance(value, bool) and value == index
+    label = axis.labels[index]
+    if kind == "time":
+        return label.startswith(_time_text(value))
+    if kind == "number":
+        try:
+            return abs(float(label) - float(value)) <= 1e-9 * max(1.0, abs(float(value)))
+        except (TypeError, ValueError):
+            return False
+    return label == str(value)
+
+
+def _range_steps(axis: AxisInfo, start: Any, stop: Any) -> tuple[int, ...]:
+    kind = _axis_kind(axis)
+    if kind in ("position", "name"):
+        # By position along the axis: names have no order of their own.
+        first = 0 if start is None else _only_step(axis, start)
+        last = axis.size - 1 if stop is None else _only_step(axis, stop)
+        return tuple(range(first, last + 1))
+    if kind == "time":
+        low = None if start is None else _time_text(start)
+        high = None if stop is None else _time_text(stop)
+        # ISO dates sort as text, and a partial end date covers its whole period.
+        return tuple(
+            i
+            for i, label in enumerate(axis.labels)
+            if (low is None or label >= low)
+            and (high is None or label <= high or label.startswith(high))
+        )
+    low = -float("inf") if start is None else float(start)
+    high = float("inf") if stop is None else float(stop)
+    out = []
+    for i, label in enumerate(axis.labels):
+        try:
+            number = float(label)
+        except ValueError:
+            continue
+        if low <= number <= high:
+            out.append(i)
+    return tuple(out)
+
+
+def _only_step(axis: AxisInfo, value: Any) -> int:
+    found = [i for i in range(axis.size) if _matches(axis, i, value)]
+    if not found:
+        raise ValueError(f"{value!r} is not on axis {axis.name!r}. It has {_axis_extent(axis)}.")
+    return found[0]
+
+
+def _axis_extent(axis: AxisInfo) -> str:
+    """What an axis holds, briefly, for an error message."""
+    kind = _axis_kind(axis)
+    if kind == "position":
+        return f"positions 0 to {axis.size - 1} and no coordinate values"
+    if kind == "name" and axis.size <= 12:
+        return ", ".join(axis.labels)
+    return f"{axis.size} steps, {axis.labels[0]} to {axis.labels[-1]}"
 
 
 # ------------------------------------------------------------------------- levels

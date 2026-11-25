@@ -52,6 +52,8 @@ from .model import (
     axis_steps,
     nearest_step,
     select_level,
+    select_opening,
+    select_steps,
 )
 from .reader import DatasetReader, ReadRequest, ReadResult
 from .search import SearchEntry, axis_entries, rank, variable_entry
@@ -132,6 +134,8 @@ __all__ = [
     "recognize_local",
     "resolve_crs",
     "select_level",
+    "select_opening",
+    "select_steps",
     "structure_difference",
     "variable_entry",
     "window_from_bounds",

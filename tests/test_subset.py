@@ -11,9 +11,11 @@ in ``test_subset_qgis.py``.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from datacube_viewer.core import AxisInfo, axis_steps, nearest_step
+from datacube_viewer.core import AxisInfo, axis_steps, nearest_step, select_opening, select_steps
 from datacube_viewer.layeruri import (
     LayerUri,
     UriError,
@@ -97,3 +99,105 @@ def test_named_values_are_categorical_and_scales_are_not() -> None:
         "time", 2, labels=("2020-01-01", "2020-01-02"), units="days since 2020-01-01"
     ).is_categorical
     assert not AxisInfo("band", 3).is_categorical
+
+
+# ------------------------------------------------- choosing steps by value
+DAYS = AxisInfo(
+    "time",
+    6,
+    labels=(
+        "2019-12-31",
+        "2020-01-01",
+        "2020-01-15",
+        "2020-02-01",
+        "2020-02-01 12:00:00",
+        "2021-01-01",
+    ),
+    units="days since 2000-01-01",
+)
+DEPTH = AxisInfo("depth", 4, labels=("0", "2.5", "10", "50"))
+SENSOR = AxisInfo("sensor", 3, labels=SENSORS)
+BARE = AxisInfo("band", 4)
+
+
+@pytest.mark.parametrize(
+    ("axis", "selection", "steps"),
+    [
+        (DAYS, {"from": "2020-01-01", "to": "2020-02-01"}, (1, 2, 3, 4)),
+        (DAYS, {"from": "2020", "to": "2020"}, (1, 2, 3, 4)),
+        (DAYS, {"to": "2020-01"}, (0, 1, 2)),
+        (DAYS, {"from": "2020-02"}, (3, 4, 5)),
+        (DAYS, slice("2020-01-15", None), (2, 3, 4, 5)),
+        (DAYS, "2020-02-01", (3, 4)),
+        (DAYS, ["2019-12-31", "2021"], (0, 5)),
+        (DEPTH, {"from": 1, "to": 10}, (1, 2)),
+        (DEPTH, [0, 50.0, "2.5"], (0, 1, 3)),
+        (SENSOR, ["SMAP", "AMSR2"], (0, 2)),
+        (SENSOR, "SMOS", (1,)),
+        (SENSOR, {"from": "SMOS"}, (1, 2)),
+        (SENSOR, {"from": "AMSR2", "to": "SMOS"}, (0, 1)),
+        (BARE, {"from": 1, "to": 2}, (1, 2)),
+        (BARE, [3, 0], (0, 3)),
+        (DAYS, {"from": "2020", "to": "2020", "at": "2020-02"}, (1, 2, 3, 4)),
+        (DAYS, {"at": "2020-02"}, (0, 1, 2, 3, 4, 5)),
+    ],
+)
+def test_steps_are_chosen_by_value(axis, selection, steps) -> None:
+    assert select_steps(axis, selection) == steps
+
+
+def test_dates_and_datetimes_are_values_too() -> None:
+    from datetime import date, datetime
+
+    assert select_steps(DAYS, {"from": date(2020, 1, 15), "to": datetime(2020, 2, 1)}) == (2, 3, 4)
+    assert select_steps(DAYS, datetime(2020, 2, 1, 12)) == (4,)
+
+
+@pytest.mark.parametrize(
+    ("axis", "selection", "message"),
+    [
+        (SENSOR, ["SMAP", "GMI"], "'GMI' is not on axis 'sensor'. It has AMSR2, SMOS, SMAP"),
+        (DAYS, {"from": "2030"}, "Nothing on 'time' lies from '2030'"),
+        (DEPTH, 3, "3 is not on axis 'depth'. It has 4 steps, 0 to 50"),
+        (BARE, 4, "positions 0 to 3"),
+        (DAYS, {"start": "2020"}, "takes 'from', 'to' and 'at', not start"),
+        (DAYS, slice("2020", "2021", 2), "cannot have a step"),
+    ],
+)
+def test_a_selection_off_the_axis_says_what_is_on_it(axis, selection, message) -> None:
+    with pytest.raises(ValueError, match=re.escape(message)):
+        select_steps(axis, selection)
+
+
+@pytest.mark.parametrize(
+    ("axis", "selection", "opening"),
+    [
+        (DAYS, {"from": "2020", "at": "2020-02"}, 3),
+        (DAYS, {"at": "2020-02-01 12:00"}, 4),
+        (DEPTH, {"from": 1, "at": 10}, 2),
+        (SENSOR, {"from": "SMOS", "at": "SMAP"}, 2),
+        (BARE, {"at": 3}, 3),
+        (DAYS, {"from": "2020"}, None),
+        (DAYS, ["2020-01-01"], None),
+        (DAYS, "2020", None),
+    ],
+)
+def test_at_is_the_opening_step(axis, selection, opening) -> None:
+    assert select_opening(axis, selection, select_steps(axis, selection)) == opening
+
+
+@pytest.mark.parametrize(
+    ("axis", "selection", "message"),
+    [
+        (
+            DAYS,
+            {"from": "2020-02", "at": "2020-01-15"},
+            "opens at '2020-01-15', which lies outside it: it keeps 2020-02-01 to 2021-01-01",
+        ),
+        (DEPTH, {"at": 3}, "3 is not on axis 'depth'"),
+        (BARE, {"to": 1, "at": 2}, "keeps 0 to 1"),
+    ],
+)
+def test_an_opening_step_off_the_subset_says_why(axis, selection, message) -> None:
+    with pytest.raises(ValueError, match=re.escape(message)):
+        select_opening(axis, selection, select_steps(axis, selection))
