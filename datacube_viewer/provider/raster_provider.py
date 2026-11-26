@@ -63,6 +63,8 @@ _NUMPY_TO_QGIS: dict[str, Any] = {
     "float64": Qgis.DataType.Float64,
 }
 
+_NUMPY_OF_QGIS: dict[Any, str] = {qtype: name for name, qtype in _NUMPY_TO_QGIS.items()}
+
 #: dtypes QGIS has no equivalent for get promoted to something it can render.
 _PROMOTIONS: dict[str, str] = {
     "bool": "uint8",
@@ -122,7 +124,7 @@ _purge_at = 64
 
 
 def _fits(value: float, dtype: np.dtype) -> bool:
-    """Whether ``value`` is representable in ``dtype``.
+    """Whether ``value`` is representable in ``dtype`` (NaN only in floats).
 
     Stamping a nodata value that is not (-9999 into uint8) would wrap it onto a
     real pixel value, which QGIS would then hide everywhere.
@@ -391,16 +393,26 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
             declared = None
         return resolve_nodata(declared, view.nodata)
 
-    def sourceHasNoDataValue(self, bandNo: int) -> bool:
+    def _advertised_nodata(self, bandNo: int) -> float | None:
+        """The one nodata value QGIS is told about, or ``None``.
+
+        QGIS takes one value per band to stamp into invalid pixels. The reader's
+        mask already covers every resolved value, so the first that the band's
+        blocks can hold stands for them all.
+        """
         view = self._view()
-        return view is not None and bool(self._nodata_values(view, bandNo))
+        if view is None:
+            return None
+        _, emit_dtype = qgis_data_type(_NUMPY_OF_QGIS.get(self.dataType(bandNo), "float32"))
+        values = self._nodata_values(view, bandNo)
+        return next((float(v) for v in values if _fits(v, emit_dtype)), None)
+
+    def sourceHasNoDataValue(self, bandNo: int) -> bool:
+        return self._advertised_nodata(bandNo) is not None
 
     def sourceNoDataValue(self, bandNo: int) -> float:
-        # QGIS takes one value per band to stamp into invalid pixels. The reader's
-        # mask already covers every resolved value, so the first stands for them all.
-        view = self._view()
-        values = self._nodata_values(view, bandNo) if view is not None else ()
-        return float(values[0]) if values else float("nan")
+        value = self._advertised_nodata(bandNo)
+        return float("nan") if value is None else value
 
     def useSourceNoDataValue(self, bandNo: int) -> bool:
         return self.sourceHasNoDataValue(bandNo)
@@ -505,10 +517,12 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
         if data.dtype != emit_dtype:
             data = data.astype(emit_dtype)
 
-        has_nodata = not np.isnan(nodata) and _fits(nodata, emit_dtype)
-        if has_nodata:
+        if _fits(nodata, emit_dtype):
             # A real nodata value is the cheapest mask QGIS understands: stamp it
             # into the invalid pixels and let the block's nodata value do the work.
+            # A float block can always have one, NaN included (also what a float
+            # band that declares nothing gets). ``data`` is not modified: np.where
+            # copies, so the reader's cached arrays stay as read.
             block = QgsRasterBlock(qtype, width, height)
             block.setNoDataValue(float(nodata))
             if not mask.all():
@@ -526,11 +540,13 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
     def _apply_mask(block: QgsRasterBlock, mask: np.ndarray, width: int, height: int) -> None:
         """Mark invalid pixels without a nodata value to stamp in.
 
-        With no declared nodata the only source of invalidity is coverage — the part
-        of the request that falls outside the dataset — and for an axis-aligned grid
-        that region is exactly the complement of a rectangle. So the common case is
-        one ``setIsNoDataExcept`` call. The per-pixel fallback exists for rotated
-        grids and is bounded so a pathological mask cannot stall a repaint.
+        Only integer bands with no usable nodata value get here. Their only source
+        of invalidity is coverage (the part of the request that falls outside the
+        dataset), and for an axis-aligned grid that region is exactly the
+        complement of a rectangle. So the common case is one ``setIsNoDataExcept``
+        call. The per-pixel fallback exists for rotated grids. It always runs to
+        the end, however large: a pixel left unmarked is drawn as data. At about
+        0.1 us per pixel that costs under a second even for a 4K block.
         """
         if not mask.any():
             block.setIsNoData()
@@ -546,13 +562,7 @@ class DatacubeRasterProvider(QgsRasterDataProvider):
             block.setIsNoDataExcept(QRect(c0, r0, c1 - c0 + 1, r1 - r0 + 1))
             return
 
-        invalid = np.flatnonzero(~mask.reshape(-1))
-        if invalid.size > 200_000:
-            # Falling back to the rectangle keeps a few pixels visible that should
-            # be transparent, which is far better than freezing the canvas.
-            block.setIsNoDataExcept(QRect(c0, r0, c1 - c0 + 1, r1 - r0 + 1))
-            return
-        for index in invalid.tolist():
+        for index in np.flatnonzero(~mask.reshape(-1)).tolist():
             block.setIsNoData(int(index))
 
     @staticmethod

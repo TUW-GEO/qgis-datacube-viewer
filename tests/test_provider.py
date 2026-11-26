@@ -21,6 +21,7 @@ from qgis.core import (
     QgsPointXY,
     QgsProject,
     QgsProviderRegistry,
+    QgsRasterBlock,
     QgsRasterLayer,
     QgsRectangle,
 )
@@ -363,6 +364,72 @@ def test_unwritten_slice_renders_black_not_broken(store_uri: str) -> None:
     )
     assert empty.isValid()
     assert _render(empty).name() != "#ff00ff"
+
+
+# ------------------------------------------------------------------- large masks
+def _sparse_netcdf(path, dtype: str, fill: float | None, empty: float) -> str:
+    """A 4 x 8 global grid holding ``empty`` everywhere but two opposite corners.
+
+    The corners make the rectangle around the data the whole grid, so a mask that
+    degrades to that rectangle shows every empty pixel.
+    """
+    netCDF4 = pytest.importorskip("netCDF4")
+    with netCDF4.Dataset(path, "w") as ds:
+        for name, size, step, units in (
+            ("lat", 4, -45.0, "degrees_north"),
+            ("lon", 8, 45.0, "degrees_east"),
+        ):
+            ds.createDimension(name, size)
+            coordinate = ds.createVariable(name, "f8", (name,))
+            coordinate[:] = (np.arange(size) - (size - 1) / 2) * step
+            coordinate.units = units
+        data = ds.createVariable("v", dtype, ("lat", "lon"), fill_value=fill)
+        data.set_auto_maskandscale(False)
+        values = np.full((4, 8), empty, dtype=dtype)
+        values[0, 0] = values[3, 7] = 100
+        data[:] = values
+    return str(path)
+
+
+@pytest.mark.parametrize("resampling", ["nearest", "average", "bilinear"])
+@pytest.mark.parametrize(
+    ("dtype", "fill", "empty", "override"),
+    [
+        pytest.param("f4", np.nan, np.nan, None, id="float-nan-fill"),
+        pytest.param("f4", None, np.nan, None, id="float-nan-undeclared"),
+        # The first override value does not fit uint8, so the second must be stamped.
+        pytest.param("u1", None, 255, (-9999.0, 255.0), id="int-first-value-unfit"),
+    ],
+)
+def test_a_large_sparse_block_marks_every_empty_pixel(
+    tmp_path, dtype, fill, empty, override, resampling
+) -> None:
+    """Far more empty pixels than any per-pixel shortcut would put up with."""
+    path = _sparse_netcdf(tmp_path / "sparse.nc", dtype, fill, empty)
+    sparse = create_layer(
+        LayerUri(store_uri=path, bands=("v",), nodata=override, resampling=resampling), "s"
+    )
+    assert sparse.isValid(), sparse.dataProvider().lastError()
+    width, height = 1024, 512
+    block = sparse.dataProvider().block(1, sparse.extent(), width, height)
+
+    shown = sum(not block.isNoData(i) for i in range(width * height))
+    # Two cells of 32. Bilinear reaches half a cell further: 1.5 x 1.5 cells each.
+    assert 0 < shown <= 5 * width * height // 32
+    assert block.value(0, 0) == 100
+    assert block.isNoData(height // 2, width // 2)
+    assert _render(sparse).name() == "#ff00ff", "the empty centre is transparent"
+
+
+def test_a_mask_with_no_nodata_value_is_applied_in_full(qgis_app) -> None:
+    """The per-pixel fallback (rotated grids) must not give up on large blocks."""
+    width, height = 1000, 600
+    mask = np.indices((height, width)).sum(axis=0) % 2 == 0
+    block = QgsRasterBlock(Qgis.DataType.Byte, width, height)
+    block.setData(bytes(width * height))
+    DatacubeRasterProvider._apply_mask(block, mask, width, height)
+    flagged = np.fromiter((block.isNoData(i) for i in range(mask.size)), bool, mask.size)
+    np.testing.assert_array_equal(flagged, ~mask.ravel())
 
 
 # ----------------------------------------------------------------------- clone
