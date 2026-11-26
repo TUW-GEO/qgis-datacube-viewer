@@ -6,6 +6,9 @@ whose small NetCDF cubes these tests reuse.
 
 from __future__ import annotations
 
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -45,8 +48,14 @@ def layers(gui, tmp_path, clean_handle_cache):
 
 class _Iface:
     def __init__(self, canvas, active=None):
+        from qgis.gui import QgsMessageBar
+
         self._canvas = canvas
         self.active = active
+        self.bar = QgsMessageBar()
+
+    def messageBar(self):
+        return self.bar
 
     def mapCanvas(self):
         return self._canvas
@@ -173,6 +182,124 @@ def test_a_failed_read_is_reported_not_raised(dock, layers) -> None:
     assert dock.pick(layers["cube"], "time", _point(-20, 0))
     assert dock.series_count() == 0
     assert "outside" in dock.messages[-1][0] and dock.messages[-1][1]
+
+
+def _wait_for(condition, seconds: float = 10.0) -> None:
+    from qgis.PyQt.QtCore import QCoreApplication
+
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, "timed out"
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+
+
+@pytest.fixture
+def slow_read(dock, monkeypatch):
+    """Picks that run as real tasks and hold at their first batch until released."""
+    from datacube_viewer.gui import profile_panel
+
+    release = threading.Event()
+    real = profile_panel.read_profiles
+
+    def held(reader, variables, axis, x, y, indices, progress):
+        progress(0.0, (1, 6, 8))
+        assert release.wait(10.0)
+        return real(reader, variables, axis, x, y, indices, progress)
+
+    monkeypatch.setattr(profile_panel, "read_profiles", held)
+    dock._run_inline = False
+    yield release
+    release.set()
+    _wait_for(lambda: not profile_panel._RUNNING)
+
+
+def _flush() -> None:
+    """Run pending events, deferred deletions included."""
+    from qgis.PyQt.QtCore import QCoreApplication, QEvent
+
+    QCoreApplication.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def _slow_pick(dock, layers):
+    """Pick, and wait for the slow-read message: ``(notice, its progress bar)``."""
+    from datacube_viewer.gui.profile_panel import SlowReadProgress
+
+    dock._slow_after_ms = 50
+    assert dock.pick(layers["cube"], "time", _point(1, 1))
+    _wait_for(lambda: dock._slow_notices)
+    (notice,) = dock._slow_notices.values()
+    return notice, notice.findChild(SlowReadProgress)
+
+
+def test_a_slow_pick_says_so_in_the_message_bar(dock, layers, slow_read) -> None:
+    notice, progress = _slow_pick(dock, layers)
+    bar = dock._iface.messageBar()
+    assert bar.currentItem() == notice
+    # The task reports its chunks as soon as it runs, before the first read is back.
+    assert notice.text() == (
+        "Slow timeseries extraction (current chunk size 1×6×8). "
+        "Consider re-chunking your data for faster access"
+    )
+    assert (progress.minimum(), progress.maximum()) == (0, 0), "busy, not 0%"
+
+    (task,) = dock._tasks.values()
+    task.setProgress(40.0)
+    progress.poll()
+    assert (progress.maximum(), progress.value()) == (100, 40)
+
+    slow_read.set()
+    _wait_for(lambda: dock.series_count() == 1)
+    _flush()
+    assert not dock._slow_notices and not bar.items()
+    assert not dock.messages
+
+
+def test_cancelling_a_slow_pick_adds_nothing(dock, layers, slow_read) -> None:
+    from qgis.PyQt.QtWidgets import QPushButton
+
+    notice, _ = _slow_pick(dock, layers)
+    next(b for b in notice.findChildren(QPushButton) if b.text() == "Cancel").click()
+    _flush()
+    assert not dock._iface.messageBar().items(), "gone before the read has stopped"
+    slow_read.set()
+    _wait_for(lambda: not dock._tasks)
+    assert dock.series_count() == 0
+    assert not dock.messages, "cancelling is not an error"
+
+
+@pytest.mark.parametrize("how", ["closed", "cleared"])
+def test_losing_the_message_does_not_stop_the_read(dock, layers, slow_read, how) -> None:
+    from qgis.PyQt import sip
+
+    notice, _ = _slow_pick(dock, layers)
+    bar = dock._iface.messageBar()
+    if how == "closed":
+        bar.popWidget(notice)  # its close button
+    else:
+        bar.clearWidgets()
+    _flush()
+    assert sip.isdeleted(notice)
+    slow_read.set()
+    _wait_for(lambda: dock.series_count() == 1)
+
+
+def test_tearing_the_dock_down_removes_the_message(dock, layers, slow_read) -> None:
+    _slow_pick(dock, layers)
+    dock.teardown()
+    _flush()
+    assert not dock._iface.messageBar().items()
+
+
+def test_a_quick_pick_shows_no_message(dock, layers) -> None:
+    dock._run_inline = False
+    dock._slow_after_ms = 300
+    dock.pick(layers["cube"], "time", _point(1, 1))
+    _wait_for(lambda: dock.series_count() == 1)
+    end = time.monotonic() + 0.5
+    _wait_for(lambda: time.monotonic() > end)
+    assert not dock._slow_notices and not dock._iface.messageBar().items()
 
 
 def test_a_layer_opened_by_older_plugin_code_is_explained(dock, layers, monkeypatch) -> None:

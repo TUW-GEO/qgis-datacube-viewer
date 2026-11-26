@@ -309,6 +309,9 @@ one by one. Where several datacube layers cover the click, the menu lists each, 
 the selected layer first. The menu shows with the Pan tool and with **Plot Pixel**
 (in the toolbar and under **Raster → Datacube Viewer**), which also adds the pixel
 under a left click along the axis the panel is showing.
+A pick still reading after 5 seconds shows its progress above the map, with
+**Cancel**; how long it takes depends largely on how the data is chunked. Closing
+that message does not stop the read.
 
 The other axes stay where the layer's sliders are when you pick, and the list under
 the plot says where (**Held at**, for example `sensor=2`). Values are read at full

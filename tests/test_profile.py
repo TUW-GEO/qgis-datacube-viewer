@@ -23,6 +23,7 @@ from datacube_viewer.core.profile import (
     read_profiles,
     time_ticks,
 )
+from datacube_viewer.core.reader import profile_batch_chunks
 from tests.fixture_store import CONV_EPSG, TIME_UNITS, write_small_netcdf
 
 netCDF4 = pytest.importorskip("netCDF4")
@@ -79,6 +80,72 @@ def test_a_pixel_reads_every_step_of_the_axis(tmp_path, clean_handle_cache) -> N
     assert temperature.scale.kind == "time"
     assert temperature.scale.labels[0] == "2024-01-01"
     assert temperature.fixed == {}
+
+
+@pytest.mark.parametrize(
+    ("chunk_steps", "reads"),
+    [(1, 69), (23, 3), (None, 1)],
+    ids=["chunk-per-step", "few-long-chunks", "contiguous"],
+)
+def test_a_long_axis_is_read_in_batches_of_whole_chunks(
+    tmp_path, clean_handle_cache, chunk_steps, reads
+) -> None:
+    steps = 69
+    path = str(tmp_path / "long.nc")
+    with netCDF4.Dataset(path, "w") as ds:
+        for name, size, units in (
+            ("time", steps, TIME_UNITS),
+            ("lat", 2, "degrees_north"),
+            ("lon", 2, "degrees_east"),
+        ):
+            ds.createDimension(name, size)
+            coordinate = ds.createVariable(name, "f8", (name,))
+            coordinate[:] = np.arange(size)[::-1] if name == "lat" else np.arange(size)
+            coordinate.units = units
+        layout = {"contiguous": True} if chunk_steps is None else {}
+        if chunk_steps is not None:
+            layout["chunksizes"] = (chunk_steps, 2, 2)
+        for name in ("a", "b"):
+            ds.createVariable(name, "f4", ("time", "lat", "lon"), **layout)[:] = np.broadcast_to(
+                np.arange(steps)[:, None, None], (steps, 2, 2)
+            )
+    reader = _reader(path)
+    seen: list[tuple[float, tuple[int, ...] | None]] = []
+    profiles = read_profiles(
+        reader, ("a", "b"), "time", *_centre(reader, 0, 0), progress=lambda *a: seen.append(a)
+    )
+    for profile in profiles:
+        np.testing.assert_array_equal(profile.values, np.arange(steps))
+    fractions = [fraction for fraction, _ in seen]
+    assert len(fractions) == 2 * (reads + 1), "before each read and at each variable's end"
+    assert fractions[0] == 0.0 and fractions[-1] == 1.0
+    assert fractions == sorted(fractions)
+    expected = None if chunk_steps is None else (chunk_steps, 2, 2)
+    assert {chunks for _, chunks in seen} == {expected}
+
+
+@pytest.mark.parametrize(
+    ("count", "serial", "parallel"),
+    [(4821, 32, 32), (151, 2, 16), (14, 1, 4), (1, 1, 4)],
+)
+def test_batches_are_smaller_where_chunks_are_not_fetched_in_parallel(
+    count, serial, parallel
+) -> None:
+    assert profile_batch_chunks(count, parallel=False) == serial
+    assert profile_batch_chunks(count, parallel=True) == parallel
+
+
+def test_what_progress_raises_stops_the_read(tmp_path, clean_handle_cache) -> None:
+    reader = _reader(write_small_netcdf(tmp_path / "cube.nc"))
+
+    class Stop(Exception):
+        pass
+
+    def stop(_fraction, _chunks) -> None:
+        raise Stop
+
+    with pytest.raises(Stop):
+        read_profiles(reader, ("temperature",), "time", *_centre(reader, 0, 0), progress=stop)
 
 
 def test_the_other_axes_are_held_where_the_layer_is(tmp_path, clean_handle_cache) -> None:

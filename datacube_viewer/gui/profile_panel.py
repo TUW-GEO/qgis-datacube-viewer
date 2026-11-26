@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from qgis.core import (
+    Qgis,
     QgsApplication,
     QgsCoordinateTransform,
     QgsMapLayer,
@@ -31,7 +32,8 @@ from qgis.core import (
     QgsTask,
 )
 from qgis.gui import QgsDockWidget, QgsMapToolEmitPoint, QgsVertexMarker
-from qgis.PyQt.QtCore import QPointF, Qt, pyqtSignal
+from qgis.PyQt import sip
+from qgis.PyQt.QtCore import QPointF, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from qgis.PyQt.QtWidgets import (
     QComboBox,
@@ -39,7 +41,10 @@ from qgis.PyQt.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QProgressBar,
+    QPushButton,
     QSplitter,
+    QTextBrowser,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -49,7 +54,9 @@ from qgis.PyQt.QtWidgets import (
 
 from .. import PLUGIN_NAME
 from ..core import AxisInfo, DatacubeError
+from ..core.nodes import background_reads
 from ..core.profile import AxisScale, PixelProfile, read_profiles
+from ..core.reader import ReadProgress
 from .axis_panel import axes_for_bands, is_datacube_layer
 from .profile_plot import MAX_SERIES, PlotSeries, ProfilePlot, draw_marker, is_dark, series_colour
 
@@ -60,6 +67,14 @@ MENU_TITLE = f"{PLUGIN_NAME}: Show Timeseries"
 EMPTY_TEXT = (
     f"Right-click a datacube layer on the map and choose “{MENU_TITLE}”, "
     "or use the Plot Pixel map tool. Each pixel picked is added here."
+)
+
+#: A pick still reading after this long gets a message with its progress.
+SLOW_READ_MS = 5000
+SLOW_POLL_MS = 200
+SLOW_READ_TEXT = (
+    "Slow timeseries extraction (current chunk size {}). "
+    "Consider re-chunking your data for faster access"
 )
 
 _VERTEX_ICONS = {
@@ -149,21 +164,42 @@ def populate_menu(
 _RUNNING: set[ProfileTask] = set()
 
 
+class _Cancelled(Exception):
+    """Raised between two batches of a read whose task was cancelled."""
+
+
 class ProfileTask(QgsTask):
     """Reads the profiles of one pick; ``on_done(task, ok)`` on the main thread."""
 
-    def __init__(self, description: str, work: Callable[[], tuple[PixelProfile, ...]], on_done):
+    def __init__(
+        self,
+        description: str,
+        work: Callable[[ReadProgress], tuple[PixelProfile, ...]],
+        on_done,
+    ):
         super().__init__(description, QgsTask.CanCancel)
         self._work = work
         self._on_done = on_done
         self.profiles: tuple[PixelProfile, ...] = ()
         self.error = ""
+        #: Storage chunk shape of the variable being read, None if unchunked.
+        self.chunks: tuple[int, ...] | None = None
+
+    def _progress(self, fraction: float, chunks: tuple[int, ...] | None) -> None:
+        if self.isCanceled():
+            raise _Cancelled
+        self.chunks = chunks
+        self.setProgress(100.0 * fraction)
 
     def run(self) -> bool:
         # Nothing may escape: an exception out of a QgsTask is a crash.
         try:
-            self.profiles = self._work()
+            # Between batches, the map's reads of a NetCDF file go first.
+            with background_reads():
+                self.profiles = self._work(self._progress)
             return True
+        except _Cancelled:
+            pass
         except DatacubeError as exc:
             self.error = exc.detailed
         except Exception as exc:
@@ -173,6 +209,36 @@ class ProfileTask(QgsTask):
     def finished(self, result: bool) -> None:
         _RUNNING.discard(self)
         self._on_done(self, bool(result))
+
+
+class SlowReadProgress(QProgressBar):
+    """The bar in a slow pick's message: busy until there is progress to report.
+
+    Polls the task, and its timer goes with the widget, so it does not matter who
+    deletes the message: the user closing it, QGIS, or the dock.
+    """
+
+    def __init__(self, task: ProfileTask, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._task = task
+        self.setMaximumWidth(100)
+        self._timer = QTimer(self)
+        self._timer.setInterval(SLOW_POLL_MS)
+        self._timer.timeout.connect(self.poll)
+        self._timer.start()
+        self.poll()
+
+    def poll(self) -> None:
+        percent = self._task.progress()
+        if percent <= 0:
+            self.setRange(0, 0)  # busy: the first read is not back yet
+        else:
+            self.setRange(0, 100)
+            self.setValue(int(percent))
+
+    def stop(self) -> None:
+        """Before the task is gone; the widget itself is only deleted later."""
+        self._timer.stop()
 
 
 # --------------------------------------------------------------------- model
@@ -218,7 +284,10 @@ class ProfileDock(QgsDockWidget):
         self._manager = task_manager or QgsApplication.taskManager()
         self._run_inline = False  # tests: read on the calling thread
         self._torn_down = False
+        self._slow_after_ms = SLOW_READ_MS
         self._tasks: dict[int, ProfileTask] = {}
+        #: Message bar items of slow picks. QGIS or the user may delete them.
+        self._slow_notices: dict[int, QWidget] = {}
         self._series: dict[int, _Series] = {}
         self._picks: list[_Pick] = []
         self._keys = itertools.count(1)
@@ -324,8 +393,8 @@ class ProfileDock(QgsDockWidget):
         number = next(self._numbers)
         pick = _Pick(number, layer.id(), layer.name(), layer.crs(), QgsPointXY(local), axis)
 
-        def work() -> tuple[PixelProfile, ...]:
-            return read_profiles(view.reader, view.bands, axis, x, y, indices)
+        def work(progress: ReadProgress) -> tuple[PixelProfile, ...]:
+            return read_profiles(view.reader, view.bands, axis, x, y, indices, progress)
 
         task = ProfileTask(
             f"{PLUGIN_NAME}: {layer.name()} along {axis}",
@@ -339,7 +408,41 @@ class ProfileDock(QgsDockWidget):
         else:
             _RUNNING.add(task)
             self._manager.addTask(task)
+            QTimer.singleShot(self._slow_after_ms, lambda: self._show_slow(number))
         return True
+
+    def _show_slow(self, number: int) -> None:
+        task = self._tasks.get(number)
+        if task is None or task.isCanceled() or self._iface is None:
+            return
+        chunks = "×".join(map(str, task.chunks)) if task.chunks else "contiguous"
+        bar = self._iface.messageBar()
+        notice = bar.createMessage(SLOW_READ_TEXT.format(chunks))
+        for text in notice.findChildren(QTextBrowser):
+            # Wrapped onto two lines, the margin pushes the second out of view.
+            text.document().setDocumentMargin(0)
+        notice.layout().addWidget(SlowReadProgress(task, notice))
+        cancel = QPushButton("Cancel", notice)
+        cancel.clicked.connect(lambda _=False: self._cancel_pick(number))
+        notice.layout().addWidget(cancel)
+        self._slow_notices[number] = notice
+        bar.pushWidget(notice, Qgis.Warning, 0)
+
+    def _cancel_pick(self, number: int) -> None:
+        task = self._tasks.get(number)
+        # First: the read only stops at its next batch, the message goes at once.
+        self._close_slow(number)
+        if task is not None:
+            task.cancel()
+
+    def _close_slow(self, number: int) -> None:
+        notice = self._slow_notices.pop(number, None)
+        if notice is None or sip.isdeleted(notice):
+            return
+        progress = notice.findChild(SlowReadProgress)
+        if progress is not None:
+            progress.stop()
+        self._iface.messageBar().popWidget(notice)
 
     def pick_at(self, point: QgsPointXY) -> bool:
         """The map tool's click: the layer under ``point``, along the panel's axis."""
@@ -359,8 +462,9 @@ class ProfileDock(QgsDockWidget):
         if self._torn_down:
             return
         self._tasks.pop(pick.number, None)
+        self._close_slow(pick.number)
         self._update_status()
-        if not ok:
+        if not ok or task.isCanceled():
             if task.error:
                 self._say(f"Could not read {pick.layer_name} along {pick.axis}: {task.error}", True)
             return
@@ -465,6 +569,8 @@ class ProfileDock(QgsDockWidget):
         for task in list(self._tasks.values()):
             task.cancel()
         self._tasks.clear()
+        for number in list(self._slow_notices):
+            self._close_slow(number)
         for pick in self._picks:
             self._drop_marker(pick)
         self._picks.clear()

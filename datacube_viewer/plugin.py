@@ -418,7 +418,7 @@ class DatacubeViewerPlugin:
             ),
         )
         button = QPushButton("Show me how", widget)
-        button.pressed.connect(self._on_notice_clicked)
+        button.pressed.connect(lambda: self._on_notice_clicked(widget))
         widget.layout().addWidget(button)
         self.iface.messageBar().pushWidget(widget, Qgis.Critical if missing else Qgis.Warning)
         self._log(
@@ -427,8 +427,9 @@ class DatacubeViewerPlugin:
             Qgis.Warning,
         )
 
-    def _on_notice_clicked(self) -> None:
-        self.iface.messageBar().clearWidgets()
+    def _on_notice_clicked(self, notice) -> None:
+        # Only this one: others, such as a slow timeseries read, stay.
+        self.iface.messageBar().popWidget(notice)
         self.show_dependency_dialog(show_suppress=True)
 
     def show_dependency_dialog(self, show_suppress: bool = False) -> None:

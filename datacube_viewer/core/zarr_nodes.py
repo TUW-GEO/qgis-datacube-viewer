@@ -51,6 +51,10 @@ class ZarrArray:
         return None
 
     @property
+    def parallel_reads(self) -> bool:
+        return True
+
+    @property
     def fill_value(self) -> Any:
         return getattr(self._array, "fill_value", None)
 

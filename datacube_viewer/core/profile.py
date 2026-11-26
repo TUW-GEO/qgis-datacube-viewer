@@ -23,7 +23,7 @@ import numpy as np
 
 from .errors import ReadError
 from .model import AxisInfo
-from .reader import DatasetReader
+from .reader import DatasetReader, ReadProgress
 
 ScaleKind = Literal["time", "number", "category"]
 
@@ -128,11 +128,13 @@ def read_profiles(
     x: float,
     y: float,
     indices: Mapping[str, int] | None = None,
+    progress: ReadProgress | None = None,
 ) -> tuple[PixelProfile, ...]:
     """The pixel at ``(x, y)`` along ``axis``, one profile per variable that has it.
 
     At the base level, like Identify: the stored value at the place clicked, not
     an overview's average. ``indices`` holds the other axes (the layer's slice).
+    ``progress`` is as in :meth:`.DatasetReader.read_along`, over all variables.
     Raises :class:`ReadError` when the point is outside the dataset or no
     variable has the axis.
     """
@@ -144,11 +146,15 @@ def read_profiles(
     cx, cy = reader.dataset.base.transform.forward(col + 0.5, row + 0.5)
     held = {k: int(v) for k, v in (indices or {}).items() if k != axis}
     profiles = []
-    for variable in variables:
+    along = [v for v in variables if reader.variable_info(v).axis_index(axis) is not None]
+    for number, variable in enumerate(along):
         info = reader.variable_info(variable)
-        if info.axis_index(axis) is None:
-            continue
-        values = reader.read_along(variable, axis, col, row, held)
+
+        def overall(fraction, chunks, done=number):
+            if progress is not None:
+                progress((done + fraction) / len(along), chunks)
+
+        values = reader.read_along(variable, axis, col, row, held, progress=overall)
         fixed = {
             a.name: held.get(a.name, 0)
             for a in reader.dataset.axes

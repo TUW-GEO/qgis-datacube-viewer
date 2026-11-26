@@ -73,6 +73,10 @@ class ArrayNode(Protocol):
         """Storage chunk shape, or ``None`` for unchunked (contiguous) storage."""
 
     @property
+    def parallel_reads(self) -> bool:
+        """Whether one read fetches the chunks it covers in parallel."""
+
+    @property
     def fill_value(self) -> Any:
         """The format's own fill value, or ``None``. Not the CF ``_FillValue`` attribute."""
 

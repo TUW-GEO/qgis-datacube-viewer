@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -39,6 +39,15 @@ LevelStrategy = Literal["auto", "manual", "base", "coarsest"]
 #: only when all of them are.
 BilinearValidity = Literal["any", "half", "all"]
 BILINEAR_VALIDITY_RULES: tuple[BilinearValidity, ...] = ("any", "half", "all")
+
+#: Called as ``(fraction done, storage chunk shape or None if unchunked)``.
+ReadProgress = Callable[[float, "tuple[int, ...] | None"], None]
+#: Most chunks one read of :meth:`DatasetReader.read_along` covers.
+PROFILE_MAX_BATCH_CHUNKS = 32
+#: ``(fewest chunks per read, reads to aim for)`` by whether a read fetches its
+#: chunks in parallel. Where it does, small reads would give that up, so there are
+#: fewer of them; where it does not, they cost next to nothing.
+_PROFILE_BATCHING = {True: (4, 10), False: (1, 100)}
 
 #: Resampling methods offered to the user, in menu order.
 RESAMPLING_METHODS: tuple[Resampling, ...] = ("nearest", "average", "bilinear")
@@ -358,15 +367,19 @@ class DatasetReader:
         row: int,
         indices: Mapping[str, int] | None = None,
         level: LevelInfo | None = None,
+        progress: ReadProgress | None = None,
     ) -> np.ndarray:
         """Every value of one pixel along one non-spatial axis, in physical units.
 
         ``col``/``row`` index ``level`` (the base by default). Every other
         non-spatial axis stays at its index in ``indices`` (0 when absent), as in
         :meth:`read`. Returns float64 with NaN where the value is nodata, scaled
-        where the variable declares a scale. One read touching every chunk along
-        ``axis`` at that pixel; bypasses the decoded-window cache, which holds
-        2-D windows.
+        where the variable declares a scale. Touches every chunk along ``axis``
+        at that pixel, in reads of :func:`profile_batch_chunks` whole chunks;
+        bypasses the decoded-window cache, which holds 2-D windows.
+
+        ``progress`` is called before each read and once at the end. Whatever it
+        raises passes through and stops the reading, which is how to cancel.
         """
         level = level or self.dataset.base
         info = self.variable_info(variable, level)
@@ -387,12 +400,30 @@ class DatasetReader:
                 picked.append(part.start)
             else:
                 picked.append(part)
-        try:
-            source = np.asarray(self._array(level, variable)[tuple(picked)]).reshape(-1)
-        except Exception as exc:
-            raise ReadError(
-                f"Failed to read {variable!r} along {axis!r} from level {level.name!r}: {exc}"
-            ) from exc
+        array = self._array(level, variable)
+        chunks = array.chunks
+        size = info.shape[position]
+        # Whole chunks per batch, so that no chunk is decoded twice.
+        if chunks:
+            length = chunks[position]
+            count = -(-size // length)
+            step = length * profile_batch_chunks(count, array.parallel_reads)
+        else:
+            step = size
+        parts = []
+        for start in range(0, size, step):
+            if progress is not None:
+                progress(start / size, chunks)
+            picked[position] = slice(start, min(start + step, size))
+            try:
+                parts.append(np.asarray(array[tuple(picked)]).reshape(-1))
+            except Exception as exc:
+                raise ReadError(
+                    f"Failed to read {variable!r} along {axis!r} from level {level.name!r}: {exc}"
+                ) from exc
+        if progress is not None:
+            progress(1.0, chunks)
+        source = np.concatenate(parts)
         valid = _source_validity(source, info, self.nodata)
         values = (_apply_scaling(source, info) if info.needs_scaling else source).astype(np.float64)
         if valid is not None:
@@ -498,6 +529,12 @@ class DatasetReader:
     def rebind(self, handle: StoreHandle, dataset: DatasetInfo | None = None) -> DatasetReader:
         """A reader on a different snapshot — used for time travel."""
         return DatasetReader(handle, dataset or self.dataset, self.config, self.nodata)
+
+
+def profile_batch_chunks(count: int, parallel: bool) -> int:
+    """How many of the ``count`` chunks along an axis to take per read."""
+    fewest, reads = _PROFILE_BATCHING[parallel]
+    return min(max(-(-count // reads), fewest), PROFILE_MAX_BATCH_CHUNKS)
 
 
 def _spatial_axes(info: VariableInfo) -> tuple[int, int] | None:

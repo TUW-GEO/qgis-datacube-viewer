@@ -188,6 +188,10 @@ class NetcdfArray:
         return self._chunks
 
     @property
+    def parallel_reads(self) -> bool:
+        return False  # HDF5 goes through its chunks one by one
+
+    @property
     def fill_value(self) -> Any:
         return self._attrs.get("_FillValue")
 
