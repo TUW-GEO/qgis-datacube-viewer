@@ -9,6 +9,8 @@
 * ``rescale-colours.gif``  what "Rescale colours to each slice" does: a year with
                        it off (the legend's range stays put), then with it on (the
                        range follows each slice)
+* ``timeseries.gif``   the Timeseries panel: three pixels picked on the map, each
+                       adding a line, then the hover readout sweeping across the plot
 
 ``buttons.png`` is the toolbar icon strip, cut from the icon artwork, and not made
 here.
@@ -28,6 +30,7 @@ Usage::
 
     QT_QPA_PLATFORM=offscreen python scripts/make_screenshots.py [--out docs/img]
     QT_QPA_PLATFORM=offscreen python scripts/make_screenshots.py --only rescale-colours
+    QT_QPA_PLATFORM=offscreen python scripts/make_screenshots.py --only timeseries
 
 The look follows the platform style QGIS runs with, so images made on Linux and on
 Windows differ in fonts and widget chrome.
@@ -60,10 +63,20 @@ from qgis.core import (
     QgsApplication,
     QgsMapRendererSequentialJob,
     QgsMapSettings,
+    QgsPointXY,
     QgsRasterLayer,
 )
 from qgis.PyQt.QtCore import QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen, QPolygonF
+from qgis.PyQt.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPen,
+    QPolygonF,
+    QTextDocument,
+)
 from qgis.PyQt.QtWidgets import QMainWindow, QWidget
 
 #: The store as typed into the dialog. ``~`` is expanded by the plugin, and keeps
@@ -78,6 +91,11 @@ GIF_HOLD_MS = 2200
 #: QGIS window size for the GIF: room for the panels, the map and the sidebar.
 GIF_WINDOW = (1280, 800)
 GIF_SIDEBAR_WIDTH = 430
+#: Height of the Timeseries panel in its GIF.
+GIF_PROFILE_HEIGHT = 300
+#: Where the timeseries GIF picks its pixels, as fractions of the layer's extent
+#: (x from the left, y from the top).
+PICKS = ((0.30, 0.35), (0.62, 0.55), (0.45, 0.80))
 #: Annotation colour: orange stands out against QGIS's greys, its selection blue
 #: and the greyscale map.
 ACCENT = QColor("#e8590c")
@@ -536,9 +554,108 @@ def _record_rescale_colours(session: _Session, target: Path) -> None:
     save_gif(frames, target, durations)
 
 
+def draw_readout(image: QImage, html: str, at: QPoint) -> None:
+    """Paint ``html`` in a tooltip-like box with its top left at ``at``.
+
+    The plot's hover readout is a real tooltip, a window of its own that a grab of
+    the main window does not contain, so the GIF draws its text in place.
+    """
+    doc = QTextDocument()
+    doc.setDocumentMargin(6)
+    doc.setHtml(html)
+    size = doc.size()
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.translate(at.x(), at.y())
+    painter.setPen(QPen(QColor("#767676"), 1))
+    painter.setBrush(QColor("#ffffdc"))
+    painter.drawRoundedRect(QRectF(0, 0, size.width(), size.height()), 3, 3)
+    doc.drawContents(painter)
+    painter.end()
+
+
+def _record_timeseries(session: _Session, target: Path) -> None:
+    """Pick three pixels one after another, then hover across the plot."""
+    plugin = session.plugin
+    dock = plugin._profile_dock
+    dock.show()
+    session.window.resizeDocks([dock], [GIF_PROFILE_HEIGHT], Qt.Orientation.Vertical)
+    settle()
+    session.canvas.zoomToFullExtent()
+    session.redraw()
+
+    button = plugin._toolbar.widgetForAction(plugin._profile_tool.action())
+    button_note = (session.rect(button), "Plot Series: click a pixel", "right")
+    plot = dock.plot()
+    frames, durations = [], []
+
+    def shoot(notes, ms: int, readout: tuple[str, QPoint] | None = None) -> None:
+        settle(0.1)
+        image = session.window.grab().toImage()
+        if readout is not None:
+            draw_readout(image, *readout)
+        annotate(image, notes)
+        frames.append(to_pil(image))
+        durations.append(ms)
+
+    shoot([button_note], GIF_HOLD_MS)
+
+    extent = session.layer.extent()
+    transform = session.canvas.getCoordinateTransform()
+    for number, (fx, fy) in enumerate(PICKS, start=1):
+        point = QgsPointXY(
+            extent.xMinimum() + fx * extent.width(),
+            extent.yMaximum() - fy * extent.height(),
+        )
+        if not dock.pick(session.layer, "time", point, session.layer.crs()):
+            raise RuntimeError(f"pick {number} did not start")
+        if not pump(lambda: not dock._tasks, timeout=60):
+            raise RuntimeError(f"pick {number} never finished")
+        session.redraw()
+        if dock.series_count() != number:
+            raise RuntimeError(f"pick {number} added no series (nodata at {fx}, {fy}?)")
+        pixel = transform.transform(point)
+        marker = QRect(
+            session.canvas.mapTo(session.window, QPoint(int(pixel.x()), int(pixel.y())))
+            - QPoint(9, 9),
+            QSize(18, 18),
+        )
+        text = "Values along time" if number == 1 else "Each pick adds a line"
+        shoot(
+            [
+                button_note,
+                (marker, f"Pixel #{number}", "right"),
+                (session.rect(plot), text, "left"),
+            ],
+            GIF_HOLD_MS,
+        )
+
+    # The readout: sweep the crosshair across the plot, as a mouse would.
+    rect = plot._last_geometry[0]
+    steps = 14
+    for step in range(steps + 1):
+        x = rect.left() + rect.width() * (0.05 + 0.9 * step / steps)
+        found = plot.hover_at(x)
+        plot._hover = found[0] if found else None
+        plot.repaint()
+        readout = None
+        if found and found[1]:
+            corner = plot.mapTo(session.window, QPoint(int(x) + 14, int(rect.top()) + 8))
+            readout = (plot.readout(*found), corner)
+        shoot(
+            [(session.rect(plot), "Hover reads out every line", "left")],
+            GIF_FRAME_MS,
+            readout,
+        )
+    plot._hover = None
+    durations[-1] = GIF_HOLD_MS
+    save_gif(frames, target, durations)
+
+
 _RECORDERS = {
     "time-slider": _record_time_slider,
     "rescale-colours": _record_rescale_colours,
+    "timeseries": _record_timeseries,
 }
 
 
@@ -591,6 +708,7 @@ OUTPUTS = {
     "sliders": "sliders.png",
     "time-slider": "time-slider.gif",
     "rescale-colours": "rescale-colours.gif",
+    "timeseries": "timeseries.gif",
 }
 
 
@@ -640,6 +758,14 @@ def main() -> None:
                 "rescale-colours",
                 args.data / "cube.zarr",
                 out / "rescale-colours.gif",
+                Path(scratch),
+            )
+        if "timeseries" in wanted:
+            shot_gif(
+                args.qgis,
+                "timeseries",
+                args.data / "cube.zarr",
+                out / "timeseries.gif",
                 Path(scratch),
             )
 
