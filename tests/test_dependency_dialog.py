@@ -496,8 +496,8 @@ def test_zarr_is_not_offered_on_a_python_too_old_for_it(dialog, python_310) -> N
 def test_a_python_too_old_points_to_the_readme(dialog, python_310) -> None:
     d = dialog(missing=("zarr>=3", "netCDF4"), flavour=env.LINUX)
     headline = d.findChildren(type(d._install_status))[0].text()
-    assert env.README_CONDA_FORGE_URL in headline
-    assert "conda create" not in headline, "the command itself lives in the README"
+    assert env.CONDA_FORGE_DOCS_URL in headline
+    assert "conda create" not in headline, "the command itself lives in the documentation"
 
 
 def test_nothing_installable_says_why(dialog, python_310) -> None:

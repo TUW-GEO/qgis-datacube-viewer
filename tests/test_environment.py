@@ -261,11 +261,11 @@ def test_flatpak_is_honest_about_the_sandbox(tmp_path):
     cmd = install_command(("zarr>=3",), FLATPAK, str(tmp_path), sys.executable)
     assert "sandbox" in cmd.terminal_hint.lower()
     assert "flatpak run --devel --command=pip3 org.qgis.qgis install --user" in cmd.command
-    assert any(env.README_CONDA_FORGE_URL in note for note in cmd.notes), "needs a way out"
+    assert any(env.CONDA_FORGE_DOCS_URL in note for note in cmd.notes), "needs a way out"
 
 
 def test_the_conda_forge_route_is_a_link_not_a_command(tmp_path):
-    """The second-QGIS command lives in the README; notes only point there."""
+    """The second-QGIS command lives in the documentation; notes only point there."""
     for flavour in (CONDA, WINDOWS, MACOS, FLATPAK, LINUX):
         cmd = install_command(("zarr>=3",), flavour, str(tmp_path), sys.executable, True)
         assert "conda create" not in cmd.command + " ".join(cmd.notes), flavour

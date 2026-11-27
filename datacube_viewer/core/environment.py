@@ -99,12 +99,12 @@ ZARR_PACKAGE = "zarr>=3"
 #: QGIS's Python is too old", so these are not offered there at all.
 MIN_PYTHON = {"zarr>=3": (3, 11), "icechunk": (3, 11)}
 
-#: The README section for a QGIS whose Python is too old: a second QGIS from
+#: The documentation section for a QGIS whose Python is too old: a second QGIS from
 #: conda-forge. Linked rather than repeated, because the install dialog is about
 #: installing into the QGIS that is running, not about replacing it.
-README_CONDA_FORGE_URL = (
+CONDA_FORGE_DOCS_URL = (
     "https://github.com/TUW-GEO/qgis-datacube-viewer"
-    "#when-qgiss-python-is-too-old-qgis-from-conda-forge"
+    "/blob/main/docs/installation.md#qgis-from-conda-forge"
 )
 
 #: pip name -> conda-forge name, where they differ.
@@ -725,8 +725,8 @@ def install_command(
                 "--devel runs pip with the KDE SDK, which Flatpak may download first.",
                 "Packages installed this way live inside the sandbox and are lost when "
                 "the Flatpak is reset or reinstalled.",
-                f"If it does not work, the README describes QGIS from conda-forge instead: "
-                f"{README_CONDA_FORGE_URL}",
+                f"If it does not work, the documentation describes QGIS from conda-forge instead: "
+                f"{CONDA_FORGE_DOCS_URL}",
             ),
         )
 

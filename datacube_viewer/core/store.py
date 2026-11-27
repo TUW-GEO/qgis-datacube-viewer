@@ -26,7 +26,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qsl, urlsplit
 
 from .. import PLUGIN_NAME
-from .environment import README_CONDA_FORGE_URL, python_too_old
+from .environment import CONDA_FORGE_DOCS_URL, python_too_old
 from .errors import MissingDependencyError, RefNotFoundError, StoreOpenError
 from .model import RefSpec, RepositoryRefs, SnapshotInfo
 from .nodes import GroupNode, lookup
@@ -73,7 +73,7 @@ def _install_hint(package: str, extra: str) -> str:
     if too_old:
         return (
             f"{package} {too_old}, and no install can change the Python inside QGIS. "
-            f"The README describes using QGIS from conda-forge instead: {README_CONDA_FORGE_URL}"
+            f"The documentation describes using QGIS from conda-forge instead: {CONDA_FORGE_DOCS_URL}"
         )
     return _INSTALL_HINT.format(extra=extra)
 

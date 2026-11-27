@@ -31,7 +31,7 @@ conda into that environment instead (``--freeze-installed`` takes the part of th
 constraints file; no interpreter probe, as ``-p`` names the environment). Pixi
 environments and Flatpak keep the copy-paste route.
 Packages that need a newer Python than this QGIS has are shown but not offered, with a
-link to the README's conda-forge route instead of a command that cannot work.
+link to the documentation's conda-forge route instead of a command that cannot work.
 """
 
 from __future__ import annotations
@@ -72,8 +72,8 @@ from ..core import (
 )
 from ..core.environment import (
     CONDA,
+    CONDA_FORGE_DOCS_URL,
     PROBE_SCRIPT,
-    README_CONDA_FORGE_URL,
     SCRUBBED_PIP_VARIABLES,
     auto_install_blocker,
     installed_distributions,
@@ -382,7 +382,7 @@ class DependencyDialog(QDialog):
         """The way out when this QGIS's Python cannot take zarr 3, or an empty string.
 
         No install command can change the Python inside QGIS, so this links to the
-        README's second-QGIS route instead of printing a command of its own.
+        documentation's second-QGIS route instead of printing a command of its own.
         """
         blocked = [p for p in ALL_PACKAGES if p in self._absent and python_too_old(p)]
         if not blocked:
@@ -392,8 +392,8 @@ class DependencyDialog(QDialog):
         return (
             f"<br><br>{names}: {escape(reason or '')}, and nothing installed into this "
             "QGIS can change which Python it runs. To open Zarr stores and Icechunk "
-            f"repositories, use <a href='{README_CONDA_FORGE_URL}'>QGIS from conda-forge</a> "
-            "as the README describes."
+            f"repositories, use <a href='{CONDA_FORGE_DOCS_URL}'>QGIS from conda-forge</a> "
+            "as the documentation describes."
         )
 
     # ------------------------------------------------------------------ choices
@@ -797,8 +797,8 @@ class DependencyDialog(QDialog):
         text = escape(" ".join(parts))
         if not conda and ("ResolutionImpossible" in log or "No matching distribution" in log):
             text += (
-                f" <a href='{README_CONDA_FORGE_URL}'>QGIS from conda-forge</a>, as the "
-                "README describes, comes with these packages and has no such conflict."
+                f" <a href='{CONDA_FORGE_DOCS_URL}'>QGIS from conda-forge</a>, as the "
+                "documentation describes, comes with these packages and has no such conflict."
             )
         self._set_status(text, error=True, rich=True)
         QgsMessageLog.logMessage(

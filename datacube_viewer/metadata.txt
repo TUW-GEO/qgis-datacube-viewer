@@ -46,7 +46,7 @@ about=Load GeoZarr datacubes, plain Zarr stores, NetCDF files and Icechunk repos
     so it never upgrades or replaces one of them. "icechunk" is optional and only
     needed for Icechunk repositories. zarr and icechunk require Python 3.11 or newer.
     On Linux, QGIS uses the system Python, which can be older (Python 3.10 on Ubuntu
-    22.04); the README describes using QGIS from conda-forge instead.
+    22.04); the documentation describes using QGIS from conda-forge instead.
     .
     Originally developed by EODC (https://eodc.eu) as "GeoZarr Viewer". MIT licensed.
     This is a renamed fork carrying local changes; it is not the EODC release.
