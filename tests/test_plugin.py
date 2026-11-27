@@ -196,7 +196,7 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
         # its own checked state to keep in sync.
         "Datacube Panel",
         "Timeseries Panel",
-        "Plot Pixel",
+        "Plot Series",
     ]
     # The plugin owns a named toolbar rather than borrowing the shared Raster one,
     # so it stays distinguishable from the other GeoZarr plugins. Installing
@@ -208,7 +208,7 @@ def test_init_gui_registers_and_adds_actions(plugin, iface) -> None:
         "Add Datacube Layer…",
         "Time Travel…",
         "Datacube Panel",
-        "Plot Pixel",
+        "Plot Series",
     ]
 
 

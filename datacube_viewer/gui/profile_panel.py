@@ -3,7 +3,7 @@
 Right-click a datacube layer on the map, choose *Datacube Viewer: Show Timeseries*
 and an axis, and the nearest pixel's values along that axis are added to the plot
 here, with a marker on the map in the series' colour and shape. Each pick adds to
-what is there; series are removed from the list below the plot. The *Plot Pixel*
+what is there; series are removed from the list below the plot. The *Plot Series*
 map tool does the same on a left click, along the axis the panel shows.
 
 The other axes are held where the layer's sliders are when the pixel is picked,
@@ -66,7 +66,7 @@ PROFILE_OBJECT_NAME = "DatacubeViewerTimeseriesDock"
 MENU_TITLE = f"{PLUGIN_NAME}: Show Timeseries"
 EMPTY_TEXT = (
     f"Right-click a datacube layer on the map and choose “{MENU_TITLE}”, "
-    "or use the Plot Pixel map tool. Each pixel picked is added here."
+    "or use the Plot Series map tool. Each pixel picked is added here."
 )
 
 #: A pick still reading after this long gets a message with its progress.

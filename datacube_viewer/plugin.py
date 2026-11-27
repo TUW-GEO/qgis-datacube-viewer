@@ -310,7 +310,7 @@ class DatacubeViewerPlugin:
         The dock starts hidden, like the cube dock, and opens on the first pixel
         picked. The right-click entry rides on ``contextMenuAboutToShow``, which
         the canvas emits for any map tool that shows a context menu (Pan, and the
-        Plot Pixel tool itself), so no tool has to be switched to get at it.
+        Plot Series tool itself), so no tool has to be switched to get at it.
         """
         from .gui import ProfileDock, ProfileMapTool
 
@@ -329,7 +329,7 @@ class DatacubeViewerPlugin:
         self._actions.append(toggle)
 
         self._profile_tool = ProfileMapTool(canvas, self._profile_dock)
-        pick = QAction(icon, "Plot Pixel", self.iface.mainWindow())
+        pick = QAction(icon, "Plot Series", self.iface.mainWindow())
         pick.setCheckable(True)
         pick.setToolTip(
             "Click a datacube layer to add the pixel's values along an axis to the "
